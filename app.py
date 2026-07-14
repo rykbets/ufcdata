@@ -10,7 +10,7 @@ import gdown
 # ============================================================
 # 🔑 PUT YOUR TWO GOOGLE DRIVE FILE IDs HERE
 # ============================================================
-MAIN_FILE_ID      = "your_main_csv_file_id_here"       # ufc_all_data.csv
+MAIN_FILE_ID      = "1eWDGGS8qQdLWvS_dgJ-HqObsr4ie9RcD"       # ufc_all_data.csv
 UPCOMING_FILE_ID  = ""                                # upcoming_fights_enriched.csv (or "" if none)
 # ============================================================
 
