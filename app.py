@@ -258,7 +258,7 @@ all_fights = load_full_data()
 all_fights_display = all_fights[all_fights['FightDate'] >= '2015-01-01'].copy()
 
 # ============================================================
-# SIDEBAR FILTERS (unchanged)
+# SIDEBAR FILTERS
 # ============================================================
 st.sidebar.title("Filters")
 
@@ -446,7 +446,5 @@ fig = px.scatter(
     color_discrete_map={'Yes': 'green', 'No': 'red', 'Draw': 'gray', 'No Contest': 'purple'},
     hover_data=['Fighter', 'Opponent', 'WC'],
     title=f'{y_col} vs {x_col}'
-)
-st.plotly_chart(fig, use_container_width=True)
 )
 st.plotly_chart(fig, use_container_width=True)
