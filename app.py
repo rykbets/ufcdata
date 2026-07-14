@@ -448,3 +448,10 @@ fig = px.scatter(
     title=f'{y_col} vs {x_col}'
 )
 st.plotly_chart(fig, use_container_width=True)
+
+st.header("Edit Data (experimental)")
+edited_df = st.data_editor(data[display_cols], num_rows="dynamic")
+if st.button("Save changes to session"):
+    st.session_state['edited_data'] = edited_df
+    st.success("Changes saved. Re-running analysis with updated data...")
+    # You can then use st.session_state.edited_data as your new `data`
