@@ -8,15 +8,14 @@ import os
 import gdown
 
 # ============================================================
-# 🔑 SET YOUR TWO GOOGLE DRIVE FILE IDs HERE
+# 🔑 PUT YOUR TWO GOOGLE DRIVE FILE IDs HERE
 # ============================================================
-MAIN_FILE_ID      = "1mUyNR2WLHQjC8IuvG7RA6LoXPjJq3aZ1"        # ufc_all_data.csv
-UPCOMING_FILE_ID  = ""    # upcoming_fights_enriched.csv (leave as "" if you don't have one)
+MAIN_FILE_ID      = "your_main_csv_file_id_here"       # ufc_all_data.csv
+UPCOMING_FILE_ID  = ""                                # upcoming_fights_enriched.csv (or "" if none)
 # ============================================================
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
-# ---------- Cached data loader ----------
 @st.cache_data
 def load_full_data():
     # Download main CSV
@@ -259,7 +258,7 @@ all_fights = load_full_data()
 all_fights_display = all_fights[all_fights['FightDate'] >= '2015-01-01'].copy()
 
 # ============================================================
-# SIDEBAR FILTERS
+# SIDEBAR FILTERS (unchanged)
 # ============================================================
 st.sidebar.title("Filters")
 
@@ -313,7 +312,6 @@ include_debuts = st.sidebar.checkbox("Include Debuts")
 new_wc = st.sidebar.checkbox("New Weight Class")
 skip_nc = st.sidebar.checkbox("Skip NC outcomes")
 
-# Previous outcome columns
 if skip_nc:
     prev1_col = 'Prev1_Outcome_skipNC'; prev2_col = 'Prev2_Outcome_skipNC'; prev3_col = 'Prev3_Outcome_skipNC'
     career1_col = 'Career1_Outcome_skipNC'; career2_col = 'Career2_Outcome_skipNC'; career3_col = 'Career3_Outcome_skipNC'
@@ -358,7 +356,6 @@ if career1: data = data[data[career1_col].isin(career1)]
 if career2: data = data[data[career2_col].isin(career2)]
 if career3: data = data[data[career3_col].isin(career3)]
 
-# Opponent previous outcomes
 for opp_shift, opp_widget in [(1, opp_prev1), (2, opp_prev2), (3, opp_prev3)]:
     raw_col = f'Opponent_Prev{opp_shift}_Outcome_raw'
     if raw_col in data.columns:
@@ -449,5 +446,7 @@ fig = px.scatter(
     color_discrete_map={'Yes': 'green', 'No': 'red', 'Draw': 'gray', 'No Contest': 'purple'},
     hover_data=['Fighter', 'Opponent', 'WC'],
     title=f'{y_col} vs {x_col}'
+)
+st.plotly_chart(fig, use_container_width=True)
 )
 st.plotly_chart(fig, use_container_width=True)
