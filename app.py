@@ -11,7 +11,7 @@ import gdown
 # 🔑 PUT YOUR TWO GOOGLE DRIVE FILE IDs HERE
 # ============================================================
 MAIN_FILE_ID      = "1eWDGGS8qQdLWvS_dgJ-HqObsr4ie9RcD"       # ufc_all_data.csv
-UPCOMING_FILE_ID  = ""                                # upcoming_fights_enriched.csv (or "" if none)
+UPCOMING_FILE_ID  = "1y0Rn6iWXnLdpbmZcakau2us6lBJlhl52"                                # upcoming_fights_enriched.csv (or "" if none)
 # ============================================================
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
