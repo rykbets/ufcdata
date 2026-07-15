@@ -683,18 +683,16 @@ st.plotly_chart(fig, use_container_width=True, key=f"scatter_{x_col}_{y_col}")
 st.header("Customizable Decision Tree")
 st.markdown("Use the filtered data (excluding upcoming fights) to find the most informative splits.")
 
-# Filter out upcoming and non‑win/loss fights
-tree_data = data[data['Win?'].isin(['Yes','No'])].copy()
-tree_data['Target'] = (tree_data['Win?'] == 'Yes').astype(int)
+# ---------- Build opponent‑side statistics on the full display set ----------
+encoded_data = all_fights_display.copy()
 
-# ---------- Build opponent‑side statistics ----------
-opp_career = tree_data[['FightID','Fighter','CareerWinPct']].rename(
+opp_career = encoded_data[['FightID','Fighter','CareerWinPct']].rename(
     columns={'Fighter':'Opponent', 'CareerWinPct':'Opponent_CareerWinPct'})
-tree_data = tree_data.merge(opp_career, on=['FightID','Opponent'], how='left')
+encoded_data = encoded_data.merge(opp_career, on=['FightID','Opponent'], how='left')
 
-opp_days = tree_data[['FightID','Fighter','DaysSincePrev','Avg3DaysGap']].rename(
+opp_days = encoded_data[['FightID','Fighter','DaysSincePrev','Avg3DaysGap']].rename(
     columns={'Fighter':'Opponent', 'DaysSincePrev':'Opponent_DaysSincePrev', 'Avg3DaysGap':'Opponent_Avg3DaysGap'})
-tree_data = tree_data.merge(opp_days, on=['FightID','Opponent'], how='left')
+encoded_data = encoded_data.merge(opp_days, on=['FightID','Opponent'], how='left')
 
 # ---------- Core numeric features ----------
 core_features = [
@@ -708,10 +706,10 @@ core_features = [
     'CareerWinPct', 'Opponent_CareerWinPct'
 ]
 
-career_avg_cols = [col for col in tree_data.columns if col.startswith('CareerAvg_')]
+career_avg_cols = [col for col in encoded_data.columns if col.startswith('CareerAvg_')]
 
 feature_cols = [c for c in core_features + career_avg_cols 
-                if c in tree_data.columns and tree_data[c].nunique(dropna=True) >= 2]
+                if c in encoded_data.columns and encoded_data[c].nunique(dropna=True) >= 2]
 
 # ---------- Descriptive binary features (previous outcomes) ----------
 outcome_cols = {
@@ -724,34 +722,38 @@ outcome_cols = {
 }
 
 for prefix, col in outcome_cols.items():
-    if col not in tree_data.columns:
+    if col not in encoded_data.columns:
         continue
-    tree_data[f'{prefix}_is_Win']   = tree_data[col].str.startswith('Win').astype(int)
-    tree_data[f'{prefix}_is_Loss']  = tree_data[col].str.startswith('Loss').astype(int)
-    tree_data[f'{prefix}_is_Draw']  = tree_data[col].str.contains('Draw', na=False).astype(int)
-    tree_data[f'{prefix}_is_NC']    = tree_data[col].str.contains('No Contest', na=False).astype(int)
-    tree_data[f'{prefix}_method_KO']  = tree_data[col].str.contains('KO', na=False).astype(int)
-    tree_data[f'{prefix}_method_Sub'] = tree_data[col].str.contains('Sub', na=False).astype(int)
-    tree_data[f'{prefix}_method_Dec'] = tree_data[col].str.contains('Decision', na=False).astype(int)
-    tree_data[f'{prefix}_method_DQ']  = tree_data[col].str.contains('DQ', na=False).astype(int)
+    encoded_data[f'{prefix}_is_Win']   = encoded_data[col].str.startswith('Win').astype(int)
+    encoded_data[f'{prefix}_is_Loss']  = encoded_data[col].str.startswith('Loss').astype(int)
+    encoded_data[f'{prefix}_is_Draw']  = encoded_data[col].str.contains('Draw', na=False).astype(int)
+    encoded_data[f'{prefix}_is_NC']    = encoded_data[col].str.contains('No Contest', na=False).astype(int)
+    encoded_data[f'{prefix}_method_KO']  = encoded_data[col].str.contains('KO', na=False).astype(int)
+    encoded_data[f'{prefix}_method_Sub'] = encoded_data[col].str.contains('Sub', na=False).astype(int)
+    encoded_data[f'{prefix}_method_Dec'] = encoded_data[col].str.contains('Decision', na=False).astype(int)
+    encoded_data[f'{prefix}_method_DQ']  = encoded_data[col].str.contains('DQ', na=False).astype(int)
 
     for feat in [f'{prefix}_is_Win', f'{prefix}_is_Loss', f'{prefix}_is_Draw', f'{prefix}_is_NC',
                  f'{prefix}_method_KO', f'{prefix}_method_Sub', f'{prefix}_method_Dec', f'{prefix}_method_DQ']:
-        if feat in tree_data.columns and tree_data[feat].nunique(dropna=True) >= 2:
+        if feat in encoded_data.columns and encoded_data[feat].nunique(dropna=True) >= 2:
             feature_cols.append(feat)
 
-# ---------- Robust binary encoding for title fight & hometown ----------
+# ---------- Robust binary encoding for title fight & hometown (on full display set) ----------
 binary_cols = ['Prev1_Title', 'Opponent_Prev1_Title', 'HometownFighter', 'Opponent_Hometown']
 for col in binary_cols:
-    if col not in tree_data.columns:
+    if col not in encoded_data.columns:
         continue
     clean_col = col + '_clean'
-    tree_data[clean_col] = tree_data[col].astype(str).str.strip().str.lower().map({'yes': 1}).fillna(0).astype(int)
-    feature_cols.append(clean_col)   # always include
+    encoded_data[clean_col] = encoded_data[col].astype(str).str.strip().str.lower().map({'yes': 1}).fillna(0).astype(int)
+    feature_cols.append(clean_col)
 
 feature_cols = sorted(list(set(feature_cols)))
 
-# ---------- Helper functions ----------
+# ---------- Filter to the actual tree data (Win/Loss only) ----------
+tree_data = encoded_data[encoded_data['Win?'].isin(['Yes','No'])].copy()
+tree_data['Target'] = (tree_data['Win?'] == 'Yes').astype(int)
+
+# ---------- Helper functions (unchanged) ----------
 def find_best_split(subset, feature_pool):
     best_feat, best_thresh, best_gain = None, None, -1
     y = subset['Target'].values
@@ -781,7 +783,6 @@ def find_best_split(subset, feature_pool):
     return best_feat, best_thresh, best_gain
 
 def suggest_features(subset, feature_pool, top_k=3):
-    # Only keep features that exist in the subset
     pool = [f for f in feature_pool if f in subset.columns]
     if not pool:
         return []
@@ -822,7 +823,7 @@ if build_clicked:
     }
 
 if st.session_state.root_built:
-        def display_node(node_id):
+    def display_node(node_id):
         node = st.session_state.tree_nodes[node_id]
         data = node['data']
         depth = node['depth']
@@ -832,10 +833,8 @@ if st.session_state.root_built:
 
         st.write(f"**Node {node_id}** (depth {depth}): {len(data)} samples, win={data['Target'].mean()*100:.1f}%")
 
-        # Features available in THIS node
         available_features = [f for f in feature_cols if f in data.columns]
 
-        # --- expander to show all features in this node ---
         with st.expander(f"📋 All {len(available_features)} features in this node (click to see)"):
             st.write(", ".join(available_features))
 
@@ -845,18 +844,14 @@ if st.session_state.root_built:
 
             col1, col2 = st.columns([3, 1])
             with col1:
-                selected_feature = st.selectbox(
-                    "Select feature to split",
-                    available_features,
-                    key=f"feat_{node_id}"
-                )
+                selected_feature = st.selectbox("Select feature to split", available_features, key=f"feat_{node_id}")
             with col2:
                 split_clicked = st.button("Split", key=f"split_{node_id}")
 
             if split_clicked:
                 unique_vals = data[selected_feature].dropna().unique()
                 if len(unique_vals) < 2:
-                    st.warning(f"**{selected_feature}** is constant in this node (all {len(unique_vals)} unique non‑NaN value(s)).")
+                    st.warning(f"**{selected_feature}** is constant in this node.")
                     st.write("Distribution:", data[selected_feature].value_counts(dropna=False).to_dict())
                 else:
                     best_feat, best_thresh, gain = find_best_split(data, [selected_feature])
@@ -885,3 +880,5 @@ if st.session_state.root_built:
             for child_id in node['children']:
                 st.write("---")
                 display_node(child_id)
+
+    display_node(0)
