@@ -518,20 +518,21 @@ for result, col in zip(['Yes', 'No'], [col1, col2]):
             st.write(f"**Career Avg Ctrl Time:** {avg_ctrl:.0f}s | CTR/TD: {ctrtd:.1f}s")
         st.write(f"**Avg Age Diff:** {age_diff_mean:.1f} | **Avg Height Diff:** {height_diff_mean:.1f} in | **Avg Reach Diff:** {reach_diff_mean:.1f} in")
 
-# ---------- Matchup area (upcoming fights only) ----------
+# ---------- Matchup area (upcoming fights – unfiltered) ----------
 st.header("Upcoming Fight Matchup")
-upcoming_data = data[data['Win?'].isna() | (data['Win?'] == '')]
-if not upcoming_data.empty:
-    upcoming_fight_ids = upcoming_data['FightID'].unique()
+# Use the full display dataset so filters don't remove upcoming fights from this panel
+upcoming_data_unfiltered = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
+if not upcoming_data_unfiltered.empty:
+    upcoming_fight_ids = upcoming_data_unfiltered['FightID'].unique()
     selected_fight = st.selectbox("Choose an upcoming fight", sorted(upcoming_fight_ids))
     if selected_fight:
-        fight_rows = upcoming_data[upcoming_data['FightID'] == selected_fight]
+        fight_rows = upcoming_data_unfiltered[upcoming_data_unfiltered['FightID'] == selected_fight]
         if len(fight_rows) == 2:
             f1_row = fight_rows.iloc[0]
             f2_row = fight_rows.iloc[1]
             st.write(f"### {f1_row['Fighter']} vs {f2_row['Fighter']}")
 
-            # Define a helper to display a row of stats for one fighter
+            # Helper to display all relevant stats for one fighter
             def show_fighter_stats(row, label):
                 st.subheader(label)
                 # Basic info
@@ -614,7 +615,7 @@ if not upcoming_data.empty:
             with colB:
                 show_fighter_stats(f2_row, f2_row['Fighter'])
 else:
-    st.write("No upcoming fights in the filtered data.")
+    st.write("No upcoming fights in the dataset.")
 
 # ---------- Last 20 Fights ----------
 st.header("Last 20 Fights")
