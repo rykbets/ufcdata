@@ -679,7 +679,7 @@ fig = px.scatter(
 )
 st.plotly_chart(fig, use_container_width=True, key=f"scatter_{x_col}_{y_col}")
 
-# ---------- Decision Tree (VISUAL) ----------
+# ---------- Decision Tree (VISUAL with Plotly) ----------
 st.header("Customizable Decision Tree")
 st.markdown("Use the filtered data (excluding upcoming fights) to find the most informative splits.")
 
@@ -824,47 +824,94 @@ if build_clicked:
         'depth': 0
     }
 
-# ---------- Visual Tree Renderer ----------
-def render_tree(node_id, prefix=""):
-    node = st.session_state.tree_nodes.get(node_id)
-    if not node:
+# ---------- Plotly Tree Diagram ----------
+def draw_tree():
+    if not st.session_state.tree_nodes:
         return
-    data = node['data']
-    win_rate = data['Target'].mean() * 100
-    n = len(data)
-    depth = node['depth']
 
-    # Node description
-    if node['feature'] is not None:
-        text = f"{prefix}├─ Node {node_id} (n={n}, win={win_rate:.1f}%) [Split: {node['feature']} ≤ {node['threshold']:.2f}]"
-    else:
-        text = f"{prefix}└─ Node {node_id} (n={n}, win={win_rate:.1f}%) [No split yet]"
+    # We'll assign (x,y) positions to each node recursively.
+    # Using a simple layout: root at top, children spread horizontally.
+    # We'll compute widths based on number of leaves under each node.
+    def count_leaves(node_id):
+        node = st.session_state.tree_nodes[node_id]
+        if not node['children']:
+            return 1
+        return sum(count_leaves(child) for child in node['children'])
 
-    st.write(text)
+    def layout_tree(node_id, x, y, dx):
+        node = st.session_state.tree_nodes[node_id]
+        win_rate = node['data']['Target'].mean() * 100
+        n = len(node['data'])
+        text = f"Node {node_id}<br>n={n}<br>win={win_rate:.1f}%"
+        if node['feature'] is not None:
+            text += f"<br>{node['feature']} ≤ {node['threshold']:.2f}"
+        # Add rectangle and annotation
+        shapes.append(go.layout.Shape(
+            type="rect",
+            x0=x - 0.4, x1=x + 0.4,
+            y0=y - 0.2, y1=y + 0.2,
+            fillcolor="lightblue",
+            line=dict(color="black"),
+        ))
+        annotations.append(dict(
+            x=x, y=y, text=text, showarrow=False,
+            font=dict(size=10)
+        ))
+        if not node['children']:
+            return
 
-    # Render children with updated prefix
-    if node['children']:
-        for i, child_id in enumerate(node['children']):
-            is_last = (i == len(node['children']) - 1)
-            new_prefix = prefix + ("    " if is_last else "│   ")
-            if node['feature'] is not None:
-                branch = "│   " if depth < 3 else "    "
-                if is_last:
-                    branch = "└── "
-                else:
-                    branch = "├── "
-                st.write(prefix + branch)   # visual branch
-            render_tree(child_id, new_prefix)
+        # Two children: left and right
+        left_width = count_leaves(node['children'][0])
+        right_width = count_leaves(node['children'][1])
+        total_width = left_width + right_width
+        left_dx = dx * (left_width / total_width)
+        right_dx = dx * (right_width / total_width)
+
+        left_x = x - (dx / 2) + (left_dx / 2)
+        right_x = x + (dx / 2) - (right_dx / 2)
+        child_y = y - 1.0
+
+        # Connect with lines
+        shapes.append(go.layout.Shape(
+            type="line",
+            x0=x, y0=y - 0.2, x1=left_x, y1=child_y + 0.2,
+            line=dict(color="gray")
+        ))
+        shapes.append(go.layout.Shape(
+            type="line",
+            x0=x, y0=y - 0.2, x1=right_x, y1=child_y + 0.2,
+            line=dict(color="gray")
+        ))
+
+        layout_tree(node['children'][0], left_x, child_y, left_dx)
+        layout_tree(node['children'][1], right_x, child_y, right_dx)
+
+    shapes = []
+    annotations = []
+    root = st.session_state.tree_nodes.get(0)
+    if root:
+        total_leaves = count_leaves(0)
+        layout_tree(0, 0, 0, total_leaves * 2)   # adjust spread
+
+    if shapes and annotations:
+        fig = go.Figure()
+        fig.update_layout(
+            shapes=shapes,
+            annotations=annotations,
+            xaxis=dict(visible=False, range=[-total_leaves*1.5, total_leaves*1.5]),
+            yaxis=dict(visible=False, range=[-10, 2]),
+            plot_bgcolor='white',
+            height=600,
+            margin=dict(l=0, r=0, t=0, b=0)
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
 # ---------- Main display ----------
 if st.session_state.root_built:
-    st.subheader("Tree Structure")
-    render_tree(0)
+    st.subheader("Tree Diagram")
+    draw_tree()
 
-    # Also show feature list and split controls for the root (or any node?)
-    # We'll only show the root's controls for simplicity – user can navigate?
-    # Better: keep the previous interactive node display with dropdown.
-    # I'll add a selector to choose which node to view / split.
+    # Node selector for splitting
     node_ids = sorted(st.session_state.tree_nodes.keys())
     selected_node = st.selectbox("Select node to view / split", node_ids, format_func=lambda id: f"Node {id}")
     if selected_node is not None:
