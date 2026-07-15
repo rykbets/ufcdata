@@ -681,7 +681,7 @@ fig = px.scatter(
 )
 st.plotly_chart(fig, use_container_width=True, key=f"scatter_{x_col}_{y_col}")
 
-# ---------- Decision Tree (Clean Black & White) ----------
+# ---------- Decision Tree (with Resplit) ----------
 st.header("Customizable Decision Tree")
 st.markdown("Use the filtered data (excluding upcoming fights) to find the most informative splits.")
 
@@ -843,7 +843,6 @@ def draw_tree():
             return
         win_rate = node['data']['Target'].mean() * 100
         n = len(node['data'])
-        # Text for the node
         text = f"Node {node_id} (n={n}, win={win_rate:.1f}%)"
         if node['feature'] is not None:
             text += f"<br>   {node['feature']} ≤ {node['threshold']:.2f}"
@@ -867,9 +866,8 @@ def draw_tree():
 
         left_x = x - (dx / 2) + (left_dx / 2)
         right_x = x + (dx / 2) - (right_dx / 2)
-        child_y = y - 1.2   # slightly larger vertical spacing
+        child_y = y - 1.2
 
-        # Connection lines
         shapes.append(go.layout.Shape(
             type="line", x0=x, y0=y - 0.3, x1=left_x, y1=child_y + 0.3,
             line=dict(color="gray", width=1)
@@ -923,6 +921,7 @@ if st.session_state.root_built:
         suggestions = suggest_features(data, available_features, top_k=3)
         st.write("**Suggested features:**", ", ".join(suggestions) if suggestions else "None")
 
+        # Show split controls if node hasn't been split yet
         if node['feature'] is None and depth < 3:
             col1, col2 = st.columns([3, 1])
             with col1:
@@ -957,5 +956,17 @@ if st.session_state.root_built:
                         }
                         node['children'] = [left_id, right_id]
                         st.rerun()
+
+        # If node already has a split, offer a "Resplit" button to clear it
         elif node['feature'] is not None:
-            st.write(f"Already split on **{node['feature']}** ≤ {node['threshold']:.2f}")
+            st.write(f"Currently split on **{node['feature']}** ≤ {node['threshold']:.2f}")
+            if st.button("Resplit", key=f"resplit_{selected_node}"):
+                # Remove children from tree_nodes
+                for child_id in node['children']:
+                    if child_id in st.session_state.tree_nodes:
+                        del st.session_state.tree_nodes[child_id]
+                # Reset this node
+                node['feature'] = None
+                node['threshold'] = None
+                node['children'] = []
+                st.rerun()
