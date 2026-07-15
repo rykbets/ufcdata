@@ -642,11 +642,9 @@ if 'CareerAvg_Ctrl' in data.columns: display_cols.append('CareerAvg_Ctrl')
 display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
 
-# ---------- Global Feature List (used by scatter + analysis) ----------
-# Build a complete feature set from the full display data (before any filter)
+# ---------- Global Feature List (used by regression + analysis) ----------
 global_features_data = all_fights_display.copy()
 
-# Core numeric
 core = [
     'Age', 'Height', 'Reach',
     'Age_opp', 'Height_opp', 'Reach_opp',
@@ -689,7 +687,7 @@ for col in binary_cols:
         global_features_data[clean_col] = global_features_data[col].astype(str).str.strip().str.lower().map({'yes': 1}).fillna(0).astype(int)
         global_features.append(clean_col)
 
-# Categorical encodings (ScheduledRounds, WC, EventCountry)
+# Categorical encodings
 for cat_col, enc_name in [('ScheduledRounds','SchedRounds_enc'), ('WC','WC_enc'), ('EventCountry','EventCountry_enc')]:
     if cat_col in global_features_data.columns:
         global_features_data[enc_name] = pd.factorize(global_features_data[cat_col].fillna(''))[0]
@@ -697,40 +695,79 @@ for cat_col, enc_name in [('ScheduledRounds','SchedRounds_enc'), ('WC','WC_enc')
 
 global_features = sorted(list(set(global_features)))
 
-# Also add these encoded columns back to the main data if they don't exist yet
+# Add missing encoded columns to the main data
 for col in global_features_data.columns:
     if col not in data.columns:
         data[col] = global_features_data[col]
 
-# ---------- Scatter Plot (uses global_features) ----------
-st.header("Scatter Plot")
-available_scatter = [c for c in global_features if c in data.columns]
-x_col = st.selectbox("X axis", available_scatter, key="scatter_x")
-y_col = st.selectbox("Y axis", available_scatter, key="scatter_y")
+# ---------- Interactive Regression Plot (replaces old scatter plot) ----------
+st.header("Regression Analysis")
+st.markdown("Select two variables to explore relationships. Points are colored by detailed outcome.")
 
-def result_category(row):
+# Detailed result categories
+def detailed_result(row):
     if pd.isna(row['Win?']) or str(row['Win?']).strip() == '':
         return 'Upcoming'
-    if row['Win?'] == 'Yes': return 'Win'
-    if row['Win?'] == 'No': return 'Loss'
-    if row['Win?'] == 'Draw': return 'Draw'
-    if row['Win?'] == 'No Contest': return 'No Contest'
+    win = str(row['Win?']).strip()
+    method = str(row.get('Method', '')).strip().lower()
+    if 'dq' in method or 'disqualif' in method:
+        return 'Win by DQ' if win == 'Yes' else 'Loss by DQ'
+    if 'nc' in method or 'no contest' in method:
+        return 'No Contest'
+    if win == 'Yes': return 'Win'
+    if win == 'No': return 'Loss'
+    if win == 'Draw': return 'Draw'
     return 'Other'
-data['Result'] = data.apply(result_category, axis=1)
 
-color_discrete_map = {
-    'Win': 'green', 'Loss': 'red', 'Draw': 'gray', 'No Contest': 'purple', 'Upcoming': 'blue'
+data['DetailedResult'] = data.apply(detailed_result, axis=1)
+
+color_map = {
+    'Win': 'green',
+    'Loss': 'red',
+    'Win by DQ': 'limegreen',
+    'Loss by DQ': 'darkred',
+    'No Contest': 'purple',
+    'Upcoming': 'blue',
+    'Draw': 'gray'
 }
 
-fig_scatter = px.scatter(
-    data, x=x_col, y=y_col, color='Result',
-    color_discrete_map=color_discrete_map,
-    hover_data=['Fighter', 'Opponent', 'WC'],
-    title=f'{y_col} vs {x_col}'
-)
-st.plotly_chart(fig_scatter, use_container_width=True, key=f"scatter_{x_col}_{y_col}")
+available_reg = [c for c in global_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
+if len(available_reg) < 2:
+    st.warning("Not enough features for regression.")
+else:
+    col1, col2 = st.columns(2)
+    with col1:
+        reg_x = st.selectbox("X variable", available_reg, key="reg_x")
+    with col2:
+        reg_y = st.selectbox("Y variable", available_reg, key="reg_y")
 
-# ---------- Advanced Analysis (cached, independent of scatter plot) ----------
+    if reg_x and reg_y:
+        reg_data = data[[reg_x, reg_y, 'DetailedResult']].dropna()
+        if len(reg_data) < 10:
+            st.warning("Not enough data for regression.")
+        else:
+            # Linear regression
+            from sklearn.linear_model import LinearRegression
+            X_reg = reg_data[[reg_x]].values
+            y_reg = reg_data[reg_y].values
+            lr = LinearRegression().fit(X_reg, y_reg)
+            r2 = lr.score(X_reg, y_reg)
+            reg_line_x = np.linspace(X_reg.min(), X_reg.max(), 100).reshape(-1, 1)
+            reg_line_y = lr.predict(reg_line_x)
+
+            fig_reg = px.scatter(
+                reg_data, x=reg_x, y=reg_y, color='DetailedResult',
+                color_discrete_map=color_map,
+                hover_data=['Fighter', 'Opponent'] if 'Fighter' in reg_data.columns else None,
+                title=f"{reg_y} vs {reg_x} (R² = {r2:.3f})"
+            )
+            fig_reg.add_trace(go.Scatter(
+                x=reg_line_x.flatten(), y=reg_line_y, mode='lines',
+                name='Regression', line=dict(color='white')
+            ))
+            st.plotly_chart(fig_reg, use_container_width=True)
+
+# ---------- Advanced Analysis (Feature Importance, Bubble) ----------
 st.header("Advanced Analysis")
 st.markdown("These insights are based on the currently filtered data and will only change when you adjust the sidebar filters.")
 
@@ -759,7 +796,6 @@ if 'analysis_results' not in st.session_state or st.session_state.get('analysis_
     analysis_data = data[data['Win?'].isin(['Yes','No'])].copy()
     analysis_data['Target'] = (analysis_data['Win?'] == 'Yes').astype(int)
 
-    # Use the same global_features, but filter to those present in this subset
     features = [f for f in global_features if f in analysis_data.columns]
     continuous = [f for f in features if not set(analysis_data[f].dropna().unique()).issubset({0, 1})]
 
@@ -813,36 +849,3 @@ fig_bubble = px.scatter(bubble_data, x='Avg Winners', y='Avg Losers',
 fig_bubble.add_shape(type='line', x0=min_val, y0=min_val, x1=max_val, y1=max_val,
                      line=dict(dash='dash', color='gray'))
 st.plotly_chart(fig_bubble, use_container_width=True)
-
-# Regression
-st.subheader("Regression Analysis")
-cont_options = [f for f in continuous_features if f in analysis_data.columns and analysis_data[f].nunique(dropna=True) >= 2]
-if len(cont_options) < 2:
-    st.warning("Not enough continuous features for regression.")
-else:
-    col1, col2 = st.columns(2)
-    with col1:
-        reg_x = st.selectbox("X variable", cont_options, key="reg_x")
-    with col2:
-        reg_y = st.selectbox("Y variable", cont_options, key="reg_y")
-
-    if reg_x and reg_y:
-        from sklearn.linear_model import LinearRegression
-        reg_data = analysis_data[[reg_x, reg_y, 'Win?']].dropna()
-        if len(reg_data) < 10:
-            st.warning("Not enough data for regression.")
-        else:
-            X_reg = reg_data[[reg_x]].values
-            y_reg = reg_data[reg_y].values
-            lr = LinearRegression().fit(X_reg, y_reg)
-            r2 = lr.score(X_reg, y_reg)
-            reg_line_x = np.linspace(X_reg.min(), X_reg.max(), 100).reshape(-1, 1)
-            reg_line_y = lr.predict(reg_line_x)
-
-            fig_reg = px.scatter(reg_data, x=reg_x, y=reg_y, color='Win?',
-                                 color_discrete_map={'Yes': 'green', 'No': 'red'},
-                                 hover_data=['Fighter', 'Opponent'] if 'Fighter' in reg_data.columns else None,
-                                 title=f"Regression: {reg_y} vs {reg_x} (R² = {r2:.3f})")
-            fig_reg.add_trace(go.Scatter(x=reg_line_x.flatten(), y=reg_line_y, mode='lines',
-                                         name='Regression', line=dict(color='white')))
-            st.plotly_chart(fig_reg, use_container_width=True)
