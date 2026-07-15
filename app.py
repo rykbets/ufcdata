@@ -688,28 +688,15 @@ tree_data = data[data['Win?'].isin(['Yes','No'])].copy()
 tree_data['Target'] = (tree_data['Win?'] == 'Yes').astype(int)
 
 # ---------- Build opponent‑side statistics (if missing) ----------
-# Many of these already exist; for those that don't, we derive them from the fighter's data by swapping fighter/opponent
-# We'll compute opponent versions by merging the same DataFrame on (FightID, Opponent) with (FightID, Fighter)
-if 'Age_opp' not in tree_data.columns:
-    # Should already exist, but just in case
-    pass
-
-# Opponent career win %: we need to compute it similarly to fighter CareerWinPct but for the opponent at the time of the fight.
-# We can do a quick merge: opponent's CareerWinPct at the time of that fight.
-# We have CareerWinPct for each fighter; we just need to map it to the opponent.
 opp_career = tree_data[['FightID','Fighter','CareerWinPct']].rename(
     columns={'Fighter':'Opponent', 'CareerWinPct':'Opponent_CareerWinPct'})
 tree_data = tree_data.merge(opp_career, on=['FightID','Opponent'], how='left')
 
-# Opponent DaysSincePrev and Avg3DaysGap: similar merge
 opp_days = tree_data[['FightID','Fighter','DaysSincePrev','Avg3DaysGap']].rename(
     columns={'Fighter':'Opponent', 'DaysSincePrev':'Opponent_DaysSincePrev', 'Avg3DaysGap':'Opponent_Avg3DaysGap'})
 tree_data = tree_data.merge(opp_days, on=['FightID','Opponent'], how='left')
 
-# Opponent physical traits already exist as Age_opp, Height_opp, Reach_opp
-
-# ---------- Build clean feature list ----------
-# Core numeric bout features
+# ---------- Core numeric features ----------
 core_features = [
     'Age', 'Height', 'Reach',
     'Age_opp', 'Height_opp', 'Reach_opp',
@@ -721,39 +708,45 @@ core_features = [
     'CareerWinPct', 'Opponent_CareerWinPct'
 ]
 
-# Career averages (only CareerAvg_* columns, no shifted duplicates)
+# Career averages (only CareerAvg_ columns)
 career_avg_cols = [col for col in tree_data.columns if col.startswith('CareerAvg_')]
 
-# Combine base features and career averages, keeping only columns that exist
 feature_cols = [c for c in core_features + career_avg_cols 
                 if c in tree_data.columns and tree_data[c].nunique(dropna=True) >= 2]
 
-# ---------- Add label‑encoded categorical variables ----------
-# We'll create numeric versions of these categorical filters.
-categorical_mappings = {
-    'ScheduledRounds': 'SchedRounds_enc',
-    'WC': 'WC_enc',
-    'EventCountry': 'EventCountry_enc',
-    # Fighter's previous outcomes
-    prev1_col: 'Prev1_enc',
-    prev2_col: 'Prev2_enc',
-    prev3_col: 'Prev3_enc',
-    # Opponent's previous outcomes
-    'Opponent_Prev1_Outcome_raw': 'OppPrev1_enc',
-    'Opponent_Prev2_Outcome_raw': 'OppPrev2_enc',
-    'Opponent_Prev3_Outcome_raw': 'OppPrev3_enc',
-    # Career milestones could also be added if needed, but they are highly granular; skip for now to keep it manageable.
+# ---------- Descriptive binary features from previous outcomes ----------
+outcome_cols = {
+    'Prev1': prev1_col,
+    'Prev2': prev2_col,
+    'Prev3': prev3_col,
+    'OppPrev1': 'Opponent_Prev1_Outcome_raw',
+    'OppPrev2': 'Opponent_Prev2_Outcome_raw',
+    'OppPrev3': 'Opponent_Prev3_Outcome_raw'
 }
 
-for col, enc_name in categorical_mappings.items():
-    if col in tree_data.columns:
-        # Factorize (label encode) – gives 0,1,2... for each category
-        tree_data[enc_name] = pd.factorize(tree_data[col].fillna(''))[0]
-        # Only include if there's at least 2 distinct encoded values
-        if tree_data[enc_name].nunique(dropna=True) >= 2:
-            feature_cols.append(enc_name)
+# For each outcome column, parse the string and create binary features
+for prefix, col in outcome_cols.items():
+    if col not in tree_data.columns:
+        continue
+    # Win / Loss / Draw / NC
+    tree_data[f'{prefix}_is_Win'] = tree_data[col].str.startswith('Win').astype(int)
+    tree_data[f'{prefix}_is_Loss'] = tree_data[col].str.startswith('Loss').astype(int)
+    tree_data[f'{prefix}_is_Draw'] = tree_data[col].str.contains('Draw', na=False).astype(int)
+    tree_data[f'{prefix}_is_NC'] = tree_data[col].str.contains('No Contest', na=False).astype(int)
 
-# Add binary filters (title fights, hometown)
+    # Method: KO, Sub, Decision, DQ (use contains)
+    tree_data[f'{prefix}_method_KO'] = tree_data[col].str.contains('KO', na=False).astype(int)
+    tree_data[f'{prefix}_method_Sub'] = tree_data[col].str.contains('Sub', na=False).astype(int)
+    tree_data[f'{prefix}_method_Dec'] = tree_data[col].str.contains('Decision', na=False).astype(int)
+    tree_data[f'{prefix}_method_DQ'] = tree_data[col].str.contains('DQ', na=False).astype(int)
+
+    # Add only features that have both 0 and 1
+    for feat in [f'{prefix}_is_Win', f'{prefix}_is_Loss', f'{prefix}_is_Draw', f'{prefix}_is_NC',
+                 f'{prefix}_method_KO', f'{prefix}_method_Sub', f'{prefix}_method_Dec', f'{prefix}_method_DQ']:
+        if feat in tree_data.columns and tree_data[feat].nunique(dropna=True) >= 2:
+            feature_cols.append(feat)
+
+# ---------- Title fight & hometown binary features ----------
 binary_mappings = {
     'Prev1_Title':              ('Yes', 1, 0),
     'Opponent_Prev1_Title':     ('Yes', 1, 0),
@@ -762,11 +755,24 @@ binary_mappings = {
 }
 for col, (true_val, yes_num, no_num) in binary_mappings.items():
     if col in tree_data.columns:
-        tree_data[col + '_binary'] = tree_data[col].apply(
+        new_col = col + '_binary'
+        tree_data[new_col] = tree_data[col].apply(
             lambda x: yes_num if x == true_val else (no_num if isinstance(x, str) and x != '' else np.nan)
         )
-        if tree_data[col + '_binary'].nunique(dropna=True) >= 2:
-            feature_cols.append(col + '_binary')
+        if tree_data[new_col].nunique(dropna=True) >= 2:
+            feature_cols.append(new_col)
+
+# ---------- Categorical filters (encoded with readable names) ----------
+categorical_mappings = {
+    'ScheduledRounds': 'SchedRounds_enc',
+    'WC': 'WC_enc',
+    'EventCountry': 'EventCountry_enc',
+}
+for col, enc_name in categorical_mappings.items():
+    if col in tree_data.columns:
+        tree_data[enc_name] = pd.factorize(tree_data[col].fillna(''))[0]
+        if tree_data[enc_name].nunique(dropna=True) >= 2:
+            feature_cols.append(enc_name)
 
 # Remove duplicates and sort
 feature_cols = sorted(list(set(feature_cols)))
