@@ -12,8 +12,8 @@ st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 # ============================================================
 # 🔑 YOUR GOOGLE DRIVE FILE IDS (make sure files are publicly shared)
 # ============================================================
-MAIN_FILE_ID      = "1YOUR_MAIN_FILE_ID"          # ufc_all_data.csv
-UPCOMING_FILE_ID  = "1YOUR_UPCOMING_FILE_ID"      # upcoming_fights.csv (or "" if none)
+MAIN_FILE_ID      = "1eWDGGS8qQdLWvS_dgJ-HqObsr4ie9RcD"          # ufc_all_data.csv
+UPCOMING_FILE_ID  = "1mUyNR2WLHQjC8IuvG7RA6LoXPjJq3aZ1"      # upcoming_fights.csv (or "" if none)
 # ============================================================
 
 # ---------- Cached data loader ----------
