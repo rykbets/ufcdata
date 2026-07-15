@@ -7,6 +7,8 @@ import os
 import gdown
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.metrics import mutual_info_score
+import plotly.express as px
+import plotly.graph_objects as go   # <-- add this
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
@@ -829,23 +831,24 @@ def draw_tree():
     if not st.session_state.tree_nodes:
         return
 
-    # We'll assign (x,y) positions to each node recursively.
-    # Using a simple layout: root at top, children spread horizontally.
-    # We'll compute widths based on number of leaves under each node.
     def count_leaves(node_id):
-        node = st.session_state.tree_nodes[node_id]
+        node = st.session_state.tree_nodes.get(node_id)
+        if not node:
+            return 0
         if not node['children']:
             return 1
         return sum(count_leaves(child) for child in node['children'])
 
     def layout_tree(node_id, x, y, dx):
-        node = st.session_state.tree_nodes[node_id]
+        node = st.session_state.tree_nodes.get(node_id)
+        if not node:
+            return
         win_rate = node['data']['Target'].mean() * 100
         n = len(node['data'])
         text = f"Node {node_id}<br>n={n}<br>win={win_rate:.1f}%"
         if node['feature'] is not None:
             text += f"<br>{node['feature']} ≤ {node['threshold']:.2f}"
-        # Add rectangle and annotation
+        # Rectangle and annotation
         shapes.append(go.layout.Shape(
             type="rect",
             x0=x - 0.4, x1=x + 0.4,
@@ -853,17 +856,19 @@ def draw_tree():
             fillcolor="lightblue",
             line=dict(color="black"),
         ))
-        annotations.append(dict(
+        annotations.append(go.layout.Annotation(
             x=x, y=y, text=text, showarrow=False,
-            font=dict(size=10)
+            font=dict(size=10), align="center"
         ))
-        if not node['children']:
+        if not node['children'] or len(node['children']) < 2:
             return
 
-        # Two children: left and right
+        # Two children
         left_width = count_leaves(node['children'][0])
         right_width = count_leaves(node['children'][1])
         total_width = left_width + right_width
+        if total_width == 0:
+            return
         left_dx = dx * (left_width / total_width)
         right_dx = dx * (right_width / total_width)
 
@@ -871,7 +876,7 @@ def draw_tree():
         right_x = x + (dx / 2) - (right_dx / 2)
         child_y = y - 1.0
 
-        # Connect with lines
+        # Connection lines
         shapes.append(go.layout.Shape(
             type="line",
             x0=x, y0=y - 0.2, x1=left_x, y1=child_y + 0.2,
@@ -891,14 +896,16 @@ def draw_tree():
     root = st.session_state.tree_nodes.get(0)
     if root:
         total_leaves = count_leaves(0)
-        layout_tree(0, 0, 0, total_leaves * 2)   # adjust spread
+        if total_leaves == 0:
+            total_leaves = 1
+        layout_tree(0, 0, 0, total_leaves * 2.5)
 
     if shapes and annotations:
         fig = go.Figure()
         fig.update_layout(
             shapes=shapes,
             annotations=annotations,
-            xaxis=dict(visible=False, range=[-total_leaves*1.5, total_leaves*1.5]),
+            xaxis=dict(visible=False, range=[-total_leaves*2, total_leaves*2]),
             yaxis=dict(visible=False, range=[-10, 2]),
             plot_bgcolor='white',
             height=600,
