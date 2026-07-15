@@ -687,15 +687,37 @@ st.markdown("Use the filtered data (excluding upcoming fights) to find the most 
 tree_data = data[data['Win?'].isin(['Yes','No'])].copy()
 tree_data['Target'] = (tree_data['Win?'] == 'Yes').astype(int)
 
-# Numeric features: select all columns with a numeric dtype and at least 2 unique values
+# --- Build feature list: numeric columns + encoded categoricals ---
 numeric_dtypes = tree_data.select_dtypes(include=[np.number]).columns.tolist()
 # Exclude the target column itself and any column that is all NaN
 feature_cols = [c for c in numeric_dtypes if c != 'Target' and tree_data[c].nunique(dropna=True) >= 2]
 
+# Add binary versions of important categorical filters
+binary_mappings = {
+    'Prev1_Title':        ('Yes', 1, 0),
+    'Opponent_Prev1_Title': ('Yes', 1, 0),
+    # You can add more if you want, e.g.:
+    # 'HometownFighter':    ('Yes', 1, 0),
+    # 'Opponent_Hometown':  ('Yes', 1, 0),
+}
+
+for col, (true_val, yes_num, no_num) in binary_mappings.items():
+    if col in tree_data.columns:
+        # Create a numeric column: 1 if the value == true_val, else 0 (skip NaN)
+        tree_data[col + '_binary'] = tree_data[col].apply(
+            lambda x: yes_num if x == true_val else (no_num if isinstance(x, str) and x != '' else np.nan)
+        )
+        # Only keep if it has at least 2 distinct non‑NaN values
+        if tree_data[col + '_binary'].nunique(dropna=True) >= 2:
+            feature_cols.append(col + '_binary')
+
+# Remove duplicate entries
+feature_cols = sorted(list(set(feature_cols)))
+
 if not feature_cols:
     st.warning("No suitable numeric features available in the filtered data.")
 else:
-    first_feature = st.selectbox("First split variable", sorted(feature_cols))
+    first_feature = st.selectbox("First split variable", feature_cols)
     leaf_size = st.number_input("Minimum samples per leaf", min_value=1, value=20)
 
     if len(tree_data) < leaf_size:
@@ -740,11 +762,9 @@ else:
             st.write(f"Left branch: {len(left_data)} samples, win rate = {left_data['Target'].mean()*100:.1f}%")
             st.write(f"Right branch: {len(right_data)} samples, win rate = {right_data['Target'].mean()*100:.1f}%")
 
-            # Next best features for each branch (using mutual information, dropping NaN)
             def best_split_feature(subset, feature_pool):
                 if len(subset) < leaf_size:
                     return None
-                # Only keep rows where all features in the pool are non‑NaN
                 X_sub = subset[feature_pool].dropna()
                 y_sub = subset.loc[X_sub.index, 'Target'].values
                 if len(X_sub) < leaf_size:
@@ -755,7 +775,6 @@ else:
                     return feature_pool[best_idx]
                 return None
 
-            # Features available in each branch (remove constant columns)
             left_features = [f for f in feature_cols if f in left_data.columns and left_data[f].nunique(dropna=True) >= 2]
             right_features = [f for f in feature_cols if f in right_data.columns and right_data[f].nunique(dropna=True) >= 2]
 
