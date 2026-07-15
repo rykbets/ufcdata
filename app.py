@@ -740,21 +740,22 @@ else:
             st.write(f"Left branch: {len(left_data)} samples, win rate = {left_data['Target'].mean()*100:.1f}%")
             st.write(f"Right branch: {len(right_data)} samples, win rate = {right_data['Target'].mean()*100:.1f}%")
 
-            # Next best features for each branch (using mutual information)
+            # Next best features for each branch (using mutual information, dropping NaN)
             def best_split_feature(subset, feature_pool):
                 if len(subset) < leaf_size:
                     return None
-                # Prepare data for mutual_info_classif
-                X_sub = subset[feature_pool].values
-                y_sub = subset['Target'].values
-                # mutual_info_classif expects 2D X
+                # Only keep rows where all features in the pool are non‑NaN
+                X_sub = subset[feature_pool].dropna()
+                y_sub = subset.loc[X_sub.index, 'Target'].values
+                if len(X_sub) < leaf_size:
+                    return None
                 mi_scores = mutual_info_classif(X_sub, y_sub, discrete_features=False)
                 best_idx = np.argmax(mi_scores)
                 if mi_scores[best_idx] > 0:
                     return feature_pool[best_idx]
                 return None
 
-            # Only consider features that exist in the subset (some may have become constant)
+            # Features available in each branch (remove constant columns)
             left_features = [f for f in feature_cols if f in left_data.columns and left_data[f].nunique(dropna=True) >= 2]
             right_features = [f for f in feature_cols if f in right_data.columns and right_data[f].nunique(dropna=True) >= 2]
 
