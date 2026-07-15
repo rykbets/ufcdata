@@ -679,7 +679,7 @@ fig = px.scatter(
 )
 st.plotly_chart(fig, use_container_width=True, key=f"scatter_{x_col}_{y_col}")
 
-# ---------- Decision Tree (CLEAN) ----------
+# ---------- Decision Tree (VISUAL) ----------
 st.header("Customizable Decision Tree")
 st.markdown("Use the filtered data (excluding upcoming fights) to find the most informative splits.")
 
@@ -694,7 +694,7 @@ opp_days = encoded_data[['FightID','Fighter','DaysSincePrev','Avg3DaysGap']].ren
     columns={'Fighter':'Opponent', 'DaysSincePrev':'Opponent_DaysSincePrev', 'Avg3DaysGap':'Opponent_Avg3DaysGap'})
 encoded_data = encoded_data.merge(opp_days, on=['FightID','Opponent'], how='left')
 
-# ---------- 🔹 ONLY the stats you want – no raw shifted duplicates ----------
+# ---------- Core numeric features ----------
 core_features = [
     'Age', 'Height', 'Reach',
     'Age_opp', 'Height_opp', 'Reach_opp',
@@ -824,28 +824,67 @@ if build_clicked:
         'depth': 0
     }
 
+# ---------- Visual Tree Renderer ----------
+def render_tree(node_id, prefix=""):
+    node = st.session_state.tree_nodes.get(node_id)
+    if not node:
+        return
+    data = node['data']
+    win_rate = data['Target'].mean() * 100
+    n = len(data)
+    depth = node['depth']
+
+    # Node description
+    if node['feature'] is not None:
+        text = f"{prefix}├─ Node {node_id} (n={n}, win={win_rate:.1f}%) [Split: {node['feature']} ≤ {node['threshold']:.2f}]"
+    else:
+        text = f"{prefix}└─ Node {node_id} (n={n}, win={win_rate:.1f}%) [No split yet]"
+
+    st.write(text)
+
+    # Render children with updated prefix
+    if node['children']:
+        for i, child_id in enumerate(node['children']):
+            is_last = (i == len(node['children']) - 1)
+            new_prefix = prefix + ("    " if is_last else "│   ")
+            if node['feature'] is not None:
+                branch = "│   " if depth < 3 else "    "
+                if is_last:
+                    branch = "└── "
+                else:
+                    branch = "├── "
+                st.write(prefix + branch)   # visual branch
+            render_tree(child_id, new_prefix)
+
+# ---------- Main display ----------
 if st.session_state.root_built:
-    def display_node(node_id):
-        node = st.session_state.tree_nodes[node_id]
+    st.subheader("Tree Structure")
+    render_tree(0)
+
+    # Also show feature list and split controls for the root (or any node?)
+    # We'll only show the root's controls for simplicity – user can navigate?
+    # Better: keep the previous interactive node display with dropdown.
+    # I'll add a selector to choose which node to view / split.
+    node_ids = sorted(st.session_state.tree_nodes.keys())
+    selected_node = st.selectbox("Select node to view / split", node_ids, format_func=lambda id: f"Node {id}")
+    if selected_node is not None:
+        node = st.session_state.tree_nodes[selected_node]
         data = node['data']
         depth = node['depth']
-        if depth >= 3:
-            st.write(f"**Leaf {node_id}**: {len(data)} samples, win={data['Target'].mean()*100:.1f}%")
-            return
-
-        st.write(f"**Node {node_id}** (depth {depth}): {len(data)} samples, win={data['Target'].mean()*100:.1f}%")
+        win_rate = data['Target'].mean() * 100
+        n = len(data)
+        st.write(f"**Node {selected_node}** (depth {depth}, n={n}, win={win_rate:.1f}%)")
 
         available_features = [f for f in feature_cols if f in data.columns]
+        suggestions = suggest_features(data, available_features, top_k=3)
+        st.write("**Suggested features:**", ", ".join(suggestions) if suggestions else "None")
 
-        if node['feature'] is None:
-            suggestions = suggest_features(data, available_features, top_k=3)
-            st.write("**Suggested features:**", ", ".join(suggestions) if suggestions else "None")
-
+        if node['feature'] is None and depth < 3:
             col1, col2 = st.columns([3, 1])
             with col1:
-                selected_feature = st.selectbox("Select feature to split", available_features, key=f"feat_{node_id}")
+                selected_feature = st.selectbox("Select feature to split", available_features, key=f"feat_{selected_node}")
             with col2:
-                split_clicked = st.button("Split", key=f"split_{node_id}")
+                split_clicked = st.button("Split", key=f"split_{selected_node}")
 
             if split_clicked:
                 unique_vals = data[selected_feature].dropna().unique()
@@ -874,10 +913,5 @@ if st.session_state.root_built:
                         }
                         node['children'] = [left_id, right_id]
                         st.rerun()
-        else:
-            st.write(f"Split on **{node['feature']}** ≤ {node['threshold']:.2f}")
-            for child_id in node['children']:
-                st.write("---")
-                display_node(child_id)
-
-    display_node(0)
+        elif node['feature'] is not None:
+            st.write(f"Already split on **{node['feature']}** ≤ {node['threshold']:.2f}")
