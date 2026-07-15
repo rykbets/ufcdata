@@ -696,7 +696,7 @@ opp_days = tree_data[['FightID','Fighter','DaysSincePrev','Avg3DaysGap']].rename
     columns={'Fighter':'Opponent', 'DaysSincePrev':'Opponent_DaysSincePrev', 'Avg3DaysGap':'Opponent_Avg3DaysGap'})
 tree_data = tree_data.merge(opp_days, on=['FightID','Opponent'], how='left')
 
-# ---------- Core numeric features (no current‑fight filters) ----------
+# ---------- Core numeric features ----------
 core_features = [
     'Age', 'Height', 'Reach',
     'Age_opp', 'Height_opp', 'Reach_opp',
@@ -713,7 +713,7 @@ career_avg_cols = [col for col in tree_data.columns if col.startswith('CareerAvg
 feature_cols = [c for c in core_features + career_avg_cols 
                 if c in tree_data.columns and tree_data[c].nunique(dropna=True) >= 2]
 
-# ---------- Descriptive binary features from previous outcomes ----------
+# ---------- Descriptive binary features (previous outcomes) ----------
 outcome_cols = {
     'Prev1': prev1_col,
     'Prev2': prev2_col,
@@ -726,21 +726,21 @@ outcome_cols = {
 for prefix, col in outcome_cols.items():
     if col not in tree_data.columns:
         continue
-    tree_data[f'{prefix}_is_Win'] = tree_data[col].str.startswith('Win').astype(int)
-    tree_data[f'{prefix}_is_Loss'] = tree_data[col].str.startswith('Loss').astype(int)
-    tree_data[f'{prefix}_is_Draw'] = tree_data[col].str.contains('Draw', na=False).astype(int)
-    tree_data[f'{prefix}_is_NC'] = tree_data[col].str.contains('No Contest', na=False).astype(int)
-    tree_data[f'{prefix}_method_KO'] = tree_data[col].str.contains('KO', na=False).astype(int)
+    tree_data[f'{prefix}_is_Win']   = tree_data[col].str.startswith('Win').astype(int)
+    tree_data[f'{prefix}_is_Loss']  = tree_data[col].str.startswith('Loss').astype(int)
+    tree_data[f'{prefix}_is_Draw']  = tree_data[col].str.contains('Draw', na=False).astype(int)
+    tree_data[f'{prefix}_is_NC']    = tree_data[col].str.contains('No Contest', na=False).astype(int)
+    tree_data[f'{prefix}_method_KO']  = tree_data[col].str.contains('KO', na=False).astype(int)
     tree_data[f'{prefix}_method_Sub'] = tree_data[col].str.contains('Sub', na=False).astype(int)
     tree_data[f'{prefix}_method_Dec'] = tree_data[col].str.contains('Decision', na=False).astype(int)
-    tree_data[f'{prefix}_method_DQ'] = tree_data[col].str.contains('DQ', na=False).astype(int)
+    tree_data[f'{prefix}_method_DQ']  = tree_data[col].str.contains('DQ', na=False).astype(int)
 
     for feat in [f'{prefix}_is_Win', f'{prefix}_is_Loss', f'{prefix}_is_Draw', f'{prefix}_is_NC',
                  f'{prefix}_method_KO', f'{prefix}_method_Sub', f'{prefix}_method_Dec', f'{prefix}_method_DQ']:
         if feat in tree_data.columns and tree_data[feat].nunique(dropna=True) >= 2:
             feature_cols.append(feat)
 
-# ---------- Title fight & hometown binary features ----------
+# ---------- Title fight & hometown binary features (always include) ----------
 binary_mappings = {
     'Prev1_Title':              ('Yes', 1, 0),
     'Opponent_Prev1_Title':     ('Yes', 1, 0),
@@ -753,8 +753,8 @@ for col, (true_val, yes_num, no_num) in binary_mappings.items():
         tree_data[new_col] = tree_data[col].apply(
             lambda x: yes_num if x == true_val else (no_num if isinstance(x, str) and x != '' else np.nan)
         )
-        if tree_data[new_col].nunique(dropna=True) >= 2:
-            feature_cols.append(new_col)
+        # Always add to feature_cols, even if constant in the full dataset
+        feature_cols.append(new_col)
 
 feature_cols = sorted(list(set(feature_cols)))
 
@@ -806,7 +806,7 @@ def suggest_features(subset, feature_pool, top_k=3):
                 break
     return suggested
 
-# ---------- Initialize session state for tree ----------
+# ---------- Initialize session state ----------
 if 'tree_nodes' not in st.session_state:
     st.session_state.tree_nodes = {}
     st.session_state.next_node_id = 1
@@ -836,49 +836,48 @@ if st.session_state.root_built:
         data = node['data']
         depth = node['depth']
         if depth >= 3:
-            st.write(f"**Leaf Node {node_id}** (max depth): {len(data)} samples, win rate = {data['Target'].mean()*100:.1f}%")
+            st.write(f"**Leaf {node_id}**: {len(data)} samples, win={data['Target'].mean()*100:.1f}%")
             return
 
-        st.write(f"**Node {node_id}** (depth {depth}): {len(data)} samples, win rate = {data['Target'].mean()*100:.1f}%")
+        st.write(f"**Node {node_id}** (depth {depth}): {len(data)} samples, win={data['Target'].mean()*100:.1f}%")
 
         if node['feature'] is None:
-            # Filter features that actually vary in this node
-            valid_features = [f for f in feature_cols if f in data.columns and data[f].nunique(dropna=True) >= 2]
-            if not valid_features:
-                st.write("No features vary in this node – cannot split further.")
-                return
-
-            suggestions = suggest_features(data, valid_features, top_k=3)
+            # Show all global features, even if constant in this node
+            suggestions = suggest_features(data, feature_cols, top_k=3)
             st.write("**Suggested features:**", ", ".join(suggestions) if suggestions else "None")
 
             col1, col2 = st.columns([3, 1])
             with col1:
-                selected_feature = st.selectbox("Select feature to split", valid_features, key=f"feat_{node_id}")
+                selected_feature = st.selectbox("Select feature to split", feature_cols, key=f"feat_{node_id}")
             with col2:
                 split_clicked = st.button("Split", key=f"split_{node_id}")
 
             if split_clicked:
-                best_feat, best_thresh, gain = find_best_split(data, [selected_feature])
-                if best_feat is None or gain <= 0:
-                    st.warning(f"No significant split found for '{selected_feature}' in this node. Try another feature.")
+                # Check if the selected feature actually varies in this node
+                if data[selected_feature].nunique(dropna=True) < 2:
+                    st.warning(f"'{selected_feature}' is constant in this node – cannot split.")
                 else:
-                    node['feature'] = best_feat
-                    node['threshold'] = best_thresh
-                    left_mask = data[best_feat] <= best_thresh
-                    right_mask = data[best_feat] > best_thresh
-                    left_data = data[left_mask].copy()
-                    right_data = data[right_mask].copy()
-                    left_id = st.session_state.next_node_id
-                    right_id = st.session_state.next_node_id + 1
-                    st.session_state.next_node_id += 2
-                    st.session_state.tree_nodes[left_id] = {
-                        'data': left_data, 'feature': None, 'threshold': None, 'children': [], 'depth': depth + 1
-                    }
-                    st.session_state.tree_nodes[right_id] = {
-                        'data': right_data, 'feature': None, 'threshold': None, 'children': [], 'depth': depth + 1
-                    }
-                    node['children'] = [left_id, right_id]
-                    st.rerun()
+                    best_feat, best_thresh, gain = find_best_split(data, [selected_feature])
+                    if best_feat is None or gain <= 0:
+                        st.warning(f"No significant split found for '{selected_feature}'. Try another feature.")
+                    else:
+                        node['feature'] = best_feat
+                        node['threshold'] = best_thresh
+                        left_mask = data[best_feat] <= best_thresh
+                        right_mask = data[best_feat] > best_thresh
+                        left_data = data[left_mask].copy()
+                        right_data = data[right_mask].copy()
+                        left_id = st.session_state.next_node_id
+                        right_id = st.session_state.next_node_id + 1
+                        st.session_state.next_node_id += 2
+                        st.session_state.tree_nodes[left_id] = {
+                            'data': left_data, 'feature': None, 'threshold': None, 'children': [], 'depth': depth + 1
+                        }
+                        st.session_state.tree_nodes[right_id] = {
+                            'data': right_data, 'feature': None, 'threshold': None, 'children': [], 'depth': depth + 1
+                        }
+                        node['children'] = [left_id, right_id]
+                        st.rerun()
         else:
             st.write(f"Split on **{node['feature']}** ≤ {node['threshold']:.2f}")
             for child_id in node['children']:
