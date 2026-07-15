@@ -681,7 +681,7 @@ fig = px.scatter(
 )
 st.plotly_chart(fig, use_container_width=True, key=f"scatter_{x_col}_{y_col}")
 
-# ---------- Decision Tree (VISUAL with Plotly) ----------
+# ---------- Decision Tree (Clean Black & White) ----------
 st.header("Customizable Decision Tree")
 st.markdown("Use the filtered data (excluding upcoming fights) to find the most informative splits.")
 
@@ -826,16 +826,14 @@ if build_clicked:
         'depth': 0
     }
 
-# ---------- Plotly Tree Diagram ----------
+# ---------- Simple Black‑&‑White Tree Diagram ----------
 def draw_tree():
     if not st.session_state.tree_nodes:
         return
 
     def count_leaves(node_id):
         node = st.session_state.tree_nodes.get(node_id)
-        if not node:
-            return 0
-        if not node['children']:
+        if not node or not node['children']:
             return 1
         return sum(count_leaves(child) for child in node['children'])
 
@@ -845,25 +843,20 @@ def draw_tree():
             return
         win_rate = node['data']['Target'].mean() * 100
         n = len(node['data'])
-        text = f"Node {node_id}<br>n={n}<br>win={win_rate:.1f}%"
+        # Text for the node
+        text = f"Node {node_id} (n={n}, win={win_rate:.1f}%)"
         if node['feature'] is not None:
-            text += f"<br>{node['feature']} ≤ {node['threshold']:.2f}"
-        # Rectangle and annotation
-        shapes.append(go.layout.Shape(
-            type="rect",
-            x0=x - 0.4, x1=x + 0.4,
-            y0=y - 0.2, y1=y + 0.2,
-            fillcolor="lightblue",
-            line=dict(color="black"),
-        ))
+            text += f"<br>   {node['feature']} ≤ {node['threshold']:.2f}"
+
         annotations.append(go.layout.Annotation(
             x=x, y=y, text=text, showarrow=False,
-            font=dict(size=10), align="center"
+            font=dict(color="white", size=11), bgcolor="rgba(0,0,0,0)",
+            align="center"
         ))
+
         if not node['children'] or len(node['children']) < 2:
             return
 
-        # Two children
         left_width = count_leaves(node['children'][0])
         right_width = count_leaves(node['children'][1])
         total_width = left_width + right_width
@@ -874,18 +867,16 @@ def draw_tree():
 
         left_x = x - (dx / 2) + (left_dx / 2)
         right_x = x + (dx / 2) - (right_dx / 2)
-        child_y = y - 1.0
+        child_y = y - 1.2   # slightly larger vertical spacing
 
         # Connection lines
         shapes.append(go.layout.Shape(
-            type="line",
-            x0=x, y0=y - 0.2, x1=left_x, y1=child_y + 0.2,
-            line=dict(color="gray")
+            type="line", x0=x, y0=y - 0.3, x1=left_x, y1=child_y + 0.3,
+            line=dict(color="gray", width=1)
         ))
         shapes.append(go.layout.Shape(
-            type="line",
-            x0=x, y0=y - 0.2, x1=right_x, y1=child_y + 0.2,
-            line=dict(color="gray")
+            type="line", x0=x, y0=y - 0.3, x1=right_x, y1=child_y + 0.3,
+            line=dict(color="gray", width=1)
         ))
 
         layout_tree(node['children'][0], left_x, child_y, left_dx)
@@ -895,19 +886,18 @@ def draw_tree():
     annotations = []
     root = st.session_state.tree_nodes.get(0)
     if root:
-        total_leaves = count_leaves(0)
-        if total_leaves == 0:
-            total_leaves = 1
+        total_leaves = count_leaves(0) or 1
         layout_tree(0, 0, 0, total_leaves * 2.5)
 
-    if shapes and annotations:
+    if annotations:
         fig = go.Figure()
         fig.update_layout(
             shapes=shapes,
             annotations=annotations,
             xaxis=dict(visible=False, range=[-total_leaves*2, total_leaves*2]),
             yaxis=dict(visible=False, range=[-10, 2]),
-            plot_bgcolor='white',
+            plot_bgcolor='black',
+            paper_bgcolor='black',
             height=600,
             margin=dict(l=0, r=0, t=0, b=0)
         )
