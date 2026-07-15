@@ -681,7 +681,7 @@ fig = px.scatter(
 )
 st.plotly_chart(fig, use_container_width=True, key=f"scatter_{x_col}_{y_col}")
 
-# ---------- Decision Tree (with Title‑column diagnostic) ----------
+# ---------- Decision Tree (max depth 5) ----------
 st.header("Customizable Decision Tree")
 st.markdown("Use the filtered data (excluding upcoming fights) to find the most informative splits.")
 
@@ -695,14 +695,6 @@ encoded_data = encoded_data.merge(opp_career, on=['FightID','Opponent'], how='le
 opp_days = encoded_data[['FightID','Fighter','DaysSincePrev','Avg3DaysGap']].rename(
     columns={'Fighter':'Opponent', 'DaysSincePrev':'Opponent_DaysSincePrev', 'Avg3DaysGap':'Opponent_Avg3DaysGap'})
 encoded_data = encoded_data.merge(opp_days, on=['FightID','Opponent'], how='left')
-
-# ---------- 🔍 DIAGNOSTIC: show all columns that contain "Title" ----------
-with st.expander("🔍 Title‑related columns in the data (click to see)"):
-    title_cols = [col for col in encoded_data.columns if 'title' in col.lower()]
-    if title_cols:
-        st.write("Columns found:", title_cols)
-    else:
-        st.warning("No columns containing 'Title' were found in the data. Prev1_Title is missing!")
 
 # ---------- Core numeric features ----------
 core_features = [
@@ -748,16 +740,17 @@ for prefix, col in outcome_cols.items():
         if feat in encoded_data.columns and encoded_data[feat].nunique(dropna=True) >= 2:
             feature_cols.append(feat)
 
-# ---------- Explicit binary filters (Yes → 1, No/NaN → 0) ----------
-binary_cols = ['Prev1_Title', 'Opponent_Prev1_Title', 'HometownFighter', 'Opponent_Hometown']
+# ---------- ALL Title/Hometown binary filters ----------
+binary_cols = [
+    'Prev1_Title', 'Prev2_Title', 'Prev3_Title',
+    'Opponent_Prev1_Title', 'Opponent_Prev2_Title', 'Opponent_Prev3_Title',
+    'HometownFighter', 'Opponent_Hometown'
+]
 for col in binary_cols:
     if col in encoded_data.columns:
         clean_col = col + '_clean'
         encoded_data[clean_col] = encoded_data[col].astype(str).str.strip().str.lower().map({'yes': 1}).fillna(0).astype(int)
         feature_cols.append(clean_col)
-    else:
-        # Column missing – skip
-        pass
 
 feature_cols = sorted(list(set(feature_cols)))
 
@@ -835,6 +828,13 @@ if build_clicked:
         'children': [],
         'depth': 0
     }
+
+# ---------- Feature list expander ----------
+with st.expander("🔍 Feature list (click to see all)"):
+    binary_clean = [f for f in feature_cols if f.endswith('_clean')]
+    other = [f for f in feature_cols if not f.endswith('_clean')]
+    st.markdown("**Binary yes/no filters:** " + ", ".join(f"`{f}`" for f in binary_clean) if binary_clean else "None")
+    st.markdown("**Other features:** " + ", ".join(other))
 
 # ---------- Simple Black‑&‑White Tree Diagram ----------
 def draw_tree():
@@ -915,7 +915,7 @@ def draw_tree():
         )
         st.plotly_chart(fig, use_container_width=True)
 
-# ---------- Main display ----------
+# ---------- Main display (depth increased to 5) ----------
 if st.session_state.root_built:
     st.subheader("Tree Diagram")
     draw_tree()
@@ -934,7 +934,7 @@ if st.session_state.root_built:
         suggestions = suggest_features(data, available_features, top_k=3)
         st.write("**Suggested features:**", ", ".join(suggestions) if suggestions else "None")
 
-        if node['feature'] is None and depth < 3:
+        if node['feature'] is None and depth < 5:          # ⬅ increased to 5
             col1, col2 = st.columns([3, 1])
             with col1:
                 selected_feature = st.selectbox("Select feature to split", available_features, key=f"feat_{selected_node}")
