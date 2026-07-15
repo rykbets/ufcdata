@@ -498,4 +498,4 @@ fig = px.scatter(
     title=f'{y_col} vs {x_col}'
 )
 st.plotly_chart(fig, use_container_width=True)
-st.plotly_chart(fig, use_container_width=True)
+
