@@ -700,19 +700,20 @@ for col in global_features_data.columns:
     if col not in data.columns:
         data[col] = global_features_data[col]
 
-# ---------- Interactive Regression Plot (detailed outcome colors) ----------
+# ---------- Interactive Regression Plot (no more "None") ----------
 st.header("Regression Analysis")
 st.markdown("Select two variables to explore relationships. Points are colored by detailed outcome.")
 
 def detailed_result(row):
-    # Upcoming fights have no winner
-    win_val = str(row.get('Win?', '')).strip()
-    if not win_val or win_val.lower() == 'nan':
+    win_raw = row.get('Win?')
+    # Treat None, NaN, empty string, and string "None"/"nan" as missing → Upcoming
+    if win_raw is None or pd.isna(win_raw) or str(win_raw).strip().lower() in ('', 'none', 'nan'):
         return 'Upcoming'
 
+    win_val = str(win_raw).strip()
     method = str(row.get('Method', '')).strip().lower()
 
-    # DQ takes priority – check method string for 'dq' or 'disqualif'
+    # DQ first
     if 'dq' in method or 'disqualif' in method:
         return 'Win by DQ' if win_val == 'Yes' else 'Loss by DQ'
 
@@ -730,8 +731,8 @@ def detailed_result(row):
     if win_val == 'No':
         return 'Loss'
 
-    # Fallback – should never happen, but keep just in case
-    return win_val
+    # Should never reach here, but fallback
+    return 'Upcoming'
 
 data['DetailedResult'] = data.apply(detailed_result, axis=1)
 
@@ -779,7 +780,6 @@ else:
                 name='Regression', line=dict(color='white')
             ))
             st.plotly_chart(fig_reg, use_container_width=True)
-
 # ---------- Advanced Analysis (Feature Importance, Bubble) ----------
 st.header("Advanced Analysis")
 st.markdown("These insights are based on the currently filtered data and will only change when you adjust the sidebar filters.")
