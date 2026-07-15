@@ -687,7 +687,6 @@ st.markdown("Analyze the filtered data to find which metrics best separate wins 
 
 # ---------- Build feature matrix on the current filtered data ----------
 analysis_data = data.copy()
-# Keep only Win/Loss fights
 analysis_data = analysis_data[analysis_data['Win?'].isin(['Yes','No'])].copy()
 analysis_data['Target'] = (analysis_data['Win?'] == 'Yes').astype(int)
 
@@ -705,7 +704,7 @@ core_features = [
 
 career_avg_cols = [col for col in analysis_data.columns if col.startswith('CareerAvg_')]
 
-feature_cols = [c for c in core_features + career_avg_cols 
+all_features = [c for c in core_features + career_avg_cols 
                 if c in analysis_data.columns and analysis_data[c].nunique(dropna=True) >= 2]
 
 # ---------- Binary outcome features (fighter + opponent, 3 shifts) ----------
@@ -733,7 +732,7 @@ for prefix, col in outcome_cols.items():
     for feat in [f'{prefix}_is_Win', f'{prefix}_is_Loss', f'{prefix}_is_Draw', f'{prefix}_is_NC',
                  f'{prefix}_method_KO', f'{prefix}_method_Sub', f'{prefix}_method_Dec', f'{prefix}_method_DQ']:
         if feat in analysis_data.columns and analysis_data[feat].nunique(dropna=True) >= 2:
-            feature_cols.append(feat)
+            all_features.append(feat)
 
 # ---------- Title/Hometown binary filters ----------
 binary_cols = [
@@ -745,19 +744,22 @@ for col in binary_cols:
     if col in analysis_data.columns:
         clean_col = col + '_clean'
         analysis_data[clean_col] = analysis_data[col].astype(str).str.strip().str.lower().map({'yes': 1}).fillna(0).astype(int)
-        feature_cols.append(clean_col)
+        all_features.append(clean_col)
 
-feature_cols = sorted(list(set(feature_cols)))
+all_features = sorted(list(set(all_features)))
+
+# ---------- Separate continuous features (for regression) ----------
+continuous_features = [f for f in all_features 
+                       if not set(analysis_data[f].dropna().unique()).issubset({0, 1})]
 
 # ---------- Prepare feature matrix and target ----------
-X = analysis_data[feature_cols].copy()
+X = analysis_data[all_features].copy()
 y = analysis_data['Target']
 
-# Drop features that are all NaN in the current subset
 X = X.dropna(axis=1, how='all')
-feature_cols = list(X.columns)
+all_features = list(X.columns)
 
-if len(feature_cols) == 0:
+if len(all_features) == 0:
     st.warning("No suitable features available in the filtered data.")
 else:
     # ---------- Mutual Information Importance ----------
@@ -766,7 +768,7 @@ else:
     X_imputed = imputer.fit_transform(X)
     mi_scores = mutual_info_classif(X_imputed, y, discrete_features=False)
     mi_df = pd.DataFrame({
-        'Feature': feature_cols,
+        'Feature': all_features,
         'Mutual Information': mi_scores
     }).sort_values('Mutual Information', ascending=False)
 
@@ -775,14 +777,13 @@ else:
                      title="Top 20 Features by Mutual Information with Win/Loss")
     st.plotly_chart(fig_imp, use_container_width=True)
 
-    # ---------- Bubble Chart: Win vs Loss Averages ----------
+    # ---------- Bubble Chart (all features) ----------
     winners = analysis_data[analysis_data['Win?'] == 'Yes']
     losers = analysis_data[analysis_data['Win?'] == 'No']
-
-    win_means = winners[feature_cols].mean()
-    loss_means = losers[feature_cols].mean()
+    win_means = winners[all_features].mean()
+    loss_means = losers[all_features].mean()
     bubble_data = pd.DataFrame({
-        'Feature': feature_cols,
+        'Feature': all_features,
         'Avg Winners': win_means.values,
         'Avg Losers': loss_means.values,
         'Importance': mi_scores
@@ -792,38 +793,41 @@ else:
     fig_bubble = px.scatter(bubble_data, x='Avg Winners', y='Avg Losers',
                             size='Importance', hover_name='Feature',
                             title="Bubble Chart: Avg Winners vs Avg Losers (bubble size = importance)")
-    # Add diagonal reference line
     max_val = max(bubble_data['Avg Winners'].max(), bubble_data['Avg Losers'].max())
     min_val = min(bubble_data['Avg Winners'].min(), bubble_data['Avg Losers'].min())
     fig_bubble.add_shape(type='line', x0=min_val, y0=min_val, x1=max_val, y1=max_val,
                          line=dict(dash='dash', color='gray'))
     st.plotly_chart(fig_bubble, use_container_width=True)
 
-    # ---------- Interactive Regression Plot ----------
+    # ---------- Regression Analysis (continuous features only) ----------
     st.subheader("Regression Analysis")
-    numeric_options = [f for f in feature_cols if analysis_data[f].nunique(dropna=True) >= 2]
-    col1, col2 = st.columns(2)
-    with col1:
-        reg_x = st.selectbox("X variable", numeric_options, key="reg_x")
-    with col2:
-        reg_y = st.selectbox("Y variable", numeric_options, key="reg_y")
+    cont_options = [f for f in continuous_features if f in analysis_data.columns and analysis_data[f].nunique(dropna=True) >= 2]
+    if len(cont_options) < 2:
+        st.warning("Not enough continuous features for regression.")
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            reg_x = st.selectbox("X variable", cont_options, key="reg_x")
+        with col2:
+            reg_y = st.selectbox("Y variable", cont_options, key="reg_y")
 
-    if reg_x and reg_y:
-        from sklearn.linear_model import LinearRegression
-        reg_data = analysis_data[[reg_x, reg_y, 'Win?']].dropna()
-        if len(reg_data) < 10:
-            st.warning("Not enough data for regression (need at least 10 points).")
-        else:
-            X_reg = reg_data[[reg_x]].values
-            y_reg = reg_data[reg_y].values
-            lr = LinearRegression().fit(X_reg, y_reg)
-            reg_line_x = np.linspace(X_reg.min(), X_reg.max(), 100).reshape(-1, 1)
-            reg_line_y = lr.predict(reg_line_x)
+        if reg_x and reg_y:
+            from sklearn.linear_model import LinearRegression
+            reg_data = analysis_data[[reg_x, reg_y, 'Win?']].dropna()
+            if len(reg_data) < 10:
+                st.warning("Not enough data for regression (need at least 10 points).")
+            else:
+                X_reg = reg_data[[reg_x]].values
+                y_reg = reg_data[reg_y].values
+                lr = LinearRegression().fit(X_reg, y_reg)
+                r2 = lr.score(X_reg, y_reg)
+                reg_line_x = np.linspace(X_reg.min(), X_reg.max(), 100).reshape(-1, 1)
+                reg_line_y = lr.predict(reg_line_x)
 
-            fig_reg = px.scatter(reg_data, x=reg_x, y=reg_y, color='Win?',
-                                 color_discrete_map={'Yes': 'green', 'No': 'red'},
-                                 hover_data=['Fighter', 'Opponent'] if 'Fighter' in reg_data.columns else None,
-                                 title=f"Regression: {reg_y} vs {reg_x}")
-            fig_reg.add_trace(go.Scatter(x=reg_line_x.flatten(), y=reg_line_y, mode='lines',
-                                         name='Regression', line=dict(color='white')))
-            st.plotly_chart(fig_reg, use_container_width=True)
+                fig_reg = px.scatter(reg_data, x=reg_x, y=reg_y, color='Win?',
+                                     color_discrete_map={'Yes': 'green', 'No': 'red'},
+                                     hover_data=['Fighter', 'Opponent'] if 'Fighter' in reg_data.columns else None,
+                                     title=f"Regression: {reg_y} vs {reg_x} (R² = {r2:.3f})")
+                fig_reg.add_trace(go.Scatter(x=reg_line_x.flatten(), y=reg_line_y, mode='lines',
+                                             name='Regression', line=dict(color='white')))
+                st.plotly_chart(fig_reg, use_container_width=True)
