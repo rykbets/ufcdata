@@ -522,7 +522,6 @@ for result, col in zip(['Yes', 'No'], [col1, col2]):
 st.header("Upcoming Fight Matchup")
 upcoming_data = data[data['Win?'].isna() | (data['Win?'] == '')]
 if not upcoming_data.empty:
-    # Get unique FightIDs for upcoming fights
     upcoming_fight_ids = upcoming_data['FightID'].unique()
     selected_fight = st.selectbox("Choose an upcoming fight", sorted(upcoming_fight_ids))
     if selected_fight:
@@ -531,23 +530,89 @@ if not upcoming_data.empty:
             f1_row = fight_rows.iloc[0]
             f2_row = fight_rows.iloc[1]
             st.write(f"### {f1_row['Fighter']} vs {f2_row['Fighter']}")
+
+            # Define a helper to display a row of stats for one fighter
+            def show_fighter_stats(row, label):
+                st.subheader(label)
+                # Basic info
+                st.write(f"**Age:** {row['Age']}  | **Height:** {row['Height']} in | **Reach:** {row['Reach']} in")
+                st.write(f"**Stance:** {row['Stance']} | **Country:** {row['Country']}")
+                st.write(f"**Fight #:** {row['FightNumber']} | **Opp Fight #:** {row['Opponent_FightNumber']}")
+                st.write(f"**Days Since Prev:** {row['DaysSincePrev']:.0f} days  | **Avg 3‑Fight Gap:** {row['Avg3DaysGap']:.0f} days")
+                st.write(f"**Career Win %:** {row['CareerWinPct']:.1f}%")
+                st.write(f"**Odds (Fighter/Opp):** {row['FighterOddsBFO']} / {row['OpponentOddsBFO']}")
+
+                # Career averages
+                st.write("**Career Averages (before this fight):**")
+                avg_items = []
+                for col_name in ['CareerAvg_SS','CareerAvg_SSA','CareerAvg_KD','CareerAvg_TD','CareerAvg_TDA',
+                                 'CareerAvg_Subs','CareerAvg_Reversals','CareerAvg_Ctrl','CareerAvg_DSL']:
+                    if col_name in row:
+                        val = row[col_name]
+                        avg_items.append(f"{col_name.replace('CareerAvg_','')}: {val:.1f}" if pd.notna(val) else f"{col_name.replace('CareerAvg_','')}: --")
+                st.write(" · ".join(avg_items) if avg_items else "No career data")
+
+                # Physical differences (current bout)
+                st.write("**Current Bout Differences:**")
+                diff_items = []
+                for diff_col, unit in [('AgeDiff','yrs'),('HeightDiff','in'),('ReachDiff','in')]:
+                    if diff_col in row:
+                        diff_items.append(f"{diff_col}: {row[diff_col]:+.1f} {unit}" if pd.notna(row[diff_col]) else f"{diff_col}: --")
+                st.write(" · ".join(diff_items) if diff_items else "N/A")
+
+                # Previous outcomes (fighter)
+                st.write("**Previous Outcomes (Fighter):**")
+                prev_outs = []
+                for shift, col in [(1, prev1_col), (2, prev2_col), (3, prev3_col)]:
+                    val = row[col] if pd.notna(row[col]) else '--'
+                    prev_outs.append(f"Prev {shift}: {val}")
+                st.write(" · ".join(prev_outs))
+
+                # Career milestones (fighter)
+                st.write("**Career Milestones (Fighter):**")
+                career_outs = []
+                for shift, col in [(1, career1_col), (2, career2_col), (3, career3_col)]:
+                    val = row[col] if pd.notna(row[col]) else '--'
+                    career_outs.append(f"F{shift}: {val}")
+                st.write(" · ".join(career_outs))
+
+                # Opponent previous outcomes & milestones
+                st.write("**Opponent Previous Outcomes:**")
+                opp_prev_outs = []
+                for shift in [1,2,3]:
+                    raw_col = f'Opponent_Prev{shift}_Outcome_raw'
+                    if raw_col in row:
+                        use_col = f'Opponent_Prev{shift}_Outcome_skipNC' if skip_nc else raw_col
+                        val = row[use_col] if use_col in row and pd.notna(row[use_col]) else '--'
+                        opp_prev_outs.append(f"Prev {shift}: {val}")
+                st.write(" · ".join(opp_prev_outs) if opp_prev_outs else "N/A")
+
+                st.write("**Opponent Career Milestones:**")
+                opp_career_outs = []
+                for shift in [1,2,3]:
+                    col = f'Opponent_Career{shift}_Outcome_skipNC' if skip_nc else f'Opponent_Career{shift}_Outcome_raw'
+                    val = row[col] if col in row and pd.notna(row[col]) else '--'
+                    opp_career_outs.append(f"F{shift}: {val}")
+                st.write(" · ".join(opp_career_outs) if opp_career_outs else "N/A")
+
+                # Title flags
+                st.write("**Title History:**")
+                title_items = []
+                for shift, label in [(1,'Prev Fight'),(2,'Fight‑2'),(3,'Fight‑3')]:
+                    col_fighter = f'Prev{shift}_Title'
+                    col_opp = f'Opponent_Prev{shift}_Title'
+                    f_val = row[col_fighter] if col_fighter in row and pd.notna(row[col_fighter]) else '--'
+                    o_val = row[col_opp] if col_opp in row and pd.notna(row[col_opp]) else '--'
+                    title_items.append(f"{label}: Fighter={f_val}, Opp={o_val}")
+                st.write(" · ".join(title_items))
+
+                st.write("---")
+
             colA, colB = st.columns(2)
-            for col, row, label in [(colA, f1_row, f1_row['Fighter']), (colB, f2_row, f2_row['Fighter'])]:
-                with col:
-                    st.subheader(label)
-                    st.write(f"Age: {row['Age']}  | Height: {row['Height']} in | Reach: {row['Reach']} in")
-                    st.write(f"Stance: {row['Stance']} | Country: {row['Country']}")
-                    st.write(f"Fight #: {row['FightNumber']} | Opp Fight #: {row['Opponent_FightNumber']}")
-                    st.write(f"Career Win %: {row['CareerWinPct']:.1f}%")
-                    st.write(f"Odds: {row['FighterOddsBFO']} | Opp Odds: {row['OpponentOddsBFO']}")
-                    st.write("---")
-                    st.write("**Career Averages (before this fight):**")
-                    for col_name in ['CareerAvg_SS', 'CareerAvg_SSA', 'CareerAvg_KD', 'CareerAvg_TD', 'CareerAvg_Subs', 'CareerAvg_Ctrl']:
-                        if col_name in row:
-                            st.write(f"{col_name.replace('CareerAvg_','')}: {row[col_name]:.1f}")
-                    st.write("**Previous outcomes:**")
-                    st.write(f"Prev 1: {row[prev1_col]} | Prev 2: {row[prev2_col]} | Prev 3: {row[prev3_col]}")
-                    st.write(f"Career F1: {row[career1_col]} | F2: {row[career2_col]} | F3: {row[career3_col]}")
+            with colA:
+                show_fighter_stats(f1_row, f1_row['Fighter'])
+            with colB:
+                show_fighter_stats(f2_row, f2_row['Fighter'])
 else:
     st.write("No upcoming fights in the filtered data.")
 
