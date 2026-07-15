@@ -19,20 +19,16 @@ UPCOMING_FILE_ID  = "1mUyNR2WLHQjC8IuvG7RA6LoXPjJq3aZ1"      # upcoming_fights.c
 # ---------- Cached data loader ----------
 @st.cache_data
 def load_full_data():
-    # Download main CSV
     gdown.download(f"https://drive.google.com/uc?id={MAIN_FILE_ID}", "ufc_all_data.csv", quiet=True)
     df = pd.read_csv("ufc_all_data.csv", low_memory=False)
 
-    # Download & merge upcoming fights (if ID provided)
     if UPCOMING_FILE_ID.strip():
         gdown.download(f"https://drive.google.com/uc?id={UPCOMING_FILE_ID}", "upcoming.csv", quiet=True)
         if os.path.exists("upcoming.csv"):
             df_up = pd.read_csv("upcoming.csv")
-            # Ensure FightDate column exists (some older versions might not have it)
             if 'FightDate' not in df_up.columns:
                 df_up['FightDate'] = df_up['FightID'].str[:10]
 
-            # Order‑insensitive duplicate removal
             def canonical_fightid(fid):
                 if not isinstance(fid, str) or ' - ' not in fid:
                     return fid
@@ -50,26 +46,22 @@ def load_full_data():
             df_up = df_up[~df_up['FightID'].apply(canonical_fightid).isin(main_canonical)]
 
             if not df_up.empty:
-                # Align columns: fill missing with empty/0
                 for col in df.columns:
                     if col not in df_up.columns:
                         df_up[col] = '' if df[col].dtype == object else 0
                 df_up = df_up[df.columns]
                 df = pd.concat([df, df_up], ignore_index=True)
 
-    # ---------- Preprocessing (identical to Colab) ----------
+    # ---------- Preprocessing ----------
     df['FightDate'] = pd.to_datetime(df['FightID'].str[:10])
 
-    # Ensure odds columns exist
     for col in ['FighterOddsBFO', 'OpponentOddsBFO']:
         if col not in df.columns:
             df[col] = ''
 
-    # Ctrl column
     if 'Ctrl' in df.columns:
         df['Ctrl'] = pd.to_numeric(df['Ctrl'], errors='coerce').fillna(0)
 
-    # Aggregation columns
     agg_cols = ['KD','SS','SSA','TS','TSA','TD','TDA','Subs','Reversals',
                 'HSL','HSA','BSL','BSA','LSL','LSA','DSL','DSA','CSL','CSA','GSL','GSA']
     if 'Ctrl' in df.columns:
@@ -93,7 +85,7 @@ def load_full_data():
     fight_totals.sort_values(['Fighter','FightDate'], inplace=True)
     fight_totals['FightNumber'] = fight_totals.groupby('Fighter').cumcount() + 1
 
-    # Days since previous & avg 3‑fight gap
+    # DaysSincePrev, Avg3DaysGap
     fight_totals['DaysSincePrev'] = fight_totals.groupby('Fighter')['FightDate'].diff().dt.days
     def avg_last_3_gaps(group):
         diffs = group['DaysSincePrev']
@@ -102,13 +94,12 @@ def load_full_data():
         avg_last_3_gaps, include_groups=False
     ).reset_index(level=0, drop=True)
 
-    # Opponent's FightNumber & Hometown
+    # Opponent FightNumber & Hometown
     opp_info = fight_totals[['FightID','Fighter','FightNumber','HometownFighter']].rename(
         columns={'Fighter':'Opponent', 'FightNumber':'Opponent_FightNumber', 'HometownFighter':'Opponent_Hometown'}
     )
     fight_totals = fight_totals.merge(opp_info, on=['FightID','Opponent'], how='left')
 
-    # Parse odds
     def parse_american_odds(odds_val):
         if pd.isna(odds_val):
             return np.nan
@@ -148,7 +139,7 @@ def load_full_data():
     pairs['ReachDiff'] = pairs['Reach'] - pairs['Reach_opp']
     fight_totals = pairs.copy()
 
-    # Career pre‑fight averages
+    # Career pre‑fight averages (striking/grappling)
     career_stat_cols = ['SS','SSA','TS','TSA','TD','TDA','Subs','Reversals','KD','DSL']
     if 'Ctrl' in fight_totals.columns:
         career_stat_cols.append('Ctrl')
@@ -168,15 +159,22 @@ def load_full_data():
         (fight_totals['CareerAvg_SS'] / fight_totals['CareerAvg_SSA'].replace(0, np.nan)) * 100
     ).round(1)
 
+    # Career win % before this fight
+    fight_totals['cum_wins'] = fight_totals.groupby('Fighter')['Win?'].apply(
+        lambda x: (x == 'Yes').cumsum()
+    ).reset_index(level=0, drop=True)
+    fight_totals['prev_wins'] = fight_totals.groupby('Fighter')['cum_wins'].shift(1).fillna(0)
+    fight_totals['CareerWinPct'] = (fight_totals['prev_wins'] / fight_totals['prev_fights_count'].replace(0, np.nan)) * 100
+
     fight_totals = fight_totals.copy()
 
     # Previous fight stats (shifts)
     for shift in [1,2,3]:
-        for col in ['Win?','Method','Round','WC'] + agg_cols + ['AgeDiff','HeightDiff','ReachDiff']:
+        for col in ['Win?','Method','Round','WC','Title'] + agg_cols + ['AgeDiff','HeightDiff','ReachDiff']:
             fight_totals[f'Prev{shift}_{col}'] = fight_totals.groupby('Fighter')[col].shift(shift)
         fight_totals.rename(columns={f'Prev{shift}_Win?': f'Prev{shift}_Win'}, inplace=True)
 
-    # Outcome classification helpers
+    # Outcome classification helpers (same as before)
     def extract_round_from_method(method_str):
         if not isinstance(method_str, str): return None
         m = re.search(r'[Rr]ound\s*(\d)', method_str)
@@ -241,7 +239,7 @@ def load_full_data():
     skip_nc_dfs = fight_totals.groupby('Fighter').apply(get_skip_nc_outcomes).reset_index(level=1, drop=True)
     fight_totals = fight_totals.join(skip_nc_dfs)
 
-    # Career milestone outcomes
+    # Career milestone outcomes (fighter)
     def get_career_outcome(group, k, skip_nc=False):
         if skip_nc:
             non_nc_count = 0
@@ -277,12 +275,33 @@ def load_full_data():
     fight_totals = fight_totals.join(career_raw_df, on='Fighter')
     fight_totals = fight_totals.join(career_skip_df, on='Fighter')
 
-    # Opponent previous outcomes (raw)
+    # Opponent previous outcomes & titles (raw)
+    # We'll also build opponent career milestones later
     for shift in [1,2,3]:
         col = f'Prev{shift}_Outcome_raw'
+        title_col = f'Prev{shift}_Title'    # already exists from the shift loop
+        # Get opponent's previous outcome
         opp_df = fight_totals[['FightID','Fighter',col]].dropna(subset=[col])
         opp_df = opp_df.rename(columns={'Fighter':'Opponent', col:f'Opponent_Prev{shift}_Outcome_raw'})
         fight_totals = fight_totals.merge(opp_df, on=['FightID','Opponent'], how='left')
+        # Get opponent's previous title status
+        opp_title_df = fight_totals[['FightID','Fighter',title_col]].dropna(subset=[title_col])
+        opp_title_df = opp_title_df.rename(columns={'Fighter':'Opponent', title_col:f'Opponent_Prev{shift}_Title'})
+        fight_totals = fight_totals.merge(opp_title_df, on=['FightID','Opponent'], how='left')
+
+    # Opponent career milestones (raw)
+    # We need to compute career outcomes for each fighter, then merge on opponent
+    # Use the career_raw dict we already have for fighters
+    opp_career_raw = pd.DataFrame.from_dict({fighter: {'Opponent_Career1_Outcome_raw': career_raw[fighter]['Career1_Outcome_raw'],
+                                                       'Opponent_Career2_Outcome_raw': career_raw[fighter]['Career2_Outcome_raw'],
+                                                       'Opponent_Career3_Outcome_raw': career_raw[fighter]['Career3_Outcome_raw']}
+                                            for fighter in career_raw}, orient='index')
+    opp_career_skip = pd.DataFrame.from_dict({fighter: {'Opponent_Career1_Outcome_skipNC': career_skip[fighter]['Career1_Outcome_skipNC'],
+                                                        'Opponent_Career2_Outcome_skipNC': career_skip[fighter]['Career2_Outcome_skipNC'],
+                                                        'Opponent_Career3_Outcome_skipNC': career_skip[fighter]['Career3_Outcome_skipNC']}
+                                            for fighter in career_skip}, orient='index')
+    fight_totals = fight_totals.join(opp_career_raw, on='Opponent')
+    fight_totals = fight_totals.join(opp_career_skip, on='Opponent')
 
     if 'FighterOddsNum' in fight_totals.columns:
         fight_totals['PrevFighterOddsNum'] = fight_totals.groupby('Fighter')['FighterOddsNum'].shift(1)
@@ -302,12 +321,12 @@ def load_full_data():
 all_fights = load_full_data()
 all_fights_display = all_fights[all_fights['FightDate'] >= '2015-01-01'].copy()
 
-# ---------- Clean categorical columns (critical for sidebar filters) ----------
+# ---------- Clean categorical columns ----------
 for col in ['EventCountry', 'Country', 'Stance', 'WC', 'Title', 'ScheduledRounds']:
     if col in all_fights_display.columns:
         all_fights_display[col] = all_fights_display[col].fillna('').astype(str)
 
-# ---------- Sidebar filters ----------
+# ---------- Sidebar Filters ----------
 st.sidebar.title("Filters")
 
 with st.sidebar.expander("General", expanded=True):
@@ -325,6 +344,9 @@ with st.sidebar.expander("Fight Numbers", expanded=False):
     fn_max = st.number_input("Max Fight #", value=int(all_fights_display['FightNumber'].max()))
     ofn_min = st.number_input("Opp Min Fight #", value=1)
     ofn_max = st.number_input("Opp Max Fight #", value=int(all_fights_display['Opponent_FightNumber'].max()))
+
+with st.sidebar.expander("Career Win %", expanded=False):
+    career_win_pct = st.slider("Career Win %", 0, 100, (0, 100))
 
 with st.sidebar.expander("Physical Attributes", expanded=False):
     age = st.slider("Age", int(all_fights_display['Age'].min()), int(all_fights_display['Age'].max()), (int(all_fights_display['Age'].min()), int(all_fights_display['Age'].max())))
@@ -356,17 +378,23 @@ with st.sidebar.expander("Odds", expanded=False):
         st.write("No previous odds data")
         prev_odds = (0, 0)
 
-include_debuts = st.sidebar.checkbox("Include Debuts")
+# Checkboxes
 new_wc = st.sidebar.checkbox("New Weight Class")
 skip_nc = st.sidebar.checkbox("Skip NC outcomes")
+
+# Title fight in previous fight
+prev_title = st.sidebar.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"])
+opp_prev_title = st.sidebar.selectbox("Opp Prev Fight Was Title?", ["All", "Yes", "No"])
 
 # Previous outcome columns
 if skip_nc:
     prev1_col = 'Prev1_Outcome_skipNC'; prev2_col = 'Prev2_Outcome_skipNC'; prev3_col = 'Prev3_Outcome_skipNC'
     career1_col = 'Career1_Outcome_skipNC'; career2_col = 'Career2_Outcome_skipNC'; career3_col = 'Career3_Outcome_skipNC'
+    opp_career1_col = 'Opponent_Career1_Outcome_skipNC'; opp_career2_col = 'Opponent_Career2_Outcome_skipNC'; opp_career3_col = 'Opponent_Career3_Outcome_skipNC'
 else:
     prev1_col = 'Prev1_Outcome_raw'; prev2_col = 'Prev2_Outcome_raw'; prev3_col = 'Prev3_Outcome_raw'
     career1_col = 'Career1_Outcome_raw'; career2_col = 'Career2_Outcome_raw'; career3_col = 'Career3_Outcome_raw'
+    opp_career1_col = 'Opponent_Career1_Outcome_raw'; opp_career2_col = 'Opponent_Career2_Outcome_raw'; opp_career3_col = 'Opponent_Career3_Outcome_raw'
 
 all_outcomes_raw = sorted(all_fights[prev1_col].dropna().unique())
 all_outcomes_career = sorted(all_fights[career1_col].dropna().unique())
@@ -381,11 +409,13 @@ with st.sidebar.expander("Previous Outcomes", expanded=False):
     career1 = st.multiselect("Career F1", all_outcomes_career)
     career2 = st.multiselect("Career F2", all_outcomes_career)
     career3 = st.multiselect("Career F3", all_outcomes_career)
+    opp_career1 = st.multiselect("Opp Career F1", all_outcomes_career)
+    opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career)
+    opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career)
 
 # ---------- Apply filters ----------
 data = all_fights_display.copy()
-if not include_debuts:
-    data = data.dropna(subset=[prev1_col])
+# Debuts are now always included – no drop
 
 if wc: data = data[data['WC'].isin(wc)]
 if stance: data = data[data['Stance'].isin(stance)]
@@ -396,12 +426,19 @@ if hometown != "All": data = data[data['HometownFighter'] == hometown]
 if opp_hometown != "All": data = data[data['Opponent_Hometown'] == opp_hometown]
 if event_country: data = data[data['EventCountry'].isin(event_country)]
 if new_wc: data = data[data['IsNewWeightClass'] == True]
+if prev_title != "All":
+    data = data[data['Prev1_Title'] == prev_title]
+if opp_prev_title != "All":
+    data = data[data['Opponent_Prev1_Title'] == opp_prev_title]
 if prev1: data = data[data[prev1_col].isin(prev1)]
 if prev2: data = data[data[prev2_col].isin(prev2)]
 if prev3: data = data[data[prev3_col].isin(prev3)]
 if career1: data = data[data[career1_col].isin(career1)]
 if career2: data = data[data[career2_col].isin(career2)]
 if career3: data = data[data[career3_col].isin(career3)]
+if opp_career1: data = data[data[opp_career1_col].isin(opp_career1)]
+if opp_career2: data = data[data[opp_career2_col].isin(opp_career2)]
+if opp_career3: data = data[data[opp_career3_col].isin(opp_career3)]
 
 for opp_shift, opp_widget in [(1, opp_prev1), (2, opp_prev2), (3, opp_prev3)]:
     raw_col = f'Opponent_Prev{opp_shift}_Outcome_raw'
@@ -420,6 +457,7 @@ data = data[(data['HeightDiff'] >= height_diff[0]) & (data['HeightDiff'] <= heig
 data = data[(data['ReachDiff'] >= reach_diff[0]) & (data['ReachDiff'] <= reach_diff[1])]
 data = data[(data['DaysSincePrev'] >= days[0]) & (data['DaysSincePrev'] <= days[1])]
 data = data[(data['Avg3DaysGap'] >= avg3[0]) & (data['Avg3DaysGap'] <= avg3[1])]
+data = data[(data['CareerWinPct'] >= career_win_pct[0]) & (data['CareerWinPct'] <= career_win_pct[1])]
 
 if not all_fights_display['FighterOddsNum'].isna().all() and cur_odds != (0,0):
     data = data.dropna(subset=['FighterOddsNum'])
@@ -428,7 +466,7 @@ if not all_fights_display['PrevFighterOddsNum'].isna().all() and prev_odds != (0
     data = data.dropna(subset=['PrevFighterOddsNum'])
     data = data[(data['PrevFighterOddsNum'] >= prev_odds[0]) & (data['PrevFighterOddsNum'] <= prev_odds[1])]
 
-# ---------- Main dashboard ----------
+# ---------- Main Dashboard ----------
 st.title("UFC Pre‑Fight Performance Dashboard")
 
 if len(data) == 0:
@@ -445,7 +483,8 @@ col1.metric("Total Fights", total)
 col2.metric("Wins", wins)
 col3.metric("Win Rate", f"{win_rate:.1f}%")
 
-# Winner / Loser career averages
+# Winners vs Losers breakdown
+col1, col2 = st.columns(2)
 for result, col in zip(['Yes', 'No'], [col1, col2]):
     subset = data[data['Win?'] == result]
     if len(subset) == 0: continue
@@ -464,14 +503,55 @@ for result, col in zip(['Yes', 'No'], [col1, col2]):
         kdsl = (avg_kd / avg_dsl) if avg_dsl and avg_dsl > 0 else 0
         avg_ctrl = subset['CareerAvg_Ctrl'].mean() if 'CareerAvg_Ctrl' in subset else 0
         ctrtd = (avg_ctrl / avg_td) if avg_td and avg_td > 0 else 0
+        # Physical differences (current bout)
+        age_diff_mean = subset['AgeDiff'].mean()
+        height_diff_mean = subset['HeightDiff'].mean()
+        reach_diff_mean = subset['ReachDiff'].mean()
+        win_pct = subset['CareerWinPct'].mean()
+
+        st.write(f"**Career Win %:** {win_pct:.1f}%")
         st.write(f"**Career Avg SS:** {avg_ss:.1f} / {avg_ssa:.1f} (Acc: {avg_ss_acc:.1f}%)")
         st.write(f"**Career Avg TD:** {avg_td:.1f} / {avg_tda:.1f}")
         st.write(f"**Career Avg Subs:** {avg_subs:.1f} | Rev: {avg_rev:.1f}")
         st.write(f"**Career Avg KD:** {avg_kd:.1f} | K/DSL: {kdsl:.3f}")
         if 'CareerAvg_Ctrl' in subset.columns:
             st.write(f"**Career Avg Ctrl Time:** {avg_ctrl:.0f}s | CTR/TD: {ctrtd:.1f}s")
+        st.write(f"**Avg Age Diff:** {age_diff_mean:.1f} | **Avg Height Diff:** {height_diff_mean:.1f} in | **Avg Reach Diff:** {reach_diff_mean:.1f} in")
 
-# Last 20 Fights table
+# ---------- Matchup area (upcoming fights only) ----------
+st.header("Upcoming Fight Matchup")
+upcoming_data = data[data['Win?'].isna() | (data['Win?'] == '')]
+if not upcoming_data.empty:
+    # Get unique FightIDs for upcoming fights
+    upcoming_fight_ids = upcoming_data['FightID'].unique()
+    selected_fight = st.selectbox("Choose an upcoming fight", sorted(upcoming_fight_ids))
+    if selected_fight:
+        fight_rows = upcoming_data[upcoming_data['FightID'] == selected_fight]
+        if len(fight_rows) == 2:
+            f1_row = fight_rows.iloc[0]
+            f2_row = fight_rows.iloc[1]
+            st.write(f"### {f1_row['Fighter']} vs {f2_row['Fighter']}")
+            colA, colB = st.columns(2)
+            for col, row, label in [(colA, f1_row, f1_row['Fighter']), (colB, f2_row, f2_row['Fighter'])]:
+                with col:
+                    st.subheader(label)
+                    st.write(f"Age: {row['Age']}  | Height: {row['Height']} in | Reach: {row['Reach']} in")
+                    st.write(f"Stance: {row['Stance']} | Country: {row['Country']}")
+                    st.write(f"Fight #: {row['FightNumber']} | Opp Fight #: {row['Opponent_FightNumber']}")
+                    st.write(f"Career Win %: {row['CareerWinPct']:.1f}%")
+                    st.write(f"Odds: {row['FighterOddsBFO']} | Opp Odds: {row['OpponentOddsBFO']}")
+                    st.write("---")
+                    st.write("**Career Averages (before this fight):**")
+                    for col_name in ['CareerAvg_SS', 'CareerAvg_SSA', 'CareerAvg_KD', 'CareerAvg_TD', 'CareerAvg_Subs', 'CareerAvg_Ctrl']:
+                        if col_name in row:
+                            st.write(f"{col_name.replace('CareerAvg_','')}: {row[col_name]:.1f}")
+                    st.write("**Previous outcomes:**")
+                    st.write(f"Prev 1: {row[prev1_col]} | Prev 2: {row[prev2_col]} | Prev 3: {row[prev3_col]}")
+                    st.write(f"Career F1: {row[career1_col]} | F2: {row[career2_col]} | F3: {row[career3_col]}")
+else:
+    st.write("No upcoming fights in the filtered data.")
+
+# ---------- Last 20 Fights ----------
 st.header("Last 20 Fights")
 last20 = data.sort_values('FightDate', ascending=False).head(20)
 display_cols = ['FightDate','Fighter','Opponent','WC','Win?','Method','Age','Height','Reach',
@@ -481,11 +561,11 @@ if 'CareerAvg_Ctrl' in data.columns: display_cols.append('CareerAvg_Ctrl')
 display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
 
-# Scatter plot
+# ---------- Scatter Plot ----------
 st.header("Scatter Plot")
 career_stat_cols_plot = ['SS','SSA','TS','TSA','TD','TDA','Subs','Reversals','KD','DSL']
 if 'Ctrl' in data.columns: career_stat_cols_plot.append('Ctrl')
-career_avg_columns = [f'CareerAvg_{c}' for c in career_stat_cols_plot] + ['CareerAvg_SS_Acc']
+career_avg_columns = [f'CareerAvg_{c}' for c in career_stat_cols_plot] + ['CareerAvg_SS_Acc', 'CareerWinPct']
 numeric_cols = ['Age','Height','Reach','AgeDiff','HeightDiff','ReachDiff','DaysSincePrev','Avg3DaysGap',
                 'FightNumber','Opponent_FightNumber','FighterOddsNum','PrevFighterOddsNum'] + career_avg_columns
 numeric_cols = [c for c in numeric_cols if c in data.columns]
@@ -497,5 +577,4 @@ fig = px.scatter(
     hover_data=['Fighter', 'Opponent', 'WC'],
     title=f'{y_col} vs {x_col}'
 )
-st.plotly_chart(fig, use_container_width=True)
-
+st.plotly_chart(fig, use_container_width=True, key=f"scatter_{x_col}_{y_col}")
