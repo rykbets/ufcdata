@@ -642,21 +642,71 @@ if 'CareerAvg_Ctrl' in data.columns: display_cols.append('CareerAvg_Ctrl')
 display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
 
-# ---------- Scatter Plot (using the comprehensive feature list) ----------
-st.header("Scatter Plot")
-career_stat_cols_plot = ['SS','SSA','TS','TSA','TD','TDA','Subs','Reversals','KD','DSL']
-if 'Ctrl' in data.columns: career_stat_cols_plot.append('Ctrl')
-career_avg_columns = [f'CareerAvg_{c}' for c in career_stat_cols_plot] + ['CareerAvg_SS_Acc', 'CareerWinPct']
-numeric_cols = ['Age','Height','Reach','AgeDiff','HeightDiff','ReachDiff','DaysSincePrev','Avg3DaysGap',
-                'FightNumber','Opponent_FightNumber','FighterOddsNum','PrevFighterOddsNum'] + career_avg_columns
-# Add all the encoded categoricals and binary filters from the advanced analysis
-# (they are already in all_features – we reuse them here)
-extra_features = [f for f in all_features if f not in numeric_cols]
-numeric_cols = numeric_cols + extra_features
-numeric_cols = sorted([c for c in numeric_cols if c in data.columns])
+# ---------- Global Feature List (used by scatter + analysis) ----------
+# Build a complete feature set from the full display data (before any filter)
+global_features_data = all_fights_display.copy()
 
-x_col = st.selectbox("X axis", numeric_cols, key="scatter_x")
-y_col = st.selectbox("Y axis", numeric_cols, key="scatter_y")
+# Core numeric
+core = [
+    'Age', 'Height', 'Reach',
+    'Age_opp', 'Height_opp', 'Reach_opp',
+    'AgeDiff', 'HeightDiff', 'ReachDiff',
+    'DaysSincePrev', 'Avg3DaysGap',
+    'Opponent_DaysSincePrev', 'Opponent_Avg3DaysGap',
+    'FightNumber', 'Opponent_FightNumber',
+    'FighterOddsNum', 'PrevFighterOddsNum',
+    'CareerWinPct', 'Opponent_CareerWinPct'
+]
+career_avg = [col for col in global_features_data.columns if col.startswith('CareerAvg_')]
+global_features = [c for c in core + career_avg if c in global_features_data.columns and global_features_data[c].nunique(dropna=True) >= 2]
+
+# Previous outcome binary features
+outcome_cols = {
+    'Prev1': prev1_col, 'Prev2': prev2_col, 'Prev3': prev3_col,
+    'OppPrev1': 'Opponent_Prev1_Outcome_raw', 'OppPrev2': 'Opponent_Prev2_Outcome_raw', 'OppPrev3': 'Opponent_Prev3_Outcome_raw'
+}
+for prefix, col in outcome_cols.items():
+    if col not in global_features_data.columns: continue
+    global_features_data[f'{prefix}_is_Win']   = global_features_data[col].str.startswith('Win').astype(int)
+    global_features_data[f'{prefix}_is_Loss']  = global_features_data[col].str.startswith('Loss').astype(int)
+    global_features_data[f'{prefix}_is_Draw']  = global_features_data[col].str.contains('Draw', na=False).astype(int)
+    global_features_data[f'{prefix}_is_NC']    = global_features_data[col].str.contains('No Contest', na=False).astype(int)
+    global_features_data[f'{prefix}_method_KO']  = global_features_data[col].str.contains('KO', na=False).astype(int)
+    global_features_data[f'{prefix}_method_Sub'] = global_features_data[col].str.contains('Sub', na=False).astype(int)
+    global_features_data[f'{prefix}_method_Dec'] = global_features_data[col].str.contains('Decision', na=False).astype(int)
+    global_features_data[f'{prefix}_method_DQ']  = global_features_data[col].str.contains('DQ', na=False).astype(int)
+    for feat in [f'{prefix}_is_Win', f'{prefix}_is_Loss', f'{prefix}_is_Draw', f'{prefix}_is_NC',
+                 f'{prefix}_method_KO', f'{prefix}_method_Sub', f'{prefix}_method_Dec', f'{prefix}_method_DQ']:
+        if feat in global_features_data.columns and global_features_data[feat].nunique(dropna=True) >= 2:
+            global_features.append(feat)
+
+# Title/Hometown binary
+binary_cols = ['Prev1_Title','Prev2_Title','Prev3_Title','Opponent_Prev1_Title','Opponent_Prev2_Title',
+               'Opponent_Prev3_Title','HometownFighter','Opponent_Hometown']
+for col in binary_cols:
+    if col in global_features_data.columns:
+        clean_col = col + '_clean'
+        global_features_data[clean_col] = global_features_data[col].astype(str).str.strip().str.lower().map({'yes': 1}).fillna(0).astype(int)
+        global_features.append(clean_col)
+
+# Categorical encodings (ScheduledRounds, WC, EventCountry)
+for cat_col, enc_name in [('ScheduledRounds','SchedRounds_enc'), ('WC','WC_enc'), ('EventCountry','EventCountry_enc')]:
+    if cat_col in global_features_data.columns:
+        global_features_data[enc_name] = pd.factorize(global_features_data[cat_col].fillna(''))[0]
+        global_features.append(enc_name)
+
+global_features = sorted(list(set(global_features)))
+
+# Also add these encoded columns back to the main data if they don't exist yet
+for col in global_features_data.columns:
+    if col not in data.columns:
+        data[col] = global_features_data[col]
+
+# ---------- Scatter Plot (uses global_features) ----------
+st.header("Scatter Plot")
+available_scatter = [c for c in global_features if c in data.columns]
+x_col = st.selectbox("X axis", available_scatter, key="scatter_x")
+y_col = st.selectbox("Y axis", available_scatter, key="scatter_y")
 
 def result_category(row):
     if pd.isna(row['Win?']) or str(row['Win?']).strip() == '':
@@ -669,68 +719,39 @@ def result_category(row):
 data['Result'] = data.apply(result_category, axis=1)
 
 color_discrete_map = {
-    'Win': 'green',
-    'Loss': 'red',
-    'Draw': 'gray',
-    'No Contest': 'purple',
-    'Upcoming': 'blue'
+    'Win': 'green', 'Loss': 'red', 'Draw': 'gray', 'No Contest': 'purple', 'Upcoming': 'blue'
 }
 
-fig = px.scatter(
+fig_scatter = px.scatter(
     data, x=x_col, y=y_col, color='Result',
     color_discrete_map=color_discrete_map,
     hover_data=['Fighter', 'Opponent', 'WC'],
     title=f'{y_col} vs {x_col}'
 )
-st.plotly_chart(fig, use_container_width=True, key=f"scatter_{x_col}_{y_col}")
-# ---------- Advanced Analysis (shared feature list, independent of scatter) ----------
+st.plotly_chart(fig_scatter, use_container_width=True, key=f"scatter_{x_col}_{y_col}")
+
+# ---------- Advanced Analysis (cached, independent of scatter plot) ----------
 st.header("Advanced Analysis")
 st.markdown("These insights are based on the currently filtered data and will only change when you adjust the sidebar filters.")
 
 import hashlib, json
 
 def filter_hash():
-    filter_state = {
-        'wc': wc,
-        'stance': stance,
-        'country': country,
-        'sched_rounds': sched_rounds,
-        'title_fight': title_fight,
-        'hometown': hometown,
-        'opp_hometown': opp_hometown,
-        'event_country': event_country,
-        'new_wc': new_wc,
-        'prev_title': prev_title,
-        'opp_prev_title': opp_prev_title,
-        'prev1': prev1,
-        'prev2': prev2,
-        'prev3': prev3,
-        'opp_prev1': opp_prev1,
-        'opp_prev2': opp_prev2,
-        'opp_prev3': opp_prev3,
-        'career1': career1,
-        'career2': career2,
-        'career3': career3,
-        'opp_career1': opp_career1,
-        'opp_career2': opp_career2,
-        'opp_career3': opp_career3,
-        'fn_min': fn_min,
-        'fn_max': fn_max,
-        'ofn_min': ofn_min,
-        'ofn_max': ofn_max,
-        'age': age,
-        'height': height,
-        'reach': reach,
-        'age_diff': age_diff,
-        'height_diff': height_diff,
-        'reach_diff': reach_diff,
-        'days': days,
-        'avg3': avg3,
-        'career_win_pct': career_win_pct,
-        'cur_odds': cur_odds,
-        'prev_odds': prev_odds,
-    }
-    return hashlib.md5(json.dumps(filter_state, sort_keys=True, default=str).encode()).hexdigest()
+    return hashlib.md5(json.dumps({
+        'wc': wc, 'stance': stance, 'country': country, 'sched_rounds': sched_rounds,
+        'title_fight': title_fight, 'hometown': hometown, 'opp_hometown': opp_hometown,
+        'event_country': event_country, 'new_wc': new_wc,
+        'prev_title': prev_title, 'opp_prev_title': opp_prev_title,
+        'prev1': prev1, 'prev2': prev2, 'prev3': prev3,
+        'opp_prev1': opp_prev1, 'opp_prev2': opp_prev2, 'opp_prev3': opp_prev3,
+        'career1': career1, 'career2': career2, 'career3': career3,
+        'opp_career1': opp_career1, 'opp_career2': opp_career2, 'opp_career3': opp_career3,
+        'fn_min': fn_min, 'fn_max': fn_max, 'ofn_min': ofn_min, 'ofn_max': ofn_max,
+        'age': age, 'height': height, 'reach': reach,
+        'age_diff': age_diff, 'height_diff': height_diff, 'reach_diff': reach_diff,
+        'days': days, 'avg3': avg3, 'career_win_pct': career_win_pct,
+        'cur_odds': cur_odds, 'prev_odds': prev_odds
+    }, sort_keys=True, default=str).encode()).hexdigest()
 
 current_hash = filter_hash()
 
@@ -738,71 +759,23 @@ if 'analysis_results' not in st.session_state or st.session_state.get('analysis_
     analysis_data = data[data['Win?'].isin(['Yes','No'])].copy()
     analysis_data['Target'] = (analysis_data['Win?'] == 'Yes').astype(int)
 
-    core_features = [
-        'Age', 'Height', 'Reach',
-        'Age_opp', 'Height_opp', 'Reach_opp',
-        'AgeDiff', 'HeightDiff', 'ReachDiff',
-        'DaysSincePrev', 'Avg3DaysGap',
-        'Opponent_DaysSincePrev', 'Opponent_Avg3DaysGap',
-        'FightNumber', 'Opponent_FightNumber',
-        'FighterOddsNum', 'PrevFighterOddsNum',
-        'CareerWinPct', 'Opponent_CareerWinPct'
-    ]
-    career_avg_cols = [col for col in analysis_data.columns if col.startswith('CareerAvg_')]
-    all_features = [c for c in core_features + career_avg_cols 
-                    if c in analysis_data.columns and analysis_data[c].nunique(dropna=True) >= 2]
-
-    # Binary outcomes
-    outcome_cols = {
-        'Prev1': prev1_col, 'Prev2': prev2_col, 'Prev3': prev3_col,
-        'OppPrev1': 'Opponent_Prev1_Outcome_raw', 'OppPrev2': 'Opponent_Prev2_Outcome_raw', 'OppPrev3': 'Opponent_Prev3_Outcome_raw'
-    }
-    for prefix, col in outcome_cols.items():
-        if col not in analysis_data.columns: continue
-        analysis_data[f'{prefix}_is_Win']   = analysis_data[col].str.startswith('Win').astype(int)
-        analysis_data[f'{prefix}_is_Loss']  = analysis_data[col].str.startswith('Loss').astype(int)
-        analysis_data[f'{prefix}_is_Draw']  = analysis_data[col].str.contains('Draw', na=False).astype(int)
-        analysis_data[f'{prefix}_is_NC']    = analysis_data[col].str.contains('No Contest', na=False).astype(int)
-        analysis_data[f'{prefix}_method_KO']  = analysis_data[col].str.contains('KO', na=False).astype(int)
-        analysis_data[f'{prefix}_method_Sub'] = analysis_data[col].str.contains('Sub', na=False).astype(int)
-        analysis_data[f'{prefix}_method_Dec'] = analysis_data[col].str.contains('Decision', na=False).astype(int)
-        analysis_data[f'{prefix}_method_DQ']  = analysis_data[col].str.contains('DQ', na=False).astype(int)
-        for feat in [f'{prefix}_is_Win', f'{prefix}_is_Loss', f'{prefix}_is_Draw', f'{prefix}_is_NC',
-                     f'{prefix}_method_KO', f'{prefix}_method_Sub', f'{prefix}_method_Dec', f'{prefix}_method_DQ']:
-            if feat in analysis_data.columns and analysis_data[feat].nunique(dropna=True) >= 2:
-                all_features.append(feat)
-
-    # Title/Hometown binary
-    binary_cols = ['Prev1_Title','Prev2_Title','Prev3_Title','Opponent_Prev1_Title','Opponent_Prev2_Title',
-                   'Opponent_Prev3_Title','HometownFighter','Opponent_Hometown']
-    for col in binary_cols:
-        if col in analysis_data.columns:
-            clean_col = col + '_clean'
-            analysis_data[clean_col] = analysis_data[col].astype(str).str.strip().str.lower().map({'yes': 1}).fillna(0).astype(int)
-            all_features.append(clean_col)
-
-    # Label‑encode the main categorical filters (so they appear in scatter/regression)
-    for cat_col, enc_name in [('ScheduledRounds','SchedRounds_enc'), ('WC','WC_enc'), ('EventCountry','EventCountry_enc')]:
-        if cat_col in analysis_data.columns:
-            analysis_data[enc_name] = pd.factorize(analysis_data[cat_col].fillna(''))[0]
-            all_features.append(enc_name)
-
-    all_features = sorted(list(set(all_features)))
-    continuous_features = [f for f in all_features if not set(analysis_data[f].dropna().unique()).issubset({0, 1})]
+    # Use the same global_features, but filter to those present in this subset
+    features = [f for f in global_features if f in analysis_data.columns]
+    continuous = [f for f in features if not set(analysis_data[f].dropna().unique()).issubset({0, 1})]
 
     from sklearn.impute import SimpleImputer
-    X = analysis_data[all_features]
+    X = analysis_data[features]
     y = analysis_data['Target']
-    X_imputed = SimpleImputer(strategy='median').fit_transform(X)
-    mi_scores = mutual_info_classif(X_imputed, y, discrete_features=False)
-    mi_df = pd.DataFrame({'Feature': all_features, 'Mutual Information': mi_scores}).sort_values('Mutual Information', ascending=False)
+    X_imp = SimpleImputer(strategy='median').fit_transform(X)
+    mi_scores = mutual_info_classif(X_imp, y, discrete_features=False)
+    mi_df = pd.DataFrame({'Feature': features, 'Mutual Information': mi_scores}).sort_values('Mutual Information', ascending=False)
 
     winners = analysis_data[analysis_data['Win?'] == 'Yes']
     losers  = analysis_data[analysis_data['Win?'] == 'No']
-    win_means  = winners[all_features].mean()
-    loss_means = losers[all_features].mean()
+    win_means  = winners[features].mean()
+    loss_means = losers[features].mean()
     bubble_data = pd.DataFrame({
-        'Feature': all_features,
+        'Feature': features,
         'Avg Winners': win_means.values,
         'Avg Losers': loss_means.values,
         'Importance': mi_scores
@@ -811,9 +784,8 @@ if 'analysis_results' not in st.session_state or st.session_state.get('analysis_
     st.session_state.analysis_results = {
         'mi_df': mi_df,
         'bubble_data': bubble_data,
-        'continuous_features': continuous_features,
+        'continuous_features': continuous,
         'analysis_data': analysis_data,
-        'all_features': all_features,
         'max_val': max(bubble_data['Avg Winners'].max(), bubble_data['Avg Losers'].max()),
         'min_val': min(bubble_data['Avg Winners'].min(), bubble_data['Avg Losers'].min())
     }
@@ -824,17 +796,16 @@ mi_df = res['mi_df']
 bubble_data = res['bubble_data']
 continuous_features = res['continuous_features']
 analysis_data = res['analysis_data']
-all_features = res['all_features']
 max_val = res['max_val']
 min_val = res['min_val']
 
-# ---------- Feature Importance Ranking ----------
+# Feature Importance
 st.subheader("Feature Importance Ranking")
 fig_imp = px.bar(mi_df.head(20), x='Mutual Information', y='Feature', orientation='h',
                  title="Top 20 Features by Mutual Information with Win/Loss")
 st.plotly_chart(fig_imp, use_container_width=True)
 
-# ---------- Bubble Chart ----------
+# Bubble Chart
 st.subheader("Win vs Loss Metric Comparison")
 fig_bubble = px.scatter(bubble_data, x='Avg Winners', y='Avg Losers',
                         size='Importance', hover_name='Feature',
@@ -843,7 +814,7 @@ fig_bubble.add_shape(type='line', x0=min_val, y0=min_val, x1=max_val, y1=max_val
                      line=dict(dash='dash', color='gray'))
 st.plotly_chart(fig_bubble, use_container_width=True)
 
-# ---------- Regression Analysis ----------
+# Regression
 st.subheader("Regression Analysis")
 cont_options = [f for f in continuous_features if f in analysis_data.columns and analysis_data[f].nunique(dropna=True) >= 2]
 if len(cont_options) < 2:
