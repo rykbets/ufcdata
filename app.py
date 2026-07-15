@@ -642,19 +642,22 @@ if 'CareerAvg_Ctrl' in data.columns: display_cols.append('CareerAvg_Ctrl')
 display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
 
-# ---------- Scatter Plot ----------
+# ---------- Scatter Plot (using the comprehensive feature list) ----------
 st.header("Scatter Plot")
 career_stat_cols_plot = ['SS','SSA','TS','TSA','TD','TDA','Subs','Reversals','KD','DSL']
 if 'Ctrl' in data.columns: career_stat_cols_plot.append('Ctrl')
 career_avg_columns = [f'CareerAvg_{c}' for c in career_stat_cols_plot] + ['CareerAvg_SS_Acc', 'CareerWinPct']
 numeric_cols = ['Age','Height','Reach','AgeDiff','HeightDiff','ReachDiff','DaysSincePrev','Avg3DaysGap',
                 'FightNumber','Opponent_FightNumber','FighterOddsNum','PrevFighterOddsNum'] + career_avg_columns
-numeric_cols = [c for c in numeric_cols if c in data.columns]
+# Add all the encoded categoricals and binary filters from the advanced analysis
+# (they are already in all_features – we reuse them here)
+extra_features = [f for f in all_features if f not in numeric_cols]
+numeric_cols = numeric_cols + extra_features
+numeric_cols = sorted([c for c in numeric_cols if c in data.columns])
 
-x_col = st.selectbox("X axis", sorted(numeric_cols), index=sorted(numeric_cols).index('CareerAvg_SS') if 'CareerAvg_SS' in numeric_cols else 0)
-y_col = st.selectbox("Y axis", sorted(numeric_cols), index=sorted(numeric_cols).index('CareerAvg_KD') if 'CareerAvg_KD' in numeric_cols else 0)
+x_col = st.selectbox("X axis", numeric_cols, key="scatter_x")
+y_col = st.selectbox("Y axis", numeric_cols, key="scatter_y")
 
-# --- Add a result category column to color upcoming fights differently ---
 def result_category(row):
     if pd.isna(row['Win?']) or str(row['Win?']).strip() == '':
         return 'Upcoming'
@@ -680,12 +683,10 @@ fig = px.scatter(
     title=f'{y_col} vs {x_col}'
 )
 st.plotly_chart(fig, use_container_width=True, key=f"scatter_{x_col}_{y_col}")
-
-# ---------- Advanced Analysis (cached, independent of scatter plot) ----------
+# ---------- Advanced Analysis (shared feature list, independent of scatter) ----------
 st.header("Advanced Analysis")
 st.markdown("These insights are based on the currently filtered data and will only change when you adjust the sidebar filters.")
 
-# Compute a hash of all sidebar filter values that affect the data
 import hashlib, json
 
 def filter_hash():
@@ -733,9 +734,7 @@ def filter_hash():
 
 current_hash = filter_hash()
 
-# Initialize analysis results in session state if not present or hash changed
 if 'analysis_results' not in st.session_state or st.session_state.get('analysis_hash') != current_hash:
-    # ---------- Build feature matrix ----------
     analysis_data = data[data['Win?'].isin(['Yes','No'])].copy()
     analysis_data['Target'] = (analysis_data['Win?'] == 'Yes').astype(int)
 
@@ -773,6 +772,7 @@ if 'analysis_results' not in st.session_state or st.session_state.get('analysis_
             if feat in analysis_data.columns and analysis_data[feat].nunique(dropna=True) >= 2:
                 all_features.append(feat)
 
+    # Title/Hometown binary
     binary_cols = ['Prev1_Title','Prev2_Title','Prev3_Title','Opponent_Prev1_Title','Opponent_Prev2_Title',
                    'Opponent_Prev3_Title','HometownFighter','Opponent_Hometown']
     for col in binary_cols:
@@ -781,10 +781,15 @@ if 'analysis_results' not in st.session_state or st.session_state.get('analysis_
             analysis_data[clean_col] = analysis_data[col].astype(str).str.strip().str.lower().map({'yes': 1}).fillna(0).astype(int)
             all_features.append(clean_col)
 
+    # Label‑encode the main categorical filters (so they appear in scatter/regression)
+    for cat_col, enc_name in [('ScheduledRounds','SchedRounds_enc'), ('WC','WC_enc'), ('EventCountry','EventCountry_enc')]:
+        if cat_col in analysis_data.columns:
+            analysis_data[enc_name] = pd.factorize(analysis_data[cat_col].fillna(''))[0]
+            all_features.append(enc_name)
+
     all_features = sorted(list(set(all_features)))
     continuous_features = [f for f in all_features if not set(analysis_data[f].dropna().unique()).issubset({0, 1})]
 
-    # Mutual information
     from sklearn.impute import SimpleImputer
     X = analysis_data[all_features]
     y = analysis_data['Target']
@@ -792,7 +797,6 @@ if 'analysis_results' not in st.session_state or st.session_state.get('analysis_
     mi_scores = mutual_info_classif(X_imputed, y, discrete_features=False)
     mi_df = pd.DataFrame({'Feature': all_features, 'Mutual Information': mi_scores}).sort_values('Mutual Information', ascending=False)
 
-    # Bubble data
     winners = analysis_data[analysis_data['Win?'] == 'Yes']
     losers  = analysis_data[analysis_data['Win?'] == 'No']
     win_means  = winners[all_features].mean()
@@ -804,7 +808,6 @@ if 'analysis_results' not in st.session_state or st.session_state.get('analysis_
         'Importance': mi_scores
     }).dropna()
 
-    # Store in session state
     st.session_state.analysis_results = {
         'mi_df': mi_df,
         'bubble_data': bubble_data,
@@ -816,12 +819,12 @@ if 'analysis_results' not in st.session_state or st.session_state.get('analysis_
     }
     st.session_state.analysis_hash = current_hash
 
-# Retrieve cached results
 res = st.session_state.analysis_results
 mi_df = res['mi_df']
 bubble_data = res['bubble_data']
 continuous_features = res['continuous_features']
 analysis_data = res['analysis_data']
+all_features = res['all_features']
 max_val = res['max_val']
 min_val = res['min_val']
 
