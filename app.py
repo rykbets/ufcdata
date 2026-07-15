@@ -681,20 +681,15 @@ fig = px.scatter(
 )
 st.plotly_chart(fig, use_container_width=True, key=f"scatter_{x_col}_{y_col}")
 
-# ---------- Decision Tree (max depth 5) ----------
-st.header("Customizable Decision Tree")
-st.markdown("Use the filtered data (excluding upcoming fights) to find the most informative splits.")
+# ---------- Advanced Analysis (Feature Importance, Bubble, Regression) ----------
+st.header("Advanced Analysis")
+st.markdown("Analyze the filtered data to find which metrics best separate wins and losses, and explore relationships between variables.")
 
-# ---------- Build opponent‑side statistics on the full display set ----------
-encoded_data = all_fights_display.copy()
-
-opp_career = encoded_data[['FightID','Fighter','CareerWinPct']].rename(
-    columns={'Fighter':'Opponent', 'CareerWinPct':'Opponent_CareerWinPct'})
-encoded_data = encoded_data.merge(opp_career, on=['FightID','Opponent'], how='left')
-
-opp_days = encoded_data[['FightID','Fighter','DaysSincePrev','Avg3DaysGap']].rename(
-    columns={'Fighter':'Opponent', 'DaysSincePrev':'Opponent_DaysSincePrev', 'Avg3DaysGap':'Opponent_Avg3DaysGap'})
-encoded_data = encoded_data.merge(opp_days, on=['FightID','Opponent'], how='left')
+# ---------- Build feature matrix on the current filtered data ----------
+analysis_data = data.copy()
+# Keep only Win/Loss fights
+analysis_data = analysis_data[analysis_data['Win?'].isin(['Yes','No'])].copy()
+analysis_data['Target'] = (analysis_data['Win?'] == 'Yes').astype(int)
 
 # ---------- Core numeric features ----------
 core_features = [
@@ -708,10 +703,10 @@ core_features = [
     'CareerWinPct', 'Opponent_CareerWinPct'
 ]
 
-career_avg_cols = [col for col in encoded_data.columns if col.startswith('CareerAvg_')]
+career_avg_cols = [col for col in analysis_data.columns if col.startswith('CareerAvg_')]
 
 feature_cols = [c for c in core_features + career_avg_cols 
-                if c in encoded_data.columns and encoded_data[c].nunique(dropna=True) >= 2]
+                if c in analysis_data.columns and analysis_data[c].nunique(dropna=True) >= 2]
 
 # ---------- Binary outcome features (fighter + opponent, 3 shifts) ----------
 outcome_cols = {
@@ -724,258 +719,111 @@ outcome_cols = {
 }
 
 for prefix, col in outcome_cols.items():
-    if col not in encoded_data.columns:
+    if col not in analysis_data.columns:
         continue
-    encoded_data[f'{prefix}_is_Win']   = encoded_data[col].str.startswith('Win').astype(int)
-    encoded_data[f'{prefix}_is_Loss']  = encoded_data[col].str.startswith('Loss').astype(int)
-    encoded_data[f'{prefix}_is_Draw']  = encoded_data[col].str.contains('Draw', na=False).astype(int)
-    encoded_data[f'{prefix}_is_NC']    = encoded_data[col].str.contains('No Contest', na=False).astype(int)
-    encoded_data[f'{prefix}_method_KO']  = encoded_data[col].str.contains('KO', na=False).astype(int)
-    encoded_data[f'{prefix}_method_Sub'] = encoded_data[col].str.contains('Sub', na=False).astype(int)
-    encoded_data[f'{prefix}_method_Dec'] = encoded_data[col].str.contains('Decision', na=False).astype(int)
-    encoded_data[f'{prefix}_method_DQ']  = encoded_data[col].str.contains('DQ', na=False).astype(int)
+    analysis_data[f'{prefix}_is_Win']   = analysis_data[col].str.startswith('Win').astype(int)
+    analysis_data[f'{prefix}_is_Loss']  = analysis_data[col].str.startswith('Loss').astype(int)
+    analysis_data[f'{prefix}_is_Draw']  = analysis_data[col].str.contains('Draw', na=False).astype(int)
+    analysis_data[f'{prefix}_is_NC']    = analysis_data[col].str.contains('No Contest', na=False).astype(int)
+    analysis_data[f'{prefix}_method_KO']  = analysis_data[col].str.contains('KO', na=False).astype(int)
+    analysis_data[f'{prefix}_method_Sub'] = analysis_data[col].str.contains('Sub', na=False).astype(int)
+    analysis_data[f'{prefix}_method_Dec'] = analysis_data[col].str.contains('Decision', na=False).astype(int)
+    analysis_data[f'{prefix}_method_DQ']  = analysis_data[col].str.contains('DQ', na=False).astype(int)
 
     for feat in [f'{prefix}_is_Win', f'{prefix}_is_Loss', f'{prefix}_is_Draw', f'{prefix}_is_NC',
                  f'{prefix}_method_KO', f'{prefix}_method_Sub', f'{prefix}_method_Dec', f'{prefix}_method_DQ']:
-        if feat in encoded_data.columns and encoded_data[feat].nunique(dropna=True) >= 2:
+        if feat in analysis_data.columns and analysis_data[feat].nunique(dropna=True) >= 2:
             feature_cols.append(feat)
 
-# ---------- ALL Title/Hometown binary filters ----------
+# ---------- Title/Hometown binary filters ----------
 binary_cols = [
     'Prev1_Title', 'Prev2_Title', 'Prev3_Title',
     'Opponent_Prev1_Title', 'Opponent_Prev2_Title', 'Opponent_Prev3_Title',
     'HometownFighter', 'Opponent_Hometown'
 ]
 for col in binary_cols:
-    if col in encoded_data.columns:
+    if col in analysis_data.columns:
         clean_col = col + '_clean'
-        encoded_data[clean_col] = encoded_data[col].astype(str).str.strip().str.lower().map({'yes': 1}).fillna(0).astype(int)
+        analysis_data[clean_col] = analysis_data[col].astype(str).str.strip().str.lower().map({'yes': 1}).fillna(0).astype(int)
         feature_cols.append(clean_col)
 
 feature_cols = sorted(list(set(feature_cols)))
 
-# ---------- Tree data (Win/Loss only) ----------
-tree_data = encoded_data[encoded_data['Win?'].isin(['Yes','No'])].copy()
-tree_data['Target'] = (tree_data['Win?'] == 'Yes').astype(int)
+# ---------- Prepare feature matrix and target ----------
+X = analysis_data[feature_cols].copy()
+y = analysis_data['Target']
 
-# ---------- Helper functions ----------
-def find_best_split(subset, feature_pool):
-    best_feat, best_thresh, best_gain = None, None, -1
-    y = subset['Target'].values
-    parent_entropy = -(y.mean() * np.log2(y.mean() + 1e-10) + (1 - y.mean()) * np.log2(1 - y.mean() + 1e-10))
-    n = len(y)
-    for feat in feature_pool:
-        X = subset[feat].values
-        if np.isnan(X).all():
-            continue
-        sorted_idx = np.argsort(X)
-        X_sorted = X[sorted_idx]
-        y_sorted = y[sorted_idx]
-        for i in range(1, n - 1):
-            if X_sorted[i] == X_sorted[i - 1]:
-                continue
-            left_weight = i / n
-            right_weight = 1 - left_weight
-            left_entropy = -(y_sorted[:i].mean() * np.log2(y_sorted[:i].mean() + 1e-10) +
-                             (1 - y_sorted[:i].mean()) * np.log2(1 - y_sorted[:i].mean() + 1e-10))
-            right_entropy = -(y_sorted[i:].mean() * np.log2(y_sorted[i:].mean() + 1e-10) +
-                              (1 - y_sorted[i:].mean()) * np.log2(1 - y_sorted[i:].mean() + 1e-10))
-            gain = parent_entropy - (left_weight * left_entropy + right_weight * right_entropy)
-            if gain > best_gain:
-                best_gain = gain
-                best_feat = feat
-                best_thresh = (X_sorted[i - 1] + X_sorted[i]) / 2
-    if best_feat and set(subset[best_feat].dropna().unique()).issubset({0, 1}):
-        best_thresh = 0.5
-    return best_feat, best_thresh, best_gain
+# Drop features that are all NaN in the current subset
+X = X.dropna(axis=1, how='all')
+feature_cols = list(X.columns)
 
-def suggest_features(subset, feature_pool, top_k=3):
-    pool = [f for f in feature_pool if f in subset.columns]
-    if not pool:
-        return []
-    X_sub = subset[pool].dropna()
-    y_sub = subset.loc[X_sub.index, 'Target'].values
-    if len(X_sub) == 0:
-        return []
-    mi_scores = mutual_info_classif(X_sub, y_sub, discrete_features=False)
-    sorted_idx = np.argsort(mi_scores)[::-1]
-    suggested = []
-    for idx in sorted_idx:
-        if mi_scores[idx] > 0:
-            suggested.append(pool[idx])
-            if len(suggested) >= top_k:
-                break
-    return suggested
+if len(feature_cols) == 0:
+    st.warning("No suitable features available in the filtered data.")
+else:
+    # ---------- Mutual Information Importance ----------
+    from sklearn.impute import SimpleImputer
+    imputer = SimpleImputer(strategy='median')
+    X_imputed = imputer.fit_transform(X)
+    mi_scores = mutual_info_classif(X_imputed, y, discrete_features=False)
+    mi_df = pd.DataFrame({
+        'Feature': feature_cols,
+        'Mutual Information': mi_scores
+    }).sort_values('Mutual Information', ascending=False)
 
-# ---------- Initialize session state ----------
-if 'tree_nodes' not in st.session_state:
-    st.session_state.tree_nodes = {}
-    st.session_state.next_node_id = 1
-    st.session_state.root_built = False
+    st.subheader("Feature Importance Ranking")
+    fig_imp = px.bar(mi_df.head(20), x='Mutual Information', y='Feature', orientation='h',
+                     title="Top 20 Features by Mutual Information with Win/Loss")
+    st.plotly_chart(fig_imp, use_container_width=True)
 
-with st.form(key="tree_form"):
-    leaf_size = st.number_input("Minimum samples per leaf", min_value=1, value=20)
-    build_clicked = st.form_submit_button("Build Tree")
+    # ---------- Bubble Chart: Win vs Loss Averages ----------
+    winners = analysis_data[analysis_data['Win?'] == 'Yes']
+    losers = analysis_data[analysis_data['Win?'] == 'No']
 
-if build_clicked:
-    st.session_state.tree_nodes = {}
-    st.session_state.next_node_id = 1
-    st.session_state.root_built = True
-    st.session_state.tree_nodes[0] = {
-        'data': tree_data.copy(),
-        'feature': None,
-        'threshold': None,
-        'children': [],
-        'depth': 0
-    }
+    win_means = winners[feature_cols].mean()
+    loss_means = losers[feature_cols].mean()
+    bubble_data = pd.DataFrame({
+        'Feature': feature_cols,
+        'Avg Winners': win_means.values,
+        'Avg Losers': loss_means.values,
+        'Importance': mi_scores
+    }).dropna()
 
-# ---------- Feature list expander ----------
-with st.expander("🔍 Feature list (click to see all)"):
-    binary_clean = [f for f in feature_cols if f.endswith('_clean')]
-    other = [f for f in feature_cols if not f.endswith('_clean')]
-    st.markdown("**Binary yes/no filters:** " + ", ".join(f"`{f}`" for f in binary_clean) if binary_clean else "None")
-    st.markdown("**Other features:** " + ", ".join(other))
+    st.subheader("Win vs Loss Metric Comparison")
+    fig_bubble = px.scatter(bubble_data, x='Avg Winners', y='Avg Losers',
+                            size='Importance', hover_name='Feature',
+                            title="Bubble Chart: Avg Winners vs Avg Losers (bubble size = importance)")
+    # Add diagonal reference line
+    max_val = max(bubble_data['Avg Winners'].max(), bubble_data['Avg Losers'].max())
+    min_val = min(bubble_data['Avg Winners'].min(), bubble_data['Avg Losers'].min())
+    fig_bubble.add_shape(type='line', x0=min_val, y0=min_val, x1=max_val, y1=max_val,
+                         line=dict(dash='dash', color='gray'))
+    st.plotly_chart(fig_bubble, use_container_width=True)
 
-# ---------- Simple Black‑&‑White Tree Diagram ----------
-def draw_tree():
-    if not st.session_state.tree_nodes:
-        return
+    # ---------- Interactive Regression Plot ----------
+    st.subheader("Regression Analysis")
+    numeric_options = [f for f in feature_cols if analysis_data[f].nunique(dropna=True) >= 2]
+    col1, col2 = st.columns(2)
+    with col1:
+        reg_x = st.selectbox("X variable", numeric_options, key="reg_x")
+    with col2:
+        reg_y = st.selectbox("Y variable", numeric_options, key="reg_y")
 
-    def count_leaves(node_id):
-        node = st.session_state.tree_nodes.get(node_id)
-        if not node or not node['children']:
-            return 1
-        return sum(count_leaves(child) for child in node['children'])
+    if reg_x and reg_y:
+        from sklearn.linear_model import LinearRegression
+        reg_data = analysis_data[[reg_x, reg_y, 'Win?']].dropna()
+        if len(reg_data) < 10:
+            st.warning("Not enough data for regression (need at least 10 points).")
+        else:
+            X_reg = reg_data[[reg_x]].values
+            y_reg = reg_data[reg_y].values
+            lr = LinearRegression().fit(X_reg, y_reg)
+            reg_line_x = np.linspace(X_reg.min(), X_reg.max(), 100).reshape(-1, 1)
+            reg_line_y = lr.predict(reg_line_x)
 
-    def layout_tree(node_id, x, y, dx):
-        node = st.session_state.tree_nodes.get(node_id)
-        if not node:
-            return
-        win_rate = node['data']['Target'].mean() * 100
-        n = len(node['data'])
-        text = f"Node {node_id} (n={n}, win={win_rate:.1f}%)"
-        if node['feature'] is not None:
-            feat = node['feature']
-            thresh = node['threshold']
-            if set(node['data'][feat].dropna().unique()).issubset({0, 1}):
-                text += f"<br>   {feat} ≤ 0.5 → No<br>   {feat} > 0.5 → Yes"
-            else:
-                text += f"<br>   {feat} ≤ {thresh:.2f}"
-        annotations.append(go.layout.Annotation(
-            x=x, y=y, text=text, showarrow=False,
-            font=dict(color="white", size=11), bgcolor="rgba(0,0,0,0)",
-            align="center"
-        ))
-
-        if not node['children'] or len(node['children']) < 2:
-            return
-
-        left_width = count_leaves(node['children'][0])
-        right_width = count_leaves(node['children'][1])
-        total_width = left_width + right_width
-        if total_width == 0:
-            return
-        left_dx = dx * (left_width / total_width)
-        right_dx = dx * (right_width / total_width)
-
-        left_x = x - (dx / 2) + (left_dx / 2)
-        right_x = x + (dx / 2) - (right_dx / 2)
-        child_y = y - 1.2
-
-        shapes.append(go.layout.Shape(
-            type="line", x0=x, y0=y - 0.3, x1=left_x, y1=child_y + 0.3,
-            line=dict(color="gray", width=1)
-        ))
-        shapes.append(go.layout.Shape(
-            type="line", x0=x, y0=y - 0.3, x1=right_x, y1=child_y + 0.3,
-            line=dict(color="gray", width=1)
-        ))
-
-        layout_tree(node['children'][0], left_x, child_y, left_dx)
-        layout_tree(node['children'][1], right_x, child_y, right_dx)
-
-    shapes = []
-    annotations = []
-    root = st.session_state.tree_nodes.get(0)
-    if root:
-        total_leaves = count_leaves(0) or 1
-        layout_tree(0, 0, 0, total_leaves * 2.5)
-
-    if annotations:
-        fig = go.Figure()
-        fig.update_layout(
-            shapes=shapes,
-            annotations=annotations,
-            xaxis=dict(visible=False, range=[-total_leaves*2, total_leaves*2]),
-            yaxis=dict(visible=False, range=[-10, 2]),
-            plot_bgcolor='black',
-            paper_bgcolor='black',
-            height=600,
-            margin=dict(l=0, r=0, t=0, b=0)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-# ---------- Main display (depth increased to 5) ----------
-if st.session_state.root_built:
-    st.subheader("Tree Diagram")
-    draw_tree()
-
-    node_ids = sorted(st.session_state.tree_nodes.keys())
-    selected_node = st.selectbox("Select node to view / split", node_ids, format_func=lambda id: f"Node {id}")
-    if selected_node is not None:
-        node = st.session_state.tree_nodes[selected_node]
-        data = node['data']
-        depth = node['depth']
-        win_rate = data['Target'].mean() * 100
-        n = len(data)
-        st.write(f"**Node {selected_node}** (depth {depth}, n={n}, win={win_rate:.1f}%)")
-
-        available_features = [f for f in feature_cols if f in data.columns]
-        suggestions = suggest_features(data, available_features, top_k=3)
-        st.write("**Suggested features:**", ", ".join(suggestions) if suggestions else "None")
-
-        if node['feature'] is None and depth < 5:          # ⬅ increased to 5
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                selected_feature = st.selectbox("Select feature to split", available_features, key=f"feat_{selected_node}")
-            with col2:
-                split_clicked = st.button("Split", key=f"split_{selected_node}")
-
-            if split_clicked:
-                unique_vals = data[selected_feature].dropna().unique()
-                if len(unique_vals) < 2:
-                    st.warning(f"**{selected_feature}** is constant in this node.")
-                    st.write("Distribution:", data[selected_feature].value_counts(dropna=False).to_dict())
-                else:
-                    best_feat, best_thresh, gain = find_best_split(data, [selected_feature])
-                    if best_feat is None or gain <= 0:
-                        st.warning(f"No significant split found for '{selected_feature}'. Try another feature.")
-                    else:
-                        node['feature'] = best_feat
-                        node['threshold'] = best_thresh
-                        left_mask = data[best_feat] <= best_thresh
-                        right_mask = data[best_feat] > best_thresh
-                        left_data = data[left_mask].copy()
-                        right_data = data[right_mask].copy()
-                        left_id = st.session_state.next_node_id
-                        right_id = st.session_state.next_node_id + 1
-                        st.session_state.next_node_id += 2
-                        st.session_state.tree_nodes[left_id] = {
-                            'data': left_data, 'feature': None, 'threshold': None, 'children': [], 'depth': depth + 1
-                        }
-                        st.session_state.tree_nodes[right_id] = {
-                            'data': right_data, 'feature': None, 'threshold': None, 'children': [], 'depth': depth + 1
-                        }
-                        node['children'] = [left_id, right_id]
-                        st.rerun()
-
-        elif node['feature'] is not None:
-            st.write(f"Currently split on **{node['feature']}**")
-            if st.button("Resplit", key=f"resplit_{selected_node}"):
-                for child_id in node['children']:
-                    if child_id in st.session_state.tree_nodes:
-                        del st.session_state.tree_nodes[child_id]
-                node['feature'] = None
-                node['threshold'] = None
-                node['children'] = []
-                st.rerun()
+            fig_reg = px.scatter(reg_data, x=reg_x, y=reg_y, color='Win?',
+                                 color_discrete_map={'Yes': 'green', 'No': 'red'},
+                                 hover_data=['Fighter', 'Opponent'] if 'Fighter' in reg_data.columns else None,
+                                 title=f"Regression: {reg_y} vs {reg_x}")
+            fig_reg.add_trace(go.Scatter(x=reg_line_x.flatten(), y=reg_line_y, mode='lines',
+                                         name='Regression', line=dict(color='white')))
+            st.plotly_chart(fig_reg, use_container_width=True)
