@@ -687,33 +687,79 @@ st.markdown("Use the filtered data (excluding upcoming fights) to find the most 
 tree_data = data[data['Win?'].isin(['Yes','No'])].copy()
 tree_data['Target'] = (tree_data['Win?'] == 'Yes').astype(int)
 
-# ---------- Build a clean feature list ----------
-# Core numeric bout features (no shifted duplicates)
+# ---------- Build opponent‑side statistics (if missing) ----------
+# Many of these already exist; for those that don't, we derive them from the fighter's data by swapping fighter/opponent
+# We'll compute opponent versions by merging the same DataFrame on (FightID, Opponent) with (FightID, Fighter)
+if 'Age_opp' not in tree_data.columns:
+    # Should already exist, but just in case
+    pass
+
+# Opponent career win %: we need to compute it similarly to fighter CareerWinPct but for the opponent at the time of the fight.
+# We can do a quick merge: opponent's CareerWinPct at the time of that fight.
+# We have CareerWinPct for each fighter; we just need to map it to the opponent.
+opp_career = tree_data[['FightID','Fighter','CareerWinPct']].rename(
+    columns={'Fighter':'Opponent', 'CareerWinPct':'Opponent_CareerWinPct'})
+tree_data = tree_data.merge(opp_career, on=['FightID','Opponent'], how='left')
+
+# Opponent DaysSincePrev and Avg3DaysGap: similar merge
+opp_days = tree_data[['FightID','Fighter','DaysSincePrev','Avg3DaysGap']].rename(
+    columns={'Fighter':'Opponent', 'DaysSincePrev':'Opponent_DaysSincePrev', 'Avg3DaysGap':'Opponent_Avg3DaysGap'})
+tree_data = tree_data.merge(opp_days, on=['FightID','Opponent'], how='left')
+
+# Opponent physical traits already exist as Age_opp, Height_opp, Reach_opp
+
+# ---------- Build clean feature list ----------
+# Core numeric bout features
 core_features = [
     'Age', 'Height', 'Reach',
+    'Age_opp', 'Height_opp', 'Reach_opp',
     'AgeDiff', 'HeightDiff', 'ReachDiff',
     'DaysSincePrev', 'Avg3DaysGap',
+    'Opponent_DaysSincePrev', 'Opponent_Avg3DaysGap',
     'FightNumber', 'Opponent_FightNumber',
     'FighterOddsNum', 'PrevFighterOddsNum',
-    'CareerWinPct'
+    'CareerWinPct', 'Opponent_CareerWinPct'
 ]
 
-# Add all CareerAvg_ columns (they summarize past performance)
+# Career averages (only CareerAvg_* columns, no shifted duplicates)
 career_avg_cols = [col for col in tree_data.columns if col.startswith('CareerAvg_')]
 
-# Combine and keep only columns that exist and have at least 2 unique values
+# Combine base features and career averages, keeping only columns that exist
 feature_cols = [c for c in core_features + career_avg_cols 
                 if c in tree_data.columns and tree_data[c].nunique(dropna=True) >= 2]
 
-# Add binary encodings for important categorical filters
+# ---------- Add label‑encoded categorical variables ----------
+# We'll create numeric versions of these categorical filters.
+categorical_mappings = {
+    'ScheduledRounds': 'SchedRounds_enc',
+    'WC': 'WC_enc',
+    'EventCountry': 'EventCountry_enc',
+    # Fighter's previous outcomes
+    prev1_col: 'Prev1_enc',
+    prev2_col: 'Prev2_enc',
+    prev3_col: 'Prev3_enc',
+    # Opponent's previous outcomes
+    'Opponent_Prev1_Outcome_raw': 'OppPrev1_enc',
+    'Opponent_Prev2_Outcome_raw': 'OppPrev2_enc',
+    'Opponent_Prev3_Outcome_raw': 'OppPrev3_enc',
+    # Career milestones could also be added if needed, but they are highly granular; skip for now to keep it manageable.
+}
+
+for col, enc_name in categorical_mappings.items():
+    if col in tree_data.columns:
+        # Factorize (label encode) – gives 0,1,2... for each category
+        tree_data[enc_name] = pd.factorize(tree_data[col].fillna(''))[0]
+        # Only include if there's at least 2 distinct encoded values
+        if tree_data[enc_name].nunique(dropna=True) >= 2:
+            feature_cols.append(enc_name)
+
+# Add binary filters (title fights, hometown)
 binary_mappings = {
     'Prev1_Title':              ('Yes', 1, 0),
     'Opponent_Prev1_Title':     ('Yes', 1, 0),
     'HometownFighter':          ('Yes', 1, 0),
     'Opponent_Hometown':        ('Yes', 1, 0),
-    # Add any other dashboard filters you want here
 }
-
 for col, (true_val, yes_num, no_num) in binary_mappings.items():
     if col in tree_data.columns:
         tree_data[col + '_binary'] = tree_data[col].apply(
@@ -722,9 +768,10 @@ for col, (true_val, yes_num, no_num) in binary_mappings.items():
         if tree_data[col + '_binary'].nunique(dropna=True) >= 2:
             feature_cols.append(col + '_binary')
 
+# Remove duplicates and sort
 feature_cols = sorted(list(set(feature_cols)))
 
-# ---------- Build the tree ----------
+# ---------- Tree building (unchanged) ----------
 if not feature_cols:
     st.warning("No suitable numeric features available in the filtered data.")
 else:
@@ -732,12 +779,11 @@ else:
     leaf_size = st.number_input("Minimum samples per leaf", min_value=1, value=20)
 
     if len(tree_data) < leaf_size:
-        st.warning("Not enough data for the chosen leaf size. Reduce leaf size or broaden filters.")
+        st.warning("Not enough data for the chosen leaf size.")
     else:
         X = tree_data[first_feature].values
         y = tree_data['Target'].values
 
-        # Find best threshold for the chosen feature (information gain)
         best_gain = -1
         best_threshold = None
         sorted_idx = np.argsort(X)
@@ -773,7 +819,6 @@ else:
             st.write(f"Left branch: {len(left_data)} samples, win rate = {left_data['Target'].mean()*100:.1f}%")
             st.write(f"Right branch: {len(right_data)} samples, win rate = {right_data['Target'].mean()*100:.1f}%")
 
-            # Find next best features for each branch (mutual information)
             def best_split_feature(subset, feature_pool):
                 if len(subset) < leaf_size:
                     return None
@@ -797,8 +842,8 @@ else:
             if left_next:
                 st.write(f"Left branch best feature: **{left_next}**")
             else:
-                st.write("Left branch: cannot split further (too few samples or no informative features).")
+                st.write("Left branch: cannot split further.")
             if right_next:
                 st.write(f"Right branch best feature: **{right_next}**")
             else:
-                st.write("Right branch: cannot split further (too few samples or no informative features).")
+                st.write("Right branch: cannot split further.")
