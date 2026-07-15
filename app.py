@@ -822,7 +822,7 @@ if build_clicked:
     }
 
 if st.session_state.root_built:
-    def display_node(node_id):
+        def display_node(node_id):
         node = st.session_state.tree_nodes[node_id]
         data = node['data']
         depth = node['depth']
@@ -835,20 +835,28 @@ if st.session_state.root_built:
         # Features available in THIS node
         available_features = [f for f in feature_cols if f in data.columns]
 
+        # --- expander to show all features in this node ---
+        with st.expander(f"📋 All {len(available_features)} features in this node (click to see)"):
+            st.write(", ".join(available_features))
+
         if node['feature'] is None:
             suggestions = suggest_features(data, available_features, top_k=3)
             st.write("**Suggested features:**", ", ".join(suggestions) if suggestions else "None")
 
             col1, col2 = st.columns([3, 1])
             with col1:
-                selected_feature = st.selectbox("Select feature to split", available_features, key=f"feat_{node_id}")
+                selected_feature = st.selectbox(
+                    "Select feature to split",
+                    available_features,
+                    key=f"feat_{node_id}"
+                )
             with col2:
                 split_clicked = st.button("Split", key=f"split_{node_id}")
 
             if split_clicked:
                 unique_vals = data[selected_feature].dropna().unique()
                 if len(unique_vals) < 2:
-                    st.warning(f"**{selected_feature}** is constant in this node.")
+                    st.warning(f"**{selected_feature}** is constant in this node (all {len(unique_vals)} unique non‑NaN value(s)).")
                     st.write("Distribution:", data[selected_feature].value_counts(dropna=False).to_dict())
                 else:
                     best_feat, best_thresh, gain = find_best_split(data, [selected_feature])
@@ -877,5 +885,3 @@ if st.session_state.root_built:
             for child_id in node['children']:
                 st.write("---")
                 display_node(child_id)
-
-    display_node(0)
