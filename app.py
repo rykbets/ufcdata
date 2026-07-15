@@ -5,7 +5,7 @@ import plotly.express as px
 import re
 import os
 import gdown
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.feature_selection import mutual_info_classif
 from sklearn.metrics import mutual_info_score
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
