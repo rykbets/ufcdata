@@ -738,20 +738,25 @@ for prefix, col in outcome_cols.items():
         if feat in encoded_data.columns and encoded_data[feat].nunique(dropna=True) >= 2:
             feature_cols.append(feat)
 
-# ---------- Factorize the same categorical filters used in the sidebar ----------
+# ---------- Categorical filters from sidebar (always add) ----------
 categorical_cols = [
     'Prev1_Title', 'Opponent_Prev1_Title',
     'HometownFighter', 'Opponent_Hometown'
 ]
 for col in categorical_cols:
     if col in encoded_data.columns:
-        # factorize converts strings to 0,1,2…
-        encoded_data[col + '_enc'] = pd.factorize(encoded_data[col].fillna(''))[0]
-        # add even if only one unique value – still visible
-        feature_cols.append(col + '_enc')
+        enc_col = col + '_enc'
+        encoded_data[enc_col] = pd.factorize(encoded_data[col].fillna(''))[0]
+        feature_cols.append(enc_col)   # always add, even if constant
+    # else:
+    #   st.warning(f"Column '{col}' not found in data.")   # uncomment for debugging
 
-# Clean duplicate names and sort
+# Remove duplicates and sort
 feature_cols = sorted(list(set(feature_cols)))
+
+# ---------- Diagnostic: show all columns in the tree data ----------
+with st.expander("🔍 Show columns available for splitting"):
+    st.write(list(encoded_data.columns))
 
 # ---------- Filter to the actual tree data (Win/Loss only) ----------
 tree_data = encoded_data[encoded_data['Win?'].isin(['Yes','No'])].copy()
