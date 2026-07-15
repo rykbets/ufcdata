@@ -700,24 +700,38 @@ for col in global_features_data.columns:
     if col not in data.columns:
         data[col] = global_features_data[col]
 
-# ---------- Interactive Regression Plot (replaces old scatter plot) ----------
+# ---------- Interactive Regression Plot (detailed outcome colors) ----------
 st.header("Regression Analysis")
 st.markdown("Select two variables to explore relationships. Points are colored by detailed outcome.")
 
-# Detailed result categories
 def detailed_result(row):
-    if pd.isna(row['Win?']) or str(row['Win?']).strip() == '':
+    # Upcoming fights have no winner
+    win_val = str(row.get('Win?', '')).strip()
+    if not win_val or win_val.lower() == 'nan':
         return 'Upcoming'
-    win = str(row['Win?']).strip()
+
     method = str(row.get('Method', '')).strip().lower()
+
+    # DQ takes priority – check method string for 'dq' or 'disqualif'
     if 'dq' in method or 'disqualif' in method:
-        return 'Win by DQ' if win == 'Yes' else 'Loss by DQ'
-    if 'nc' in method or 'no contest' in method:
+        return 'Win by DQ' if win_val == 'Yes' else 'Loss by DQ'
+
+    # No Contest
+    if win_val in ('No Contest', 'NC'):
         return 'No Contest'
-    if win == 'Yes': return 'Win'
-    if win == 'No': return 'Loss'
-    if win == 'Draw': return 'Draw'
-    return 'Other'
+
+    # Draw
+    if win_val == 'Draw':
+        return 'Draw'
+
+    # Regular Win/Loss
+    if win_val == 'Yes':
+        return 'Win'
+    if win_val == 'No':
+        return 'Loss'
+
+    # Fallback – should never happen, but keep just in case
+    return win_val
 
 data['DetailedResult'] = data.apply(detailed_result, axis=1)
 
@@ -746,7 +760,6 @@ else:
         if len(reg_data) < 10:
             st.warning("Not enough data for regression.")
         else:
-            # Linear regression
             from sklearn.linear_model import LinearRegression
             X_reg = reg_data[[reg_x]].values
             y_reg = reg_data[reg_y].values
