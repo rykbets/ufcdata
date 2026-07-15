@@ -687,7 +687,7 @@ st.markdown("Use the filtered data (excluding upcoming fights) to find the most 
 tree_data = data[data['Win?'].isin(['Yes','No'])].copy()
 tree_data['Target'] = (tree_data['Win?'] == 'Yes').astype(int)
 
-# ---------- Build opponent‑side statistics (if missing) ----------
+# ---------- Build opponent‑side statistics ----------
 opp_career = tree_data[['FightID','Fighter','CareerWinPct']].rename(
     columns={'Fighter':'Opponent', 'CareerWinPct':'Opponent_CareerWinPct'})
 tree_data = tree_data.merge(opp_career, on=['FightID','Opponent'], how='left')
@@ -696,7 +696,7 @@ opp_days = tree_data[['FightID','Fighter','DaysSincePrev','Avg3DaysGap']].rename
     columns={'Fighter':'Opponent', 'DaysSincePrev':'Opponent_DaysSincePrev', 'Avg3DaysGap':'Opponent_Avg3DaysGap'})
 tree_data = tree_data.merge(opp_days, on=['FightID','Opponent'], how='left')
 
-# ---------- Core numeric features (no current-fight filters) ----------
+# ---------- Core numeric features (no current‑fight filters) ----------
 core_features = [
     'Age', 'Height', 'Reach',
     'Age_opp', 'Height_opp', 'Reach_opp',
@@ -756,22 +756,21 @@ for col, (true_val, yes_num, no_num) in binary_mappings.items():
         if tree_data[new_col].nunique(dropna=True) >= 2:
             feature_cols.append(new_col)
 
-# Remove duplicates and sort
 feature_cols = sorted(list(set(feature_cols)))
 
 # ---------- Helper functions ----------
 def find_best_split(subset, feature_pool):
-    """Given a dataset and list of features, find the best feature and threshold using information gain.
-    Returns (best_feature, best_threshold, gain) or (None, None, -1) if no valid split."""
-    best_feature = None
-    best_threshold = None
+    """Find the best feature and threshold using information gain."""
+    best_feat = None
+    best_thresh = None
     best_gain = -1
     y = subset['Target'].values
     parent_entropy = -(y.mean() * np.log2(y.mean() + 1e-10) + (1 - y.mean()) * np.log2(1 - y.mean() + 1e-10))
     n = len(y)
     for feat in feature_pool:
         X = subset[feat].values
-        if np.isnan(X).all(): continue
+        if np.isnan(X).all():
+            continue
         sorted_idx = np.argsort(X)
         X_sorted = X[sorted_idx]
         y_sorted = y[sorted_idx]
@@ -787,9 +786,9 @@ def find_best_split(subset, feature_pool):
             gain = parent_entropy - (left_weight * left_entropy + right_weight * right_entropy)
             if gain > best_gain:
                 best_gain = gain
-                best_feature = feat
-                best_threshold = (X_sorted[i - 1] + X_sorted[i]) / 2
-    return best_feature, best_threshold, best_gain
+                best_feat = feat
+                best_thresh = (X_sorted[i - 1] + X_sorted[i]) / 2
+    return best_feat, best_thresh, best_gain
 
 def suggest_features(subset, feature_pool, top_k=3):
     """Return the top k features by mutual information with the target."""
@@ -809,7 +808,7 @@ def suggest_features(subset, feature_pool, top_k=3):
 
 # ---------- Initialize session state for tree ----------
 if 'tree_nodes' not in st.session_state:
-    st.session_state.tree_nodes = {}   # dict of node_id -> {data: DataFrame, feature: None, threshold: None, children: []}
+    st.session_state.tree_nodes = {}
     st.session_state.next_node_id = 1
     st.session_state.root_built = False
 
@@ -819,11 +818,9 @@ with st.form(key="tree_form"):
     build_clicked = st.form_submit_button("Build Tree")
 
 if build_clicked:
-    # Reset tree
     st.session_state.tree_nodes = {}
     st.session_state.next_node_id = 1
     st.session_state.root_built = True
-    # Create root node
     st.session_state.tree_nodes[0] = {
         'data': tree_data.copy(),
         'feature': None,
@@ -834,68 +831,58 @@ if build_clicked:
 
 # ---------- Display and allow further splits ----------
 if st.session_state.root_built:
-    # Helper to display a node and its split controls
-    def display_node(node_id, parent_data=None):
+    def display_node(node_id):
         node = st.session_state.tree_nodes[node_id]
         data = node['data']
         depth = node['depth']
-        if depth >= 3:   # max depth 3
-            st.write(f"**Leaf Node {node_id}** (max depth reached): {len(data)} samples, win rate = {data['Target'].mean()*100:.1f}%")
+        if depth >= 3:
+            st.write(f"**Leaf Node {node_id}** (max depth): {len(data)} samples, win rate = {data['Target'].mean()*100:.1f}%")
             return
 
         st.write(f"**Node {node_id}** (depth {depth}): {len(data)} samples, win rate = {data['Target'].mean()*100:.1f}%")
 
-        # If not yet split, show split controls
         if node['feature'] is None:
-            # Suggestions
-            suggestions = suggest_features(data, feature_cols, top_k=3)
+            # Filter features that actually vary in this node
+            valid_features = [f for f in feature_cols if f in data.columns and data[f].nunique(dropna=True) >= 2]
+            if not valid_features:
+                st.write("No features vary in this node – cannot split further.")
+                return
+
+            suggestions = suggest_features(data, valid_features, top_k=3)
             st.write("**Suggested features:**", ", ".join(suggestions) if suggestions else "None")
+
             col1, col2 = st.columns([3, 1])
             with col1:
-                selected_feature = st.selectbox("Select feature to split", feature_cols, key=f"feat_{node_id}")
+                selected_feature = st.selectbox("Select feature to split", valid_features, key=f"feat_{node_id}")
             with col2:
                 split_clicked = st.button("Split", key=f"split_{node_id}")
+
             if split_clicked:
-                # Compute best split for the selected feature
-                best_feat, best_thresh, _ = find_best_split(data, [selected_feature])
-                if best_feat is None:
-                    st.warning("Cannot split on this feature (no valid split found).")
+                best_feat, best_thresh, gain = find_best_split(data, [selected_feature])
+                if best_feat is None or gain <= 0:
+                    st.warning(f"No significant split found for '{selected_feature}' in this node. Try another feature.")
                 else:
-                    # Store split info in node
                     node['feature'] = best_feat
                     node['threshold'] = best_thresh
-                    # Split data
                     left_mask = data[best_feat] <= best_thresh
                     right_mask = data[best_feat] > best_thresh
                     left_data = data[left_mask].copy()
                     right_data = data[right_mask].copy()
-                    # Create child nodes
                     left_id = st.session_state.next_node_id
                     right_id = st.session_state.next_node_id + 1
                     st.session_state.next_node_id += 2
                     st.session_state.tree_nodes[left_id] = {
-                        'data': left_data,
-                        'feature': None,
-                        'threshold': None,
-                        'children': [],
-                        'depth': depth + 1
+                        'data': left_data, 'feature': None, 'threshold': None, 'children': [], 'depth': depth + 1
                     }
                     st.session_state.tree_nodes[right_id] = {
-                        'data': right_data,
-                        'feature': None,
-                        'threshold': None,
-                        'children': [],
-                        'depth': depth + 1
+                        'data': right_data, 'feature': None, 'threshold': None, 'children': [], 'depth': depth + 1
                     }
                     node['children'] = [left_id, right_id]
-                    st.experimental_rerun()   # refresh to show split
+                    st.rerun()
         else:
-            # Already split – show split info and children
             st.write(f"Split on **{node['feature']}** ≤ {node['threshold']:.2f}")
             for child_id in node['children']:
                 st.write("---")
-                display_node(child_id, data)
-            return
+                display_node(child_id)
 
-    # Display root node
     display_node(0)
