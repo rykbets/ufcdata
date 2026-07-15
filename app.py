@@ -687,33 +687,44 @@ st.markdown("Use the filtered data (excluding upcoming fights) to find the most 
 tree_data = data[data['Win?'].isin(['Yes','No'])].copy()
 tree_data['Target'] = (tree_data['Win?'] == 'Yes').astype(int)
 
-# --- Build feature list: numeric columns + encoded categoricals ---
-numeric_dtypes = tree_data.select_dtypes(include=[np.number]).columns.tolist()
-# Exclude the target column itself and any column that is all NaN
-feature_cols = [c for c in numeric_dtypes if c != 'Target' and tree_data[c].nunique(dropna=True) >= 2]
+# ---------- Build a clean feature list ----------
+# Core numeric bout features (no shifted duplicates)
+core_features = [
+    'Age', 'Height', 'Reach',
+    'AgeDiff', 'HeightDiff', 'ReachDiff',
+    'DaysSincePrev', 'Avg3DaysGap',
+    'FightNumber', 'Opponent_FightNumber',
+    'FighterOddsNum', 'PrevFighterOddsNum',
+    'CareerWinPct'
+]
 
-# Add binary versions of important categorical filters
+# Add all CareerAvg_ columns (they summarize past performance)
+career_avg_cols = [col for col in tree_data.columns if col.startswith('CareerAvg_')]
+
+# Combine and keep only columns that exist and have at least 2 unique values
+feature_cols = [c for c in core_features + career_avg_cols 
+                if c in tree_data.columns and tree_data[c].nunique(dropna=True) >= 2]
+
+# Add binary encodings for important categorical filters
 binary_mappings = {
-    'Prev1_Title':        ('Yes', 1, 0),
-    'Opponent_Prev1_Title': ('Yes', 1, 0),
-    # You can add more if you want, e.g.:
-    # 'HometownFighter':    ('Yes', 1, 0),
-    # 'Opponent_Hometown':  ('Yes', 1, 0),
+    'Prev1_Title':              ('Yes', 1, 0),
+    'Opponent_Prev1_Title':     ('Yes', 1, 0),
+    'HometownFighter':          ('Yes', 1, 0),
+    'Opponent_Hometown':        ('Yes', 1, 0),
+    # Add any other dashboard filters you want here
 }
 
 for col, (true_val, yes_num, no_num) in binary_mappings.items():
     if col in tree_data.columns:
-        # Create a numeric column: 1 if the value == true_val, else 0 (skip NaN)
         tree_data[col + '_binary'] = tree_data[col].apply(
             lambda x: yes_num if x == true_val else (no_num if isinstance(x, str) and x != '' else np.nan)
         )
-        # Only keep if it has at least 2 distinct non‑NaN values
         if tree_data[col + '_binary'].nunique(dropna=True) >= 2:
             feature_cols.append(col + '_binary')
 
-# Remove duplicate entries
 feature_cols = sorted(list(set(feature_cols)))
 
+# ---------- Build the tree ----------
 if not feature_cols:
     st.warning("No suitable numeric features available in the filtered data.")
 else:
@@ -726,7 +737,7 @@ else:
         X = tree_data[first_feature].values
         y = tree_data['Target'].values
 
-        # Find best threshold for the chosen feature (max information gain)
+        # Find best threshold for the chosen feature (information gain)
         best_gain = -1
         best_threshold = None
         sorted_idx = np.argsort(X)
@@ -762,6 +773,7 @@ else:
             st.write(f"Left branch: {len(left_data)} samples, win rate = {left_data['Target'].mean()*100:.1f}%")
             st.write(f"Right branch: {len(right_data)} samples, win rate = {right_data['Target'].mean()*100:.1f}%")
 
+            # Find next best features for each branch (mutual information)
             def best_split_feature(subset, feature_pool):
                 if len(subset) < leaf_size:
                     return None
