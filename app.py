@@ -740,30 +740,28 @@ for prefix, col in outcome_cols.items():
         if feat in tree_data.columns and tree_data[feat].nunique(dropna=True) >= 2:
             feature_cols.append(feat)
 
-# ---------- Title fight & hometown binary features (always include) ----------
-binary_mappings = {
-    'Prev1_Title':              ('Yes', 1, 0),
-    'Opponent_Prev1_Title':     ('Yes', 1, 0),
-    'HometownFighter':          ('Yes', 1, 0),
-    'Opponent_Hometown':        ('Yes', 1, 0),
-}
-for col, (true_val, yes_num, no_num) in binary_mappings.items():
-    if col in tree_data.columns:
-        new_col = col + '_binary'
-        tree_data[new_col] = tree_data[col].apply(
-            lambda x: yes_num if x == true_val else (no_num if isinstance(x, str) and x != '' else np.nan)
-        )
-        # Always add to feature_cols, even if constant in the full dataset
-        feature_cols.append(new_col)
+# ---------- Robust binary encoding for title fight & hometown ----------
+binary_cols = ['Prev1_Title', 'Opponent_Prev1_Title', 'HometownFighter', 'Opponent_Hometown']
+for col in binary_cols:
+    if col not in tree_data.columns:
+        continue
+    # Create a clean Yes/No column with 1 = 'Yes' (case‑insensitive, stripped), 0 otherwise
+    clean_col = col + '_clean'
+    tree_data[clean_col] = tree_data[col].astype(str).str.strip().str.lower().map({'yes': 1}).fillna(0).astype(int)
+    feature_cols.append(clean_col)   # always include, even if constant in full dataset
+
+    # Also add the original column as a categorical feature
+    # (label‑encode it so it can be used in the tree)
+    enc_col = col + '_enc'
+    tree_data[enc_col] = tree_data[col].astype(str).str.strip().str.lower().map({'yes':1, 'no':0, '':np.nan}).fillna(0).astype(int)
+    # Not adding _enc to feature list because _clean is sufficient; but just in case we can keep it
+    # (we won't duplicate)
 
 feature_cols = sorted(list(set(feature_cols)))
 
 # ---------- Helper functions ----------
 def find_best_split(subset, feature_pool):
-    """Find the best feature and threshold using information gain."""
-    best_feat = None
-    best_thresh = None
-    best_gain = -1
+    best_feat, best_thresh, best_gain = None, None, -1
     y = subset['Target'].values
     parent_entropy = -(y.mean() * np.log2(y.mean() + 1e-10) + (1 - y.mean()) * np.log2(1 - y.mean() + 1e-10))
     n = len(y)
@@ -791,7 +789,6 @@ def find_best_split(subset, feature_pool):
     return best_feat, best_thresh, best_gain
 
 def suggest_features(subset, feature_pool, top_k=3):
-    """Return the top k features by mutual information with the target."""
     X_sub = subset[feature_pool].dropna()
     y_sub = subset.loc[X_sub.index, 'Target'].values
     if len(X_sub) == 0:
@@ -812,7 +809,6 @@ if 'tree_nodes' not in st.session_state:
     st.session_state.next_node_id = 1
     st.session_state.root_built = False
 
-# ---------- Build Tree button (form) ----------
 with st.form(key="tree_form"):
     leaf_size = st.number_input("Minimum samples per leaf", min_value=1, value=20)
     build_clicked = st.form_submit_button("Build Tree")
@@ -829,7 +825,6 @@ if build_clicked:
         'depth': 0
     }
 
-# ---------- Display and allow further splits ----------
 if st.session_state.root_built:
     def display_node(node_id):
         node = st.session_state.tree_nodes[node_id]
@@ -842,7 +837,6 @@ if st.session_state.root_built:
         st.write(f"**Node {node_id}** (depth {depth}): {len(data)} samples, win={data['Target'].mean()*100:.1f}%")
 
         if node['feature'] is None:
-            # Show all global features, even if constant in this node
             suggestions = suggest_features(data, feature_cols, top_k=3)
             st.write("**Suggested features:**", ", ".join(suggestions) if suggestions else "None")
 
@@ -853,9 +847,10 @@ if st.session_state.root_built:
                 split_clicked = st.button("Split", key=f"split_{node_id}")
 
             if split_clicked:
-                # Check if the selected feature actually varies in this node
-                if data[selected_feature].nunique(dropna=True) < 2:
-                    st.warning(f"'{selected_feature}' is constant in this node – cannot split.")
+                unique_vals = data[selected_feature].dropna().unique()
+                if len(unique_vals) < 2:
+                    st.warning(f"**{selected_feature}** is constant in this node.")
+                    st.write("Distribution:", data[selected_feature].value_counts(dropna=False).to_dict())
                 else:
                     best_feat, best_thresh, gain = find_best_split(data, [selected_feature])
                     if best_feat is None or gain <= 0:
