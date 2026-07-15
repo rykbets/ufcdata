@@ -681,106 +681,125 @@ fig = px.scatter(
 )
 st.plotly_chart(fig, use_container_width=True, key=f"scatter_{x_col}_{y_col}")
 
-# ---------- Advanced Analysis (Feature Importance, Bubble, Regression) ----------
+# ---------- Advanced Analysis (cached, independent of scatter plot) ----------
 st.header("Advanced Analysis")
-st.markdown("Analyze the filtered data to find which metrics best separate wins and losses, and explore relationships between variables.")
+st.markdown("These insights are based on the currently filtered data and will only change when you adjust the sidebar filters.")
 
-# ---------- Build feature matrix on the current filtered data ----------
-analysis_data = data.copy()
-analysis_data = analysis_data[analysis_data['Win?'].isin(['Yes','No'])].copy()
-analysis_data['Target'] = (analysis_data['Win?'] == 'Yes').astype(int)
+# Compute a hash of all sidebar filter values that affect the data
+import hashlib, json
 
-# ---------- Core numeric features ----------
-core_features = [
-    'Age', 'Height', 'Reach',
-    'Age_opp', 'Height_opp', 'Reach_opp',
-    'AgeDiff', 'HeightDiff', 'ReachDiff',
-    'DaysSincePrev', 'Avg3DaysGap',
-    'Opponent_DaysSincePrev', 'Opponent_Avg3DaysGap',
-    'FightNumber', 'Opponent_FightNumber',
-    'FighterOddsNum', 'PrevFighterOddsNum',
-    'CareerWinPct', 'Opponent_CareerWinPct'
-]
+def filter_hash():
+    # We need to capture every widget that influences `data`
+    # This is a representative list – you can add more if needed
+    filter_state = {
+        'wc': wc,
+        'stance': stance,
+        'country': country,
+        'sched_rounds': sched_rounds,
+        'title_fight': title_fight,
+        'hometown': hometown,
+        'opp_hometown': opp_hometown,
+        'event_country': event_country,
+        'new_wc': new_wc,
+        'prev_title': prev_title,
+        'opp_prev_title': opp_prev_title,
+        'prev1': prev1,
+        'prev2': prev2,
+        'prev3': prev3,
+        'opp_prev1': opp_prev1,
+        'opp_prev2': opp_prev2,
+        'opp_prev3': opp_prev3,
+        'career1': career1,
+        'career2': career2,
+        'career3': career3,
+        'opp_career1': opp_career1,
+        'opp_career2': opp_career2,
+        'opp_career3': opp_career3,
+        'fn_min': fn_min,
+        'fn_max': fn_max,
+        'ofn_min': ofn_min,
+        'ofn_max': ofn_max,
+        'age': age,
+        'height': height,
+        'reach': reach,
+        'age_diff': age_diff,
+        'height_diff': height_diff,
+        'reach_diff': reach_diff,
+        'days': days,
+        'avg3': avg3,
+        'career_win_pct': career_win_pct,
+        'cur_odds': cur_odds,
+        'prev_odds': prev_odds,
+        'include_debuts': include_debuts,   # though not used as filter, may be present
+    }
+    # Convert to stable string and hash
+    return hashlib.md5(json.dumps(filter_state, sort_keys=True, default=str).encode()).hexdigest()
 
-career_avg_cols = [col for col in analysis_data.columns if col.startswith('CareerAvg_')]
+current_hash = filter_hash()
 
-all_features = [c for c in core_features + career_avg_cols 
-                if c in analysis_data.columns and analysis_data[c].nunique(dropna=True) >= 2]
+# Initialize analysis results in session state if not present or hash changed
+if 'analysis_results' not in st.session_state or st.session_state.get('analysis_hash') != current_hash:
+    # ---------- Build feature matrix ----------
+    analysis_data = data[data['Win?'].isin(['Yes','No'])].copy()
+    analysis_data['Target'] = (analysis_data['Win?'] == 'Yes').astype(int)
 
-# ---------- Binary outcome features (fighter + opponent, 3 shifts) ----------
-outcome_cols = {
-    'Prev1': prev1_col,
-    'Prev2': prev2_col,
-    'Prev3': prev3_col,
-    'OppPrev1': 'Opponent_Prev1_Outcome_raw',
-    'OppPrev2': 'Opponent_Prev2_Outcome_raw',
-    'OppPrev3': 'Opponent_Prev3_Outcome_raw'
-}
+    core_features = [
+        'Age', 'Height', 'Reach',
+        'Age_opp', 'Height_opp', 'Reach_opp',
+        'AgeDiff', 'HeightDiff', 'ReachDiff',
+        'DaysSincePrev', 'Avg3DaysGap',
+        'Opponent_DaysSincePrev', 'Opponent_Avg3DaysGap',
+        'FightNumber', 'Opponent_FightNumber',
+        'FighterOddsNum', 'PrevFighterOddsNum',
+        'CareerWinPct', 'Opponent_CareerWinPct'
+    ]
+    career_avg_cols = [col for col in analysis_data.columns if col.startswith('CareerAvg_')]
+    all_features = [c for c in core_features + career_avg_cols 
+                    if c in analysis_data.columns and analysis_data[c].nunique(dropna=True) >= 2]
 
-for prefix, col in outcome_cols.items():
-    if col not in analysis_data.columns:
-        continue
-    analysis_data[f'{prefix}_is_Win']   = analysis_data[col].str.startswith('Win').astype(int)
-    analysis_data[f'{prefix}_is_Loss']  = analysis_data[col].str.startswith('Loss').astype(int)
-    analysis_data[f'{prefix}_is_Draw']  = analysis_data[col].str.contains('Draw', na=False).astype(int)
-    analysis_data[f'{prefix}_is_NC']    = analysis_data[col].str.contains('No Contest', na=False).astype(int)
-    analysis_data[f'{prefix}_method_KO']  = analysis_data[col].str.contains('KO', na=False).astype(int)
-    analysis_data[f'{prefix}_method_Sub'] = analysis_data[col].str.contains('Sub', na=False).astype(int)
-    analysis_data[f'{prefix}_method_Dec'] = analysis_data[col].str.contains('Decision', na=False).astype(int)
-    analysis_data[f'{prefix}_method_DQ']  = analysis_data[col].str.contains('DQ', na=False).astype(int)
+    # Binary outcomes
+    outcome_cols = {
+        'Prev1': prev1_col, 'Prev2': prev2_col, 'Prev3': prev3_col,
+        'OppPrev1': 'Opponent_Prev1_Outcome_raw', 'OppPrev2': 'Opponent_Prev2_Outcome_raw', 'OppPrev3': 'Opponent_Prev3_Outcome_raw'
+    }
+    for prefix, col in outcome_cols.items():
+        if col not in analysis_data.columns: continue
+        analysis_data[f'{prefix}_is_Win']   = analysis_data[col].str.startswith('Win').astype(int)
+        analysis_data[f'{prefix}_is_Loss']  = analysis_data[col].str.startswith('Loss').astype(int)
+        analysis_data[f'{prefix}_is_Draw']  = analysis_data[col].str.contains('Draw', na=False).astype(int)
+        analysis_data[f'{prefix}_is_NC']    = analysis_data[col].str.contains('No Contest', na=False).astype(int)
+        analysis_data[f'{prefix}_method_KO']  = analysis_data[col].str.contains('KO', na=False).astype(int)
+        analysis_data[f'{prefix}_method_Sub'] = analysis_data[col].str.contains('Sub', na=False).astype(int)
+        analysis_data[f'{prefix}_method_Dec'] = analysis_data[col].str.contains('Decision', na=False).astype(int)
+        analysis_data[f'{prefix}_method_DQ']  = analysis_data[col].str.contains('DQ', na=False).astype(int)
+        for feat in [f'{prefix}_is_Win', f'{prefix}_is_Loss', f'{prefix}_is_Draw', f'{prefix}_is_NC',
+                     f'{prefix}_method_KO', f'{prefix}_method_Sub', f'{prefix}_method_Dec', f'{prefix}_method_DQ']:
+            if feat in analysis_data.columns and analysis_data[feat].nunique(dropna=True) >= 2:
+                all_features.append(feat)
 
-    for feat in [f'{prefix}_is_Win', f'{prefix}_is_Loss', f'{prefix}_is_Draw', f'{prefix}_is_NC',
-                 f'{prefix}_method_KO', f'{prefix}_method_Sub', f'{prefix}_method_Dec', f'{prefix}_method_DQ']:
-        if feat in analysis_data.columns and analysis_data[feat].nunique(dropna=True) >= 2:
-            all_features.append(feat)
+    binary_cols = ['Prev1_Title','Prev2_Title','Prev3_Title','Opponent_Prev1_Title','Opponent_Prev2_Title',
+                   'Opponent_Prev3_Title','HometownFighter','Opponent_Hometown']
+    for col in binary_cols:
+        if col in analysis_data.columns:
+            clean_col = col + '_clean'
+            analysis_data[clean_col] = analysis_data[col].astype(str).str.strip().str.lower().map({'yes': 1}).fillna(0).astype(int)
+            all_features.append(clean_col)
 
-# ---------- Title/Hometown binary filters ----------
-binary_cols = [
-    'Prev1_Title', 'Prev2_Title', 'Prev3_Title',
-    'Opponent_Prev1_Title', 'Opponent_Prev2_Title', 'Opponent_Prev3_Title',
-    'HometownFighter', 'Opponent_Hometown'
-]
-for col in binary_cols:
-    if col in analysis_data.columns:
-        clean_col = col + '_clean'
-        analysis_data[clean_col] = analysis_data[col].astype(str).str.strip().str.lower().map({'yes': 1}).fillna(0).astype(int)
-        all_features.append(clean_col)
+    all_features = sorted(list(set(all_features)))
+    continuous_features = [f for f in all_features if not set(analysis_data[f].dropna().unique()).issubset({0, 1})]
 
-all_features = sorted(list(set(all_features)))
-
-# ---------- Separate continuous features (for regression) ----------
-continuous_features = [f for f in all_features 
-                       if not set(analysis_data[f].dropna().unique()).issubset({0, 1})]
-
-# ---------- Prepare feature matrix and target ----------
-X = analysis_data[all_features].copy()
-y = analysis_data['Target']
-
-X = X.dropna(axis=1, how='all')
-all_features = list(X.columns)
-
-if len(all_features) == 0:
-    st.warning("No suitable features available in the filtered data.")
-else:
-    # ---------- Mutual Information Importance ----------
+    # Mutual information
     from sklearn.impute import SimpleImputer
-    imputer = SimpleImputer(strategy='median')
-    X_imputed = imputer.fit_transform(X)
+    X = analysis_data[all_features]
+    y = analysis_data['Target']
+    X_imputed = SimpleImputer(strategy='median').fit_transform(X)
     mi_scores = mutual_info_classif(X_imputed, y, discrete_features=False)
-    mi_df = pd.DataFrame({
-        'Feature': all_features,
-        'Mutual Information': mi_scores
-    }).sort_values('Mutual Information', ascending=False)
+    mi_df = pd.DataFrame({'Feature': all_features, 'Mutual Information': mi_scores}).sort_values('Mutual Information', ascending=False)
 
-    st.subheader("Feature Importance Ranking")
-    fig_imp = px.bar(mi_df.head(20), x='Mutual Information', y='Feature', orientation='h',
-                     title="Top 20 Features by Mutual Information with Win/Loss")
-    st.plotly_chart(fig_imp, use_container_width=True)
-
-    # ---------- Bubble Chart (all features) ----------
+    # Bubble data
     winners = analysis_data[analysis_data['Win?'] == 'Yes']
-    losers = analysis_data[analysis_data['Win?'] == 'No']
-    win_means = winners[all_features].mean()
+    losers  = analysis_data[analysis_data['Win?'] == 'No']
+    win_means  = winners[all_features].mean()
     loss_means = losers[all_features].mean()
     bubble_data = pd.DataFrame({
         'Feature': all_features,
@@ -789,45 +808,71 @@ else:
         'Importance': mi_scores
     }).dropna()
 
-    st.subheader("Win vs Loss Metric Comparison")
-    fig_bubble = px.scatter(bubble_data, x='Avg Winners', y='Avg Losers',
-                            size='Importance', hover_name='Feature',
-                            title="Bubble Chart: Avg Winners vs Avg Losers (bubble size = importance)")
-    max_val = max(bubble_data['Avg Winners'].max(), bubble_data['Avg Losers'].max())
-    min_val = min(bubble_data['Avg Winners'].min(), bubble_data['Avg Losers'].min())
-    fig_bubble.add_shape(type='line', x0=min_val, y0=min_val, x1=max_val, y1=max_val,
-                         line=dict(dash='dash', color='gray'))
-    st.plotly_chart(fig_bubble, use_container_width=True)
+    # Store in session state
+    st.session_state.analysis_results = {
+        'mi_df': mi_df,
+        'bubble_data': bubble_data,
+        'continuous_features': continuous_features,
+        'analysis_data': analysis_data,
+        'all_features': all_features,
+        'max_val': max(bubble_data['Avg Winners'].max(), bubble_data['Avg Losers'].max()),
+        'min_val': min(bubble_data['Avg Winners'].min(), bubble_data['Avg Losers'].min())
+    }
+    st.session_state.analysis_hash = current_hash
 
-    # ---------- Regression Analysis (continuous features only) ----------
-    st.subheader("Regression Analysis")
-    cont_options = [f for f in continuous_features if f in analysis_data.columns and analysis_data[f].nunique(dropna=True) >= 2]
-    if len(cont_options) < 2:
-        st.warning("Not enough continuous features for regression.")
-    else:
-        col1, col2 = st.columns(2)
-        with col1:
-            reg_x = st.selectbox("X variable", cont_options, key="reg_x")
-        with col2:
-            reg_y = st.selectbox("Y variable", cont_options, key="reg_y")
+# Retrieve cached results
+res = st.session_state.analysis_results
+mi_df = res['mi_df']
+bubble_data = res['bubble_data']
+continuous_features = res['continuous_features']
+analysis_data = res['analysis_data']
+max_val = res['max_val']
+min_val = res['min_val']
 
-        if reg_x and reg_y:
-            from sklearn.linear_model import LinearRegression
-            reg_data = analysis_data[[reg_x, reg_y, 'Win?']].dropna()
-            if len(reg_data) < 10:
-                st.warning("Not enough data for regression (need at least 10 points).")
-            else:
-                X_reg = reg_data[[reg_x]].values
-                y_reg = reg_data[reg_y].values
-                lr = LinearRegression().fit(X_reg, y_reg)
-                r2 = lr.score(X_reg, y_reg)
-                reg_line_x = np.linspace(X_reg.min(), X_reg.max(), 100).reshape(-1, 1)
-                reg_line_y = lr.predict(reg_line_x)
+# ---------- Feature Importance Ranking ----------
+st.subheader("Feature Importance Ranking")
+fig_imp = px.bar(mi_df.head(20), x='Mutual Information', y='Feature', orientation='h',
+                 title="Top 20 Features by Mutual Information with Win/Loss")
+st.plotly_chart(fig_imp, use_container_width=True)
 
-                fig_reg = px.scatter(reg_data, x=reg_x, y=reg_y, color='Win?',
-                                     color_discrete_map={'Yes': 'green', 'No': 'red'},
-                                     hover_data=['Fighter', 'Opponent'] if 'Fighter' in reg_data.columns else None,
-                                     title=f"Regression: {reg_y} vs {reg_x} (R² = {r2:.3f})")
-                fig_reg.add_trace(go.Scatter(x=reg_line_x.flatten(), y=reg_line_y, mode='lines',
-                                             name='Regression', line=dict(color='white')))
-                st.plotly_chart(fig_reg, use_container_width=True)
+# ---------- Bubble Chart ----------
+st.subheader("Win vs Loss Metric Comparison")
+fig_bubble = px.scatter(bubble_data, x='Avg Winners', y='Avg Losers',
+                        size='Importance', hover_name='Feature',
+                        title="Bubble Chart: Avg Winners vs Avg Losers (bubble size = importance)")
+fig_bubble.add_shape(type='line', x0=min_val, y0=min_val, x1=max_val, y1=max_val,
+                     line=dict(dash='dash', color='gray'))
+st.plotly_chart(fig_bubble, use_container_width=True)
+
+# ---------- Regression Analysis ----------
+st.subheader("Regression Analysis")
+cont_options = [f for f in continuous_features if f in analysis_data.columns and analysis_data[f].nunique(dropna=True) >= 2]
+if len(cont_options) < 2:
+    st.warning("Not enough continuous features for regression.")
+else:
+    col1, col2 = st.columns(2)
+    with col1:
+        reg_x = st.selectbox("X variable", cont_options, key="reg_x")
+    with col2:
+        reg_y = st.selectbox("Y variable", cont_options, key="reg_y")
+
+    if reg_x and reg_y:
+        from sklearn.linear_model import LinearRegression
+        reg_data = analysis_data[[reg_x, reg_y, 'Win?']].dropna()
+        if len(reg_data) < 10:
+            st.warning("Not enough data for regression.")
+        else:
+            X_reg = reg_data[[reg_x]].values
+            y_reg = reg_data[reg_y].values
+            lr = LinearRegression().fit(X_reg, y_reg)
+            r2 = lr.score(X_reg, y_reg)
+            reg_line_x = np.linspace(X_reg.min(), X_reg.max(), 100).reshape(-1, 1)
+            reg_line_y = lr.predict(reg_line_x)
+
+            fig_reg = px.scatter(reg_data, x=reg_x, y=reg_y, color='Win?',
+                                 color_discrete_map={'Yes': 'green', 'No': 'red'},
+                                 hover_data=['Fighter', 'Opponent'] if 'Fighter' in reg_data.columns else None,
+                                 title=f"Regression: {reg_y} vs {reg_x} (R² = {r2:.3f})")
+            fig_reg.add_trace(go.Scatter(x=reg_line_x.flatten(), y=reg_line_y, mode='lines',
+                                         name='Regression', line=dict(color='white')))
+            st.plotly_chart(fig_reg, use_container_width=True)
