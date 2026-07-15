@@ -5,8 +5,9 @@ import plotly.express as px
 import re
 import os
 import gdown
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import mutual_info_score
 
-# ---------- Page config ----------
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
 # ============================================================
@@ -682,82 +683,90 @@ st.plotly_chart(fig, use_container_width=True, key=f"scatter_{x_col}_{y_col}")
 st.header("Customizable Decision Tree")
 st.markdown("Use the filtered data (excluding upcoming fights) to find the most informative splits.")
 
-# Filter out upcoming fights for tree
-tree_data = data[~data['Win?'].isna() & (data['Win?'] != '')]
-# Keep only Win/Loss for binary classification
-tree_data = tree_data[tree_data['Win?'].isin(['Yes', 'No'])]
+# Filter out upcoming and non‑win/loss fights
+tree_data = data[data['Win?'].isin(['Yes','No'])].copy()
 tree_data['Target'] = (tree_data['Win?'] == 'Yes').astype(int)
 
-# Available features (numeric only)
-feature_cols = [c for c in numeric_cols if c in tree_data.columns and not tree_data[c].isna().all()]
+# Numeric features: select all columns with a numeric dtype and at least 2 unique values
+numeric_dtypes = tree_data.select_dtypes(include=[np.number]).columns.tolist()
+# Exclude the target column itself and any column that is all NaN
+feature_cols = [c for c in numeric_dtypes if c != 'Target' and tree_data[c].nunique(dropna=True) >= 2]
 
-first_feature = st.selectbox("First split variable", sorted(feature_cols))
-leaf_size = st.number_input("Minimum samples per leaf", min_value=1, value=20)
-
-if len(tree_data) < leaf_size:
-    st.warning("Not enough data for the chosen leaf size. Reduce leaf size or broaden filters.")
+if not feature_cols:
+    st.warning("No suitable numeric features available in the filtered data.")
 else:
-    # Find best threshold for the chosen feature
-    X = tree_data[first_feature].values
-    y = tree_data['Target'].values
+    first_feature = st.selectbox("First split variable", sorted(feature_cols))
+    leaf_size = st.number_input("Minimum samples per leaf", min_value=1, value=20)
 
-    # Sort by feature and find optimal binary split (max information gain)
-    best_gain = -1
-    best_threshold = None
-    sorted_idx = np.argsort(X)
-    X_sorted = X[sorted_idx]
-    y_sorted = y[sorted_idx]
-    parent_entropy = -(y.mean() * np.log2(y.mean() + 1e-10) + (1 - y.mean()) * np.log2(1 - y.mean() + 1e-10))
-    n = len(y)
-    for i in range(1, n - 1):
-        if X_sorted[i] == X_sorted[i - 1]: continue
-        left_weight = i / n
-        right_weight = 1 - left_weight
-        left_entropy = -(y_sorted[:i].mean() * np.log2(y_sorted[:i].mean() + 1e-10) + (1 - y_sorted[:i].mean()) * np.log2(1 - y_sorted[:i].mean() + 1e-10)) if i > 0 else 0
-        right_entropy = -(y_sorted[i:].mean() * np.log2(y_sorted[i:].mean() + 1e-10) + (1 - y_sorted[i:].mean()) * np.log2(1 - y_sorted[i:].mean() + 1e-10)) if i < n else 0
-        gain = parent_entropy - (left_weight * left_entropy + right_weight * right_entropy)
-        if gain > best_gain:
-            best_gain = gain
-            best_threshold = (X_sorted[i - 1] + X_sorted[i]) / 2
-
-    if best_threshold is None:
-        st.write("No valid split found for this feature.")
+    if len(tree_data) < leaf_size:
+        st.warning("Not enough data for the chosen leaf size. Reduce leaf size or broaden filters.")
     else:
-        left_mask = tree_data[first_feature] <= best_threshold
-        right_mask = tree_data[first_feature] > best_threshold
-        left_data = tree_data[left_mask]
-        right_data = tree_data[right_mask]
+        X = tree_data[first_feature].values
+        y = tree_data['Target'].values
 
-        st.write(f"**Best split on '{first_feature}'**: threshold = {best_threshold:.2f}")
-        st.write(f"Left branch: {len(left_data)} samples, win rate = {left_data['Target'].mean()*100:.1f}%")
-        st.write(f"Right branch: {len(right_data)} samples, win rate = {right_data['Target'].mean()*100:.1f}%")
+        # Find best threshold for the chosen feature (max information gain)
+        best_gain = -1
+        best_threshold = None
+        sorted_idx = np.argsort(X)
+        X_sorted = X[sorted_idx]
+        y_sorted = y[sorted_idx]
+        parent_entropy = -(y.mean() * np.log2(y.mean() + 1e-10) +
+                          (1 - y.mean()) * np.log2(1 - y.mean() + 1e-10))
+        n = len(y)
 
-        # Find next best features for each branch
-        def best_split_feature(subset, feature_pool):
-            if len(subset) < leaf_size: return None
-            best_feat = None
-            best_g = -1
-            X_all = subset[feature_pool].values
-            y_sub = subset['Target'].values
-            for j, feat in enumerate(feature_pool):
-                col = X_all[:, j]
-                if np.isnan(col).all(): continue
-                # Quick information gain using mutual info (simpler)
-                mi = mutual_info_score(col, y_sub)
-                if mi > best_g:
-                    best_g = mi
-                    best_feat = feat
-            return best_feat if best_feat else None
+        for i in range(1, n - 1):
+            if X_sorted[i] == X_sorted[i - 1]:
+                continue
+            left_weight = i / n
+            right_weight = 1 - left_weight
+            left_entropy = -(y_sorted[:i].mean() * np.log2(y_sorted[:i].mean() + 1e-10) +
+                             (1 - y_sorted[:i].mean()) * np.log2(1 - y_sorted[:i].mean() + 1e-10))
+            right_entropy = -(y_sorted[i:].mean() * np.log2(y_sorted[i:].mean() + 1e-10) +
+                              (1 - y_sorted[i:].mean()) * np.log2(1 - y_sorted[i:].mean() + 1e-10))
+            gain = parent_entropy - (left_weight * left_entropy + right_weight * right_entropy)
+            if gain > best_gain:
+                best_gain = gain
+                best_threshold = (X_sorted[i - 1] + X_sorted[i]) / 2
 
-        left_next = best_split_feature(left_data, feature_cols)
-        right_next = best_split_feature(right_data, feature_cols)
-
-        st.markdown("### Next best splits (based on mutual information)")
-        if left_next:
-            st.write(f"Left branch best feature: **{left_next}**")
+        if best_threshold is None:
+            st.write("No valid split found for this feature.")
         else:
-            st.write("Left branch: cannot split further (too few samples).")
-        if right_next:
-            st.write(f"Right branch best feature: **{right_next}**")
-        else:
-            st.write("Right branch: cannot split further (too few samples).")
+            left_mask = tree_data[first_feature] <= best_threshold
+            right_mask = tree_data[first_feature] > best_threshold
+            left_data = tree_data[left_mask]
+            right_data = tree_data[right_mask]
+
+            st.write(f"**Best split on '{first_feature}'**: threshold = {best_threshold:.2f}")
+            st.write(f"Left branch: {len(left_data)} samples, win rate = {left_data['Target'].mean()*100:.1f}%")
+            st.write(f"Right branch: {len(right_data)} samples, win rate = {right_data['Target'].mean()*100:.1f}%")
+
+            # Next best features for each branch (using mutual information)
+            def best_split_feature(subset, feature_pool):
+                if len(subset) < leaf_size:
+                    return None
+                # Prepare data for mutual_info_classif
+                X_sub = subset[feature_pool].values
+                y_sub = subset['Target'].values
+                # mutual_info_classif expects 2D X
+                mi_scores = mutual_info_classif(X_sub, y_sub, discrete_features=False)
+                best_idx = np.argmax(mi_scores)
+                if mi_scores[best_idx] > 0:
+                    return feature_pool[best_idx]
+                return None
+
+            # Only consider features that exist in the subset (some may have become constant)
+            left_features = [f for f in feature_cols if f in left_data.columns and left_data[f].nunique(dropna=True) >= 2]
+            right_features = [f for f in feature_cols if f in right_data.columns and right_data[f].nunique(dropna=True) >= 2]
+
+            left_next = best_split_feature(left_data, left_features) if left_features else None
+            right_next = best_split_feature(right_data, right_features) if right_features else None
+
+            st.markdown("### Next best splits (based on mutual information)")
+            if left_next:
+                st.write(f"Left branch best feature: **{left_next}**")
+            else:
+                st.write("Left branch: cannot split further (too few samples or no informative features).")
+            if right_next:
+                st.write(f"Right branch best feature: **{right_next}**")
+            else:
+                st.write("Right branch: cannot split further (too few samples or no informative features).")
