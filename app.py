@@ -681,7 +681,7 @@ fig = px.scatter(
 )
 st.plotly_chart(fig, use_container_width=True, key=f"scatter_{x_col}_{y_col}")
 
-# ---------- Decision Tree (with Resplit) ----------
+# ---------- Decision Tree (readable binary splits) ----------
 st.header("Customizable Decision Tree")
 st.markdown("Use the filtered data (excluding upcoming fights) to find the most informative splits.")
 
@@ -740,16 +740,15 @@ for prefix, col in outcome_cols.items():
         if feat in encoded_data.columns and encoded_data[feat].nunique(dropna=True) >= 2:
             feature_cols.append(feat)
 
-# ---------- Categorical filters (always include) ----------
-categorical_cols = [
-    'Prev1_Title', 'Opponent_Prev1_Title',
-    'HometownFighter', 'Opponent_Hometown'
-]
-for col in categorical_cols:
-    if col in encoded_data.columns:
-        enc_col = col + '_enc'
-        encoded_data[enc_col] = pd.factorize(encoded_data[col].fillna(''))[0]
-        feature_cols.append(enc_col)
+# ---------- Explicit binary filters (Yes → 1, No/NaN → 0) ----------
+binary_cols = ['Prev1_Title', 'Opponent_Prev1_Title', 'HometownFighter', 'Opponent_Hometown']
+for col in binary_cols:
+    if col not in encoded_data.columns:
+        continue
+    clean_col = col + '_clean'
+    encoded_data[clean_col] = encoded_data[col].astype(str).str.strip().str.lower().map({'yes': 1}).fillna(0).astype(int)
+    # Always add, even if constant – we want it visible
+    feature_cols.append(clean_col)
 
 feature_cols = sorted(list(set(feature_cols)))
 
@@ -784,6 +783,9 @@ def find_best_split(subset, feature_pool):
                 best_gain = gain
                 best_feat = feat
                 best_thresh = (X_sorted[i - 1] + X_sorted[i]) / 2
+    # For binary (0/1) features, force threshold to 0.5 to make the split intuitive
+    if best_feat and set(subset[best_feat].dropna().unique()).issubset({0, 1}):
+        best_thresh = 0.5
     return best_feat, best_thresh, best_gain
 
 def suggest_features(subset, feature_pool, top_k=3):
@@ -826,7 +828,7 @@ if build_clicked:
         'depth': 0
     }
 
-# ---------- Simple Black‑&‑White Tree Diagram ----------
+# ---------- Simple Black‑&‑White Tree Diagram (with readable binary labels) ----------
 def draw_tree():
     if not st.session_state.tree_nodes:
         return
@@ -845,8 +847,15 @@ def draw_tree():
         n = len(node['data'])
         text = f"Node {node_id} (n={n}, win={win_rate:.1f}%)"
         if node['feature'] is not None:
-            text += f"<br>   {node['feature']} ≤ {node['threshold']:.2f}"
-
+            feat = node['feature']
+            thresh = node['threshold']
+            # Detect binary feature (values 0/1) and show Yes/No
+            if set(node['data'][feat].dropna().unique()).issubset({0, 1}):
+                # Which side is "Yes"? If 1 is on the right (> threshold), then right is Yes.
+                # Our threshold is 0.5, so >0.5 => 1 => Yes. So we can just display "≤ 0.5 = No, > 0.5 = Yes"
+                text += f"<br>   {feat} ≤ 0.5 → No<br>   {feat} > 0.5 → Yes"
+            else:
+                text += f"<br>   {feat} ≤ {thresh:.2f}"
         annotations.append(go.layout.Annotation(
             x=x, y=y, text=text, showarrow=False,
             font=dict(color="white", size=11), bgcolor="rgba(0,0,0,0)",
@@ -921,7 +930,7 @@ if st.session_state.root_built:
         suggestions = suggest_features(data, available_features, top_k=3)
         st.write("**Suggested features:**", ", ".join(suggestions) if suggestions else "None")
 
-        # Show split controls if node hasn't been split yet
+        # Split controls
         if node['feature'] is None and depth < 3:
             col1, col2 = st.columns([3, 1])
             with col1:
@@ -957,15 +966,12 @@ if st.session_state.root_built:
                         node['children'] = [left_id, right_id]
                         st.rerun()
 
-        # If node already has a split, offer a "Resplit" button to clear it
         elif node['feature'] is not None:
-            st.write(f"Currently split on **{node['feature']}** ≤ {node['threshold']:.2f}")
+            st.write(f"Currently split on **{node['feature']}**")
             if st.button("Resplit", key=f"resplit_{selected_node}"):
-                # Remove children from tree_nodes
                 for child_id in node['children']:
                     if child_id in st.session_state.tree_nodes:
                         del st.session_state.tree_nodes[child_id]
-                # Reset this node
                 node['feature'] = None
                 node['threshold'] = None
                 node['children'] = []
