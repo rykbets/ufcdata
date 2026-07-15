@@ -696,7 +696,7 @@ opp_days = tree_data[['FightID','Fighter','DaysSincePrev','Avg3DaysGap']].rename
     columns={'Fighter':'Opponent', 'DaysSincePrev':'Opponent_DaysSincePrev', 'Avg3DaysGap':'Opponent_Avg3DaysGap'})
 tree_data = tree_data.merge(opp_days, on=['FightID','Opponent'], how='left')
 
-# ---------- Core numeric features ----------
+# ---------- Core numeric features (no current-fight filters) ----------
 core_features = [
     'Age', 'Height', 'Reach',
     'Age_opp', 'Height_opp', 'Reach_opp',
@@ -708,7 +708,6 @@ core_features = [
     'CareerWinPct', 'Opponent_CareerWinPct'
 ]
 
-# Career averages (only CareerAvg_ columns)
 career_avg_cols = [col for col in tree_data.columns if col.startswith('CareerAvg_')]
 
 feature_cols = [c for c in core_features + career_avg_cols 
@@ -724,23 +723,18 @@ outcome_cols = {
     'OppPrev3': 'Opponent_Prev3_Outcome_raw'
 }
 
-# For each outcome column, parse the string and create binary features
 for prefix, col in outcome_cols.items():
     if col not in tree_data.columns:
         continue
-    # Win / Loss / Draw / NC
     tree_data[f'{prefix}_is_Win'] = tree_data[col].str.startswith('Win').astype(int)
     tree_data[f'{prefix}_is_Loss'] = tree_data[col].str.startswith('Loss').astype(int)
     tree_data[f'{prefix}_is_Draw'] = tree_data[col].str.contains('Draw', na=False).astype(int)
     tree_data[f'{prefix}_is_NC'] = tree_data[col].str.contains('No Contest', na=False).astype(int)
-
-    # Method: KO, Sub, Decision, DQ (use contains)
     tree_data[f'{prefix}_method_KO'] = tree_data[col].str.contains('KO', na=False).astype(int)
     tree_data[f'{prefix}_method_Sub'] = tree_data[col].str.contains('Sub', na=False).astype(int)
     tree_data[f'{prefix}_method_Dec'] = tree_data[col].str.contains('Decision', na=False).astype(int)
     tree_data[f'{prefix}_method_DQ'] = tree_data[col].str.contains('DQ', na=False).astype(int)
 
-    # Add only features that have both 0 and 1
     for feat in [f'{prefix}_is_Win', f'{prefix}_is_Loss', f'{prefix}_is_Draw', f'{prefix}_is_NC',
                  f'{prefix}_method_KO', f'{prefix}_method_Sub', f'{prefix}_method_Dec', f'{prefix}_method_DQ']:
         if feat in tree_data.columns and tree_data[feat].nunique(dropna=True) >= 2:
@@ -762,43 +756,25 @@ for col, (true_val, yes_num, no_num) in binary_mappings.items():
         if tree_data[new_col].nunique(dropna=True) >= 2:
             feature_cols.append(new_col)
 
-# ---------- Categorical filters (encoded with readable names) ----------
-categorical_mappings = {
-    'ScheduledRounds': 'SchedRounds_enc',
-    'WC': 'WC_enc',
-    'EventCountry': 'EventCountry_enc',
-}
-for col, enc_name in categorical_mappings.items():
-    if col in tree_data.columns:
-        tree_data[enc_name] = pd.factorize(tree_data[col].fillna(''))[0]
-        if tree_data[enc_name].nunique(dropna=True) >= 2:
-            feature_cols.append(enc_name)
-
 # Remove duplicates and sort
 feature_cols = sorted(list(set(feature_cols)))
 
-# ---------- Tree building (unchanged) ----------
-if not feature_cols:
-    st.warning("No suitable numeric features available in the filtered data.")
-else:
-    first_feature = st.selectbox("First split variable", feature_cols)
-    leaf_size = st.number_input("Minimum samples per leaf", min_value=1, value=20)
-
-    if len(tree_data) < leaf_size:
-        st.warning("Not enough data for the chosen leaf size.")
-    else:
-        X = tree_data[first_feature].values
-        y = tree_data['Target'].values
-
-        best_gain = -1
-        best_threshold = None
+# ---------- Helper functions ----------
+def find_best_split(subset, feature_pool):
+    """Given a dataset and list of features, find the best feature and threshold using information gain.
+    Returns (best_feature, best_threshold, gain) or (None, None, -1) if no valid split."""
+    best_feature = None
+    best_threshold = None
+    best_gain = -1
+    y = subset['Target'].values
+    parent_entropy = -(y.mean() * np.log2(y.mean() + 1e-10) + (1 - y.mean()) * np.log2(1 - y.mean() + 1e-10))
+    n = len(y)
+    for feat in feature_pool:
+        X = subset[feat].values
+        if np.isnan(X).all(): continue
         sorted_idx = np.argsort(X)
         X_sorted = X[sorted_idx]
         y_sorted = y[sorted_idx]
-        parent_entropy = -(y.mean() * np.log2(y.mean() + 1e-10) +
-                          (1 - y.mean()) * np.log2(1 - y.mean() + 1e-10))
-        n = len(y)
-
         for i in range(1, n - 1):
             if X_sorted[i] == X_sorted[i - 1]:
                 continue
@@ -811,45 +787,115 @@ else:
             gain = parent_entropy - (left_weight * left_entropy + right_weight * right_entropy)
             if gain > best_gain:
                 best_gain = gain
+                best_feature = feat
                 best_threshold = (X_sorted[i - 1] + X_sorted[i]) / 2
+    return best_feature, best_threshold, best_gain
 
-        if best_threshold is None:
-            st.write("No valid split found for this feature.")
+def suggest_features(subset, feature_pool, top_k=3):
+    """Return the top k features by mutual information with the target."""
+    X_sub = subset[feature_pool].dropna()
+    y_sub = subset.loc[X_sub.index, 'Target'].values
+    if len(X_sub) == 0:
+        return []
+    mi_scores = mutual_info_classif(X_sub, y_sub, discrete_features=False)
+    sorted_idx = np.argsort(mi_scores)[::-1]
+    suggested = []
+    for idx in sorted_idx:
+        if mi_scores[idx] > 0:
+            suggested.append(feature_pool[idx])
+            if len(suggested) >= top_k:
+                break
+    return suggested
+
+# ---------- Initialize session state for tree ----------
+if 'tree_nodes' not in st.session_state:
+    st.session_state.tree_nodes = {}   # dict of node_id -> {data: DataFrame, feature: None, threshold: None, children: []}
+    st.session_state.next_node_id = 1
+    st.session_state.root_built = False
+
+# ---------- Build Tree button (form) ----------
+with st.form(key="tree_form"):
+    leaf_size = st.number_input("Minimum samples per leaf", min_value=1, value=20)
+    build_clicked = st.form_submit_button("Build Tree")
+
+if build_clicked:
+    # Reset tree
+    st.session_state.tree_nodes = {}
+    st.session_state.next_node_id = 1
+    st.session_state.root_built = True
+    # Create root node
+    st.session_state.tree_nodes[0] = {
+        'data': tree_data.copy(),
+        'feature': None,
+        'threshold': None,
+        'children': [],
+        'depth': 0
+    }
+
+# ---------- Display and allow further splits ----------
+if st.session_state.root_built:
+    # Helper to display a node and its split controls
+    def display_node(node_id, parent_data=None):
+        node = st.session_state.tree_nodes[node_id]
+        data = node['data']
+        depth = node['depth']
+        if depth >= 3:   # max depth 3
+            st.write(f"**Leaf Node {node_id}** (max depth reached): {len(data)} samples, win rate = {data['Target'].mean()*100:.1f}%")
+            return
+
+        st.write(f"**Node {node_id}** (depth {depth}): {len(data)} samples, win rate = {data['Target'].mean()*100:.1f}%")
+
+        # If not yet split, show split controls
+        if node['feature'] is None:
+            # Suggestions
+            suggestions = suggest_features(data, feature_cols, top_k=3)
+            st.write("**Suggested features:**", ", ".join(suggestions) if suggestions else "None")
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                selected_feature = st.selectbox("Select feature to split", feature_cols, key=f"feat_{node_id}")
+            with col2:
+                split_clicked = st.button("Split", key=f"split_{node_id}")
+            if split_clicked:
+                # Compute best split for the selected feature
+                best_feat, best_thresh, _ = find_best_split(data, [selected_feature])
+                if best_feat is None:
+                    st.warning("Cannot split on this feature (no valid split found).")
+                else:
+                    # Store split info in node
+                    node['feature'] = best_feat
+                    node['threshold'] = best_thresh
+                    # Split data
+                    left_mask = data[best_feat] <= best_thresh
+                    right_mask = data[best_feat] > best_thresh
+                    left_data = data[left_mask].copy()
+                    right_data = data[right_mask].copy()
+                    # Create child nodes
+                    left_id = st.session_state.next_node_id
+                    right_id = st.session_state.next_node_id + 1
+                    st.session_state.next_node_id += 2
+                    st.session_state.tree_nodes[left_id] = {
+                        'data': left_data,
+                        'feature': None,
+                        'threshold': None,
+                        'children': [],
+                        'depth': depth + 1
+                    }
+                    st.session_state.tree_nodes[right_id] = {
+                        'data': right_data,
+                        'feature': None,
+                        'threshold': None,
+                        'children': [],
+                        'depth': depth + 1
+                    }
+                    node['children'] = [left_id, right_id]
+                    st.experimental_rerun()   # refresh to show split
         else:
-            left_mask = tree_data[first_feature] <= best_threshold
-            right_mask = tree_data[first_feature] > best_threshold
-            left_data = tree_data[left_mask]
-            right_data = tree_data[right_mask]
+            # Already split – show split info and children
+            st.write(f"Split on **{node['feature']}** ≤ {node['threshold']:.2f}")
+            for child_id in node['children']:
+                st.write("---")
+                display_node(child_id, data)
+            return
 
-            st.write(f"**Best split on '{first_feature}'**: threshold = {best_threshold:.2f}")
-            st.write(f"Left branch: {len(left_data)} samples, win rate = {left_data['Target'].mean()*100:.1f}%")
-            st.write(f"Right branch: {len(right_data)} samples, win rate = {right_data['Target'].mean()*100:.1f}%")
-
-            def best_split_feature(subset, feature_pool):
-                if len(subset) < leaf_size:
-                    return None
-                X_sub = subset[feature_pool].dropna()
-                y_sub = subset.loc[X_sub.index, 'Target'].values
-                if len(X_sub) < leaf_size:
-                    return None
-                mi_scores = mutual_info_classif(X_sub, y_sub, discrete_features=False)
-                best_idx = np.argmax(mi_scores)
-                if mi_scores[best_idx] > 0:
-                    return feature_pool[best_idx]
-                return None
-
-            left_features = [f for f in feature_cols if f in left_data.columns and left_data[f].nunique(dropna=True) >= 2]
-            right_features = [f for f in feature_cols if f in right_data.columns and right_data[f].nunique(dropna=True) >= 2]
-
-            left_next = best_split_feature(left_data, left_features) if left_features else None
-            right_next = best_split_feature(right_data, right_features) if right_features else None
-
-            st.markdown("### Next best splits (based on mutual information)")
-            if left_next:
-                st.write(f"Left branch best feature: **{left_next}**")
-            else:
-                st.write("Left branch: cannot split further.")
-            if right_next:
-                st.write(f"Right branch best feature: **{right_next}**")
-            else:
-                st.write("Right branch: cannot split further.")
+    # Display root node
+    display_node(0)
