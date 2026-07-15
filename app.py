@@ -681,7 +681,7 @@ fig = px.scatter(
 )
 st.plotly_chart(fig, use_container_width=True, key=f"scatter_{x_col}_{y_col}")
 
-# ---------- Decision Tree (final, with feature list) ----------
+# ---------- Decision Tree (with Title‑column diagnostic) ----------
 st.header("Customizable Decision Tree")
 st.markdown("Use the filtered data (excluding upcoming fights) to find the most informative splits.")
 
@@ -695,6 +695,14 @@ encoded_data = encoded_data.merge(opp_career, on=['FightID','Opponent'], how='le
 opp_days = encoded_data[['FightID','Fighter','DaysSincePrev','Avg3DaysGap']].rename(
     columns={'Fighter':'Opponent', 'DaysSincePrev':'Opponent_DaysSincePrev', 'Avg3DaysGap':'Opponent_Avg3DaysGap'})
 encoded_data = encoded_data.merge(opp_days, on=['FightID','Opponent'], how='left')
+
+# ---------- 🔍 DIAGNOSTIC: show all columns that contain "Title" ----------
+with st.expander("🔍 Title‑related columns in the data (click to see)"):
+    title_cols = [col for col in encoded_data.columns if 'title' in col.lower()]
+    if title_cols:
+        st.write("Columns found:", title_cols)
+    else:
+        st.warning("No columns containing 'Title' were found in the data. Prev1_Title is missing!")
 
 # ---------- Core numeric features ----------
 core_features = [
@@ -743,11 +751,13 @@ for prefix, col in outcome_cols.items():
 # ---------- Explicit binary filters (Yes → 1, No/NaN → 0) ----------
 binary_cols = ['Prev1_Title', 'Opponent_Prev1_Title', 'HometownFighter', 'Opponent_Hometown']
 for col in binary_cols:
-    if col not in encoded_data.columns:
-        continue
-    clean_col = col + '_clean'
-    encoded_data[clean_col] = encoded_data[col].astype(str).str.strip().str.lower().map({'yes': 1}).fillna(0).astype(int)
-    feature_cols.append(clean_col)   # always include
+    if col in encoded_data.columns:
+        clean_col = col + '_clean'
+        encoded_data[clean_col] = encoded_data[col].astype(str).str.strip().str.lower().map({'yes': 1}).fillna(0).astype(int)
+        feature_cols.append(clean_col)
+    else:
+        # Column missing – skip
+        pass
 
 feature_cols = sorted(list(set(feature_cols)))
 
@@ -825,14 +835,6 @@ if build_clicked:
         'children': [],
         'depth': 0
     }
-
-# ---------- Show all available features (debug aid) ----------
-with st.expander("🔍 Feature list (click to see all)"):
-    # Highlight binary columns
-    binary_features = [c for c in feature_cols if c.endswith('_clean')]
-    other_features = [c for c in feature_cols if not c.endswith('_clean')]
-    st.markdown("**Binary yes/no filters:** " + ", ".join(f"`{f}`" for f in binary_features) if binary_features else "None")
-    st.markdown("**Other features:** " + ", ".join(other_features))
 
 # ---------- Simple Black‑&‑White Tree Diagram ----------
 def draw_tree():
@@ -918,7 +920,6 @@ if st.session_state.root_built:
     st.subheader("Tree Diagram")
     draw_tree()
 
-    # Node selector for splitting
     node_ids = sorted(st.session_state.tree_nodes.keys())
     selected_node = st.selectbox("Select node to view / split", node_ids, format_func=lambda id: f"Node {id}")
     if selected_node is not None:
