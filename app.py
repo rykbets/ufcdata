@@ -738,22 +738,26 @@ for prefix, col in outcome_cols.items():
         if feat in encoded_data.columns and encoded_data[feat].nunique(dropna=True) >= 2:
             feature_cols.append(feat)
 
-# ---------- Robust binary encoding for title fight & hometown (on full display set) ----------
-binary_cols = ['Prev1_Title', 'Opponent_Prev1_Title', 'HometownFighter', 'Opponent_Hometown']
-for col in binary_cols:
-    if col not in encoded_data.columns:
-        continue
-    clean_col = col + '_clean'
-    encoded_data[clean_col] = encoded_data[col].astype(str).str.strip().str.lower().map({'yes': 1}).fillna(0).astype(int)
-    feature_cols.append(clean_col)
+# ---------- Factorize the same categorical filters used in the sidebar ----------
+categorical_cols = [
+    'Prev1_Title', 'Opponent_Prev1_Title',
+    'HometownFighter', 'Opponent_Hometown'
+]
+for col in categorical_cols:
+    if col in encoded_data.columns:
+        # factorize converts strings to 0,1,2…
+        encoded_data[col + '_enc'] = pd.factorize(encoded_data[col].fillna(''))[0]
+        # add even if only one unique value – still visible
+        feature_cols.append(col + '_enc')
 
+# Clean duplicate names and sort
 feature_cols = sorted(list(set(feature_cols)))
 
 # ---------- Filter to the actual tree data (Win/Loss only) ----------
 tree_data = encoded_data[encoded_data['Win?'].isin(['Yes','No'])].copy()
 tree_data['Target'] = (tree_data['Win?'] == 'Yes').astype(int)
 
-# ---------- Helper functions (unchanged) ----------
+# ---------- Helper functions ----------
 def find_best_split(subset, feature_pool):
     best_feat, best_thresh, best_gain = None, None, -1
     y = subset['Target'].values
@@ -834,9 +838,6 @@ if st.session_state.root_built:
         st.write(f"**Node {node_id}** (depth {depth}): {len(data)} samples, win={data['Target'].mean()*100:.1f}%")
 
         available_features = [f for f in feature_cols if f in data.columns]
-
-        with st.expander(f"📋 All {len(available_features)} features in this node (click to see)"):
-            st.write(", ".join(available_features))
 
         if node['feature'] is None:
             suggestions = suggest_features(data, available_features, top_k=3)
