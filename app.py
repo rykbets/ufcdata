@@ -679,7 +679,7 @@ fig = px.scatter(
 )
 st.plotly_chart(fig, use_container_width=True, key=f"scatter_{x_col}_{y_col}")
 
-# ---------- Decision Tree ----------
+# ---------- Decision Tree (CLEAN) ----------
 st.header("Customizable Decision Tree")
 st.markdown("Use the filtered data (excluding upcoming fights) to find the most informative splits.")
 
@@ -694,7 +694,7 @@ opp_days = encoded_data[['FightID','Fighter','DaysSincePrev','Avg3DaysGap']].ren
     columns={'Fighter':'Opponent', 'DaysSincePrev':'Opponent_DaysSincePrev', 'Avg3DaysGap':'Opponent_Avg3DaysGap'})
 encoded_data = encoded_data.merge(opp_days, on=['FightID','Opponent'], how='left')
 
-# ---------- Core numeric features ----------
+# ---------- 🔹 ONLY the stats you want – no raw shifted duplicates ----------
 core_features = [
     'Age', 'Height', 'Reach',
     'Age_opp', 'Height_opp', 'Reach_opp',
@@ -711,7 +711,7 @@ career_avg_cols = [col for col in encoded_data.columns if col.startswith('Career
 feature_cols = [c for c in core_features + career_avg_cols 
                 if c in encoded_data.columns and encoded_data[c].nunique(dropna=True) >= 2]
 
-# ---------- Descriptive binary features (previous outcomes) ----------
+# ---------- Binary outcome features (fighter + opponent, 3 shifts) ----------
 outcome_cols = {
     'Prev1': prev1_col,
     'Prev2': prev2_col,
@@ -738,7 +738,7 @@ for prefix, col in outcome_cols.items():
         if feat in encoded_data.columns and encoded_data[feat].nunique(dropna=True) >= 2:
             feature_cols.append(feat)
 
-# ---------- Categorical filters from sidebar (always add) ----------
+# ---------- Categorical filters (always include) ----------
 categorical_cols = [
     'Prev1_Title', 'Opponent_Prev1_Title',
     'HometownFighter', 'Opponent_Hometown'
@@ -747,18 +747,11 @@ for col in categorical_cols:
     if col in encoded_data.columns:
         enc_col = col + '_enc'
         encoded_data[enc_col] = pd.factorize(encoded_data[col].fillna(''))[0]
-        feature_cols.append(enc_col)   # always add, even if constant
-    # else:
-    #   st.warning(f"Column '{col}' not found in data.")   # uncomment for debugging
+        feature_cols.append(enc_col)
 
-# Remove duplicates and sort
 feature_cols = sorted(list(set(feature_cols)))
 
-# ---------- Diagnostic: show all columns in the tree data ----------
-with st.expander("🔍 Show columns available for splitting"):
-    st.write(list(encoded_data.columns))
-
-# ---------- Filter to the actual tree data (Win/Loss only) ----------
+# ---------- Tree data (Win/Loss only) ----------
 tree_data = encoded_data[encoded_data['Win?'].isin(['Yes','No'])].copy()
 tree_data['Target'] = (tree_data['Win?'] == 'Yes').astype(int)
 
