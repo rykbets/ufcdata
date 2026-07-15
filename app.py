@@ -689,8 +689,6 @@ st.markdown("These insights are based on the currently filtered data and will on
 import hashlib, json
 
 def filter_hash():
-    # We need to capture every widget that influences `data`
-    # This is a representative list – you can add more if needed
     filter_state = {
         'wc': wc,
         'stance': stance,
@@ -730,9 +728,7 @@ def filter_hash():
         'career_win_pct': career_win_pct,
         'cur_odds': cur_odds,
         'prev_odds': prev_odds,
-        'include_debuts': include_debuts,   # though not used as filter, may be present
     }
-    # Convert to stable string and hash
     return hashlib.md5(json.dumps(filter_state, sort_keys=True, default=str).encode()).hexdigest()
 
 current_hash = filter_hash()
