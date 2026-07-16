@@ -830,18 +830,22 @@ else:
         if selected_fight_spider:
             fight_rows = all_upcoming[all_upcoming['FightID'] == selected_fight_spider]
             if len(fight_rows) == 2:
-                f1 = fight_rows.iloc[0]
-                f2 = fight_rows.iloc[1]
+                f1 = fight_rows.iloc[0]   # fighter 1
+                f2 = fight_rows.iloc[1]   # fighter 2 (opponent)
+
+                # Build values for both fighters, filling NaN with 0
+                f1_vals = [f1[var] if pd.notna(f1[var]) else 0 for var in selected_vars]
+                f2_vals = [f2[var] if pd.notna(f2[var]) else 0 for var in selected_vars]
 
                 fig_radar = go.Figure()
                 fig_radar.add_trace(go.Scatterpolar(
-                    r=[f1[var] for var in selected_vars],
+                    r=f1_vals,
                     theta=selected_vars,
                     fill='toself',
                     name=f1['Fighter']
                 ))
                 fig_radar.add_trace(go.Scatterpolar(
-                    r=[f2[var] for var in selected_vars],
+                    r=f2_vals,
                     theta=selected_vars,
                     fill='toself',
                     name=f2['Fighter']
