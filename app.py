@@ -737,11 +737,9 @@ st.header("Advanced Analysis")
 
 # ---------- 1. Feature Importance (Numerical Only) ----------
 st.subheader("Feature Importance – Numerical Features")
-# Use historical data (exclude upcoming) to compute mutual information
 hist_data = data[data['Win?'].isin(['Yes','No'])].copy()
 hist_data['Target'] = (hist_data['Win?'] == 'Yes').astype(int)
 
-# Build numerical feature list (same as before)
 core = [
     'Age', 'Height', 'Reach',
     'Age_opp', 'Height_opp', 'Reach_opp',
@@ -813,7 +811,6 @@ all_upcoming = all_fights_display[all_fights_display['Win?'].isna() | (all_fight
 if all_upcoming.empty:
     st.write("No upcoming fights in dataset.")
 else:
-    # Shared feature selection
     available_num = [c for c in numerical_features if c in all_upcoming.columns]
     if available_num:
         selected_vars = st.multiselect("Select up to 8 numerical variables", available_num,
@@ -822,7 +819,6 @@ else:
     else:
         selected_vars = []
 
-    # ---------- Spider chart + Similarity (shared metrics) ----------
     if selected_vars:
         up_ids = all_upcoming['FightID'].unique()
         selected_fight_spider = st.selectbox("Choose an upcoming fight", sorted(up_ids), key="spider_select")
@@ -835,14 +831,14 @@ else:
                 f1 = fight_rows.iloc[0]
                 f2 = fight_rows.iloc[1]
 
-                # Keep only metrics where BOTH fighters have non-NaN data
+                # Keep only metrics where BOTH fighters have non‑NaN data
                 valid_vars = []
                 for var in selected_vars:
                     if pd.notna(f1[var]) and pd.notna(f2[var]):
                         valid_vars.append(var)
 
                 if not valid_vars:
-                    st.warning("No common numerical data available for both fighters in the selected metrics.")
+                    st.warning("No common numerical data available for both fighters.")
                 else:
                     fig_radar = go.Figure()
                     fig_radar.add_trace(go.Scatterpolar(
@@ -886,7 +882,5 @@ else:
                         st.dataframe(res_df, use_container_width=True)
                     else:
                         st.warning("No historical fights with the selected metrics.")
-            else:
-                st.error("Could not load both fighters.")
     else:
         st.info("Select at least one numerical variable to enable comparison.")
