@@ -968,52 +968,65 @@ if not cat_mi_df.empty:
 else:
     st.write("No categorical columns with meaningful variation or no historical data to compute MI.")
 
-# ---------- Best R² Combinations ----------
-st.subheader("Best R² Variable Combinations")
-st.markdown("Find which variable pairs / triples explain each other best in the filtered data.")
+# ---------- Best R² Combinations for Predicting Win/Loss ----------
+st.subheader("Best R² Variable Combinations for Win/Loss")
+st.markdown("Find which single, pair, or triple of numerical features best explains the Win/Loss outcome (linear R²).")
 
 hist_for_r2 = data[data['Win?'].isin(['Yes','No'])].copy()
+hist_for_r2['WinNum'] = (hist_for_r2['Win?'] == 'Yes').astype(int)
+
 candidates = [c for c in numerical_features if c in hist_for_r2.columns and hist_for_r2[c].nunique(dropna=True) >= 2]
-if len(candidates) >= 2:
-    if st.button("Compute best R² combinations", key="compute_r2"):
+
+if len(candidates) >= 1:
+    if st.button("Compute best R² combinations for Win/Loss", key="compute_win_r2"):
         from sklearn.linear_model import LinearRegression
 
-        # ---- 2D (Y ~ X) ----
-        r2_2d_list = []
+        # --- Single variable ---
+        r2_single = []
+        for col in candidates:
+            sub = hist_for_r2[[col, 'WinNum']].dropna()
+            if len(sub) < 10:
+                continue
+            X = sub[[col]].values
+            y = sub['WinNum'].values
+            model = LinearRegression().fit(X, y)
+            r2_single.append({'Variables': col, 'R²': model.score(X, y)})
+        df1 = pd.DataFrame(r2_single).sort_values('R²', ascending=False).head(20)
+        st.write("**Top 20 Single Variables**")
+        st.dataframe(df1, use_container_width=True)
+
+        # --- Two variables ---
+        r2_two = []
         for x_col in candidates:
             for y_col in candidates:
                 if x_col == y_col:
                     continue
-                sub = hist_for_r2[[x_col, y_col]].dropna()
+                sub = hist_for_r2[[x_col, y_col, 'WinNum']].dropna()
                 if len(sub) < 10:
                     continue
-                X = sub[[x_col]].values
-                y = sub[y_col].values
+                X = sub[[x_col, y_col]].values
+                y = sub['WinNum'].values
                 model = LinearRegression().fit(X, y)
-                r2_2d_list.append({'X': x_col, 'Y': y_col, 'R²': model.score(X, y)})
-        df_2d = pd.DataFrame(r2_2d_list).sort_values('R²', ascending=False).head(20)
-        st.write("**Top 20 2‑D Regressions (Y ~ X)**")
-        st.dataframe(df_2d, use_container_width=True)
+                r2_two.append({'Variables': f"{x_col}, {y_col}", 'R²': model.score(X, y)})
+        df2 = pd.DataFrame(r2_two).sort_values('R²', ascending=False).head(20)
+        st.write("**Top 20 Two‑Variable Combinations**")
+        st.dataframe(df2, use_container_width=True)
 
-        # ---- 3D (Z ~ X + Y) ----
-        r2_3d_list = []
-        for x_col in candidates:
-            for y_col in candidates:
-                if x_col == y_col:
-                    continue
-                for z_col in candidates:
-                    if z_col in (x_col, y_col):
-                        continue
-                    sub = hist_for_r2[[x_col, y_col, z_col]].dropna()
-                    if len(sub) < 10:
-                        continue
-                    X = sub[[x_col, y_col]].values
-                    Z = sub[z_col].values
-                    model = LinearRegression().fit(X, Z)
-                    r2_3d_list.append({'X': x_col, 'Y': y_col, 'Z': z_col, 'R²': model.score(X, Z)})
-        df_3d = pd.DataFrame(r2_3d_list).sort_values('R²', ascending=False).head(20)
-        st.write("**Top 20 3‑D Regressions (Z ~ X + Y)**")
-        st.dataframe(df_3d, use_container_width=True)
+        # --- Three variables ---
+        r2_three = []
+        # Use itertools.combinations to avoid ordering duplicates and reduce compute
+        import itertools
+        for combo in itertools.combinations(candidates, 3):
+            sub = hist_for_r2[list(combo) + ['WinNum']].dropna()
+            if len(sub) < 10:
+                continue
+            X = sub[list(combo)].values
+            y = sub['WinNum'].values
+            model = LinearRegression().fit(X, y)
+            r2_three.append({'Variables': ', '.join(combo), 'R²': model.score(X, y)})
+        df3 = pd.DataFrame(r2_three).sort_values('R²', ascending=False).head(20)
+        st.write("**Top 20 Three‑Variable Combinations**")
+        st.dataframe(df3, use_container_width=True)
 else:
     st.warning("Not enough numerical features for R² analysis.")
 
