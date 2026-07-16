@@ -174,7 +174,7 @@ def load_full_data():
     stats_df['prev_wins'] = stats_df.groupby('Fighter')['cum_wins'].shift(1).fillna(0)
     stats_df['CareerWinPct'] = (stats_df['prev_wins'] / stats_df['prev_fights_count'].replace(0, np.nan)) * 100
 
-    # Merge back to full dataset (keep existing columns clean)
+    # Merge back to full dataset
     merge_cols = ['FightID','Fighter'] + [f'CareerAvg_{c}' for c in career_stat_cols] + ['CareerWinPct']
     for col in merge_cols:
         if col in fight_totals.columns and col not in ['FightID','Fighter']:
@@ -186,6 +186,12 @@ def load_full_data():
     for col in avg_cols:
         if col in fight_totals.columns:
             fight_totals[col] = fight_totals.groupby('Fighter')[col].ffill().bfill()
+
+    # ---------- ADD OPPONENT CAREER AVERAGES ----------
+    # We now have CareerAvg_* for each fighter. Join opponent's career averages.
+    opp_career = fight_totals[['FightID','Fighter'] + avg_cols].copy()
+    opp_career.rename(columns={'Fighter':'Opponent', **{c: f'Opponent_{c}' for c in avg_cols}}, inplace=True)
+    fight_totals = fight_totals.merge(opp_career, on=['FightID','Opponent'], how='left')
 
     # Now compute accuracy
     if 'CareerAvg_SS' in fight_totals.columns and 'CareerAvg_SSA' in fight_totals.columns:
@@ -698,7 +704,7 @@ color_map = {
     'Draw': 'gray'
 }
 
-# Build numerical feature list for regression (using filtered data)
+# Build numerical feature list for regression (include opponent career averages)
 core = [
     'Age', 'Height', 'Reach',
     'Age_opp', 'Height_opp', 'Reach_opp',
@@ -708,8 +714,9 @@ core = [
     'FighterOddsNum', 'PrevFighterOddsNum',
     'CareerWinPct'
 ]
-career_avg = [col for col in data.columns if col.startswith('CareerAvg_')]
-numerical_features = [c for c in core + career_avg if c in data.columns and data[c].nunique(dropna=True) >= 2]
+career_avg = [col for col in data.columns if col.startswith('CareerAvg_') and not col.startswith('Opponent_CareerAvg_')]
+opp_career_avg = [col for col in data.columns if col.startswith('Opponent_CareerAvg_')]
+numerical_features = [c for c in core + career_avg + opp_career_avg if c in data.columns and data[c].nunique(dropna=True) >= 2]
 
 available_reg = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
 if len(available_reg) >= 2:
@@ -812,21 +819,21 @@ else:
 # =========================================================================
 st.header("Fight Similarity & Comparison (All Data)")
 
-# Use the FULL upcoming dataset (all_fights_display), not the filtered one
 all_upcoming = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
 
 if all_upcoming.empty:
     st.write("No upcoming fights in dataset.")
 else:
-    # Collect numeric columns directly from the upcoming dataframe
+    # Collect numeric columns directly from the upcoming dataframe (now includes Opponent_CareerAvg_*)
     numeric_cols = [c for c in all_upcoming.columns if pd.api.types.is_numeric_dtype(all_upcoming[c])]
-    # Preferred list: physical, days, career averages, odds, fight numbers
     preferred = ['Age','Height','Reach','Age_opp','Height_opp','Reach_opp',
                  'AgeDiff','HeightDiff','ReachDiff',
                  'DaysSincePrev','Avg3DaysGap','FightNumber','Opponent_FightNumber',
-                 'FighterOddsNum','PrevFighterOddsNum','CareerWinPct']
+                 'FighterOddsNum','PrevFighterOddsNum','CareerWinPct',
+                 'Opponent_CareerWinPct']
     career_avg_cols = [c for c in numeric_cols if c.startswith('CareerAvg_')]
-    spider_vars = [c for c in preferred + career_avg_cols if c in numeric_cols]
+    opp_career_cols = [c for c in numeric_cols if c.startswith('Opponent_CareerAvg_')]
+    spider_vars = [c for c in preferred + career_avg_cols + opp_career_cols if c in numeric_cols]
 
     if spider_vars:
         selected_vars = st.multiselect("Select up to 8 numerical variables", spider_vars,
@@ -861,7 +868,7 @@ else:
                                         title=f"{f1['Fighter']} vs {f2['Fighter']}")
                 st.plotly_chart(fig_radar, use_container_width=True)
 
-                # Similarity scorer – use ALL historical fights (ignore filters)
+                # Similarity scorer – uses ALL historical fights (ignore filters)
                 hist_full = all_fights_display[all_fights_display['Win?'].isin(['Yes','No'])].dropna(subset=selected_vars)
                 if not hist_full.empty:
                     up_row = f1
