@@ -1041,62 +1041,64 @@ else:
     st.write("No categorical columns with meaningful variation or no historical data to compute MI.")
 
 # =========================================================================
-# SPIDER CHART (DIFFERENTIALS) + SIMILARITY (FILTERED DATA)
+# SPIDER CHART (DIFFERENTIALS) + SIMILARITY (FILTERED – complete fights only)
 # =========================================================================
 st.header("Fight Similarity & Comparison (Filtered)")
 
-upcoming_filtered = data[data['Win?'].isna() | (data['Win?'] == '')]
+# Upcoming mask – exactly as in the old working script
+upcoming_all = data[data['Win?'].isna() | (data['Win?'] == '')]
 
-if upcoming_filtered.empty:
+if upcoming_all.empty:
     st.write("No upcoming fights in the filtered dataset.")
 else:
-    numeric_cols = [c for c in upcoming_filtered.columns if pd.api.types.is_numeric_dtype(upcoming_filtered[c])]
+    # Keep only FightIDs that have exactly 2 rows (both fighters present)
+    fight_counts = upcoming_all.groupby('FightID').size()
+    complete_ids = fight_counts[fight_counts == 2].index
+    upcoming_complete = upcoming_all[upcoming_all['FightID'].isin(complete_ids)]
 
-    clean_cols = []
-    for col in numeric_cols:
-        if re.match(r'Prev\d+_', col):
-            continue
-        if col.startswith('Opponent_Prev'):
-            continue
-        clean_cols.append(col)
-
-    wanted_keys = [
-        'Age', 'Height', 'Reach',
-        'DaysSincePrev', 'Avg3DaysGap',
-        'FightNumber', 'Opponent_FightNumber',
-        'FighterOddsNum', 'PrevFighterOddsNum',
-        'CareerWinPct', 'CareerAvg_', 'Opponent_CareerAvg_',
-        '_Diff'
-    ]
-    spider_vars = sorted([
-        c for c in clean_cols
-        if any(c.startswith(k) or k in c for k in wanted_keys)
-    ])
-
-    if not spider_vars:
-        st.warning("No numeric variables found in upcoming data after filtering.")
+    if upcoming_complete.empty:
+        st.warning("No upcoming fight has both fighters after your current filters. Adjust your filters to see comparisons.")
     else:
-        selected_vars = st.multiselect(
-            "Select up to 8 variables",
-            spider_vars,
-            default=spider_vars[:5],
-            max_selections=8,
-            key="spider_select_vars"
-        )
+        numeric_cols = [c for c in upcoming_complete.columns if pd.api.types.is_numeric_dtype(upcoming_complete[c])]
+        clean_cols = []
+        for col in numeric_cols:
+            if re.match(r'Prev\d+_', col):
+                continue
+            if col.startswith('Opponent_Prev'):
+                continue
+            clean_cols.append(col)
 
-    if selected_vars:
-        up_ids = upcoming_filtered['FightID'].unique()
-        chosen_fight = st.selectbox(
-            "Choose an upcoming fight",
-            sorted(up_ids),
-            key="spider_fight"
-        )
+        wanted_keys = [
+            'Age', 'Height', 'Reach',
+            'DaysSincePrev', 'Avg3DaysGap',
+            'FightNumber', 'Opponent_FightNumber',
+            'FighterOddsNum', 'PrevFighterOddsNum',
+            'CareerWinPct', 'CareerAvg_', 'Opponent_CareerAvg_',
+            '_Diff'
+        ]
+        spider_vars = sorted([
+            c for c in clean_cols
+            if any(c.startswith(k) or k in c for k in wanted_keys)
+        ])
 
-        if chosen_fight:
-            fight_rows = upcoming_filtered[upcoming_filtered['FightID'] == chosen_fight]
-            if len(fight_rows) != 2:
-                st.error("Could not load both fighters.")
-            else:
+        if not spider_vars:
+            st.warning("No numeric variables found in upcoming data after filtering.")
+        else:
+            selected_vars = st.multiselect(
+                "Select up to 8 variables",
+                spider_vars,
+                default=spider_vars[:5],
+                max_selections=8,
+                key="spider_select_vars"
+            )
+
+        if selected_vars:
+            up_ids = sorted(upcoming_complete['FightID'].unique())
+            chosen_fight = st.selectbox("Choose an upcoming fight", up_ids, key="spider_fight")
+
+            if chosen_fight:
+                fight_rows = upcoming_complete[upcoming_complete['FightID'] == chosen_fight]
+                # Guaranteed 2 rows because we filtered complete fights
                 f1 = fight_rows.iloc[0]
                 f2 = fight_rows.iloc[1]
 
