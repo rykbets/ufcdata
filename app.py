@@ -1112,77 +1112,26 @@ else:
     st.write("No categorical columns with meaningful variation.")
 
 # =========================================================================
-# SPIDER CHART – FULL INDEPENDENT FILTERS + LR/KNN + SIMILARITY + BAYESIAN WIN RATES
+# SPIDER CHART – CATEGORICAL FILTERS ONLY + LR/KNN + SIMILARITY + BAYESIAN WIN RATES
 # =========================================================================
 st.header("Fight Similarity & Comparison (Independent Filters)")
 
-# ---- Copy of all main sidebar filters for the spider chart ----
-st.subheader("Spider Chart Filters (applied only to this section)")
+# ---- Spider‑specific categorical filters ----
+st.subheader("Spider Chart Filters (applied only here)")
 
-col_sp1, col_sp2, col_sp3 = st.columns(3)
+col_sp1, col_sp2 = st.columns(2)
 
 with col_sp1:
     spider_wc = st.multiselect("Weight Class", sorted(all_fights_display['WC'].dropna().unique()), key="spider_wc")
     spider_stance = st.multiselect("Stance", sorted(all_fights_display['Stance'].dropna().unique()), key="spider_stance")
     spider_country = st.multiselect("Country", sorted(all_fights_display['Country'].dropna().unique()), key="spider_country")
     spider_sched_rounds = st.multiselect("Scheduled Rounds", sorted(all_fights_display['ScheduledRounds'].dropna().unique()), key="spider_sched")
-    spider_title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"], key="spider_title")
-    spider_hometown = st.selectbox("Hometown", ["All", "Yes", "No"], key="spider_home")
-    spider_opp_hometown = st.selectbox("Opp Hometown", ["All", "Yes", "No"], key="spider_opphome")
     spider_event_country = st.multiselect("Event Country", sorted(all_fights_display['EventCountry'].dropna().unique()), key="spider_eventc")
 
 with col_sp2:
-    spider_fn_min = st.number_input("Min Fight #", value=1, min_value=1, max_value=int(all_fights_display['FightNumber'].max()), key="spider_fn_min")
-    spider_fn_max = st.number_input("Max Fight #", value=int(all_fights_display['FightNumber'].max()), key="spider_fn_max")
-    spider_ofn_min = st.number_input("Opp Min Fight #", value=1, key="spider_ofn_min")
-    spider_ofn_max = st.number_input("Opp Max Fight #", value=int(all_fights_display['Opponent_FightNumber'].max()), key="spider_ofn_max")
-    spider_career_win_pct = st.slider("Career Win %", 0, 100, (0, 100), key="spider_career_win_pct")
-    spider_age = st.slider("Age", int(all_fights_display['Age'].min()), int(all_fights_display['Age'].max()), (int(all_fights_display['Age'].min()), int(all_fights_display['Age'].max())), key="spider_age")
-    spider_height = st.slider("Height (in)", int(all_fights_display['Height'].min()), int(all_fights_display['Height'].max()), (int(all_fights_display['Height'].min()), int(all_fights_display['Height'].max())), key="spider_height")
-    spider_reach = st.slider("Reach (in)", int(all_fights_display['Reach'].min()), int(all_fights_display['Reach'].max()), (int(all_fights_display['Reach'].min()), int(all_fights_display['Reach'].max())), key="spider_reach")
-
-with col_sp3:
-    if 'Age_opp' in all_fights_display.columns:
-        spider_age_opp = st.slider("Opponent Age", int(all_fights_display['Age_opp'].min()) if not all_fights_display['Age_opp'].isna().all() else 0,
-                                   int(all_fights_display['Age_opp'].max()) if not all_fights_display['Age_opp'].isna().all() else 0,
-                                   (int(all_fights_display['Age_opp'].min()) if not all_fights_display['Age_opp'].isna().all() else 0,
-                                    int(all_fights_display['Age_opp'].max()) if not all_fights_display['Age_opp'].isna().all() else 0),
-                                   key="spider_age_opp")
-    else:
-        spider_age_opp = (0, 0)
-    if 'Height_opp' in all_fights_display.columns:
-        spider_height_opp = st.slider("Opponent Height (in)", int(all_fights_display['Height_opp'].min()) if not all_fights_display['Height_opp'].isna().all() else 0,
-                                      int(all_fights_display['Height_opp'].max()) if not all_fights_display['Height_opp'].isna().all() else 0,
-                                      (int(all_fights_display['Height_opp'].min()) if not all_fights_display['Height_opp'].isna().all() else 0,
-                                       int(all_fights_display['Height_opp'].max()) if not all_fights_display['Height_opp'].isna().all() else 0),
-                                      key="spider_height_opp")
-    else:
-        spider_height_opp = (0, 0)
-    if 'Reach_opp' in all_fights_display.columns:
-        spider_reach_opp = st.slider("Opponent Reach (in)", int(all_fights_display['Reach_opp'].min()) if not all_fights_display['Reach_opp'].isna().all() else 0,
-                                     int(all_fights_display['Reach_opp'].max()) if not all_fights_display['Reach_opp'].isna().all() else 0,
-                                     (int(all_fights_display['Reach_opp'].min()) if not all_fights_display['Reach_opp'].isna().all() else 0,
-                                      int(all_fights_display['Reach_opp'].max()) if not all_fights_display['Reach_opp'].isna().all() else 0),
-                                     key="spider_reach_opp")
-    else:
-        spider_reach_opp = (0, 0)
-
-    spider_age_diff = st.slider("Age Diff", int(all_fights_display['AgeDiff'].min()), int(all_fights_display['AgeDiff'].max()), (int(all_fights_display['AgeDiff'].min()), int(all_fights_display['AgeDiff'].max())), key="spider_age_diff")
-    spider_height_diff = st.slider("Height Diff (in)", int(all_fights_display['HeightDiff'].min()), int(all_fights_display['HeightDiff'].max()), (int(all_fights_display['HeightDiff'].min()), int(all_fights_display['HeightDiff'].max())), key="spider_height_diff")
-    spider_reach_diff = st.slider("Reach Diff (in)", int(all_fights_display['ReachDiff'].min()), int(all_fights_display['ReachDiff'].max()), (int(all_fights_display['ReachDiff'].min()), int(all_fights_display['ReachDiff'].max())), key="spider_reach_diff")
-    spider_days = st.slider("Days Since Prev", int(all_fights_display['DaysSincePrev'].min()), int(all_fights_display['DaysSincePrev'].max()), (int(all_fights_display['DaysSincePrev'].min()), int(all_fights_display['DaysSincePrev'].max())), key="spider_days")
-    spider_avg3 = st.slider("Avg 3‑Fight Gap", int(all_fights_display['Avg3DaysGap'].min()), int(all_fights_display['Avg3DaysGap'].max()), (int(all_fights_display['Avg3DaysGap'].min()), int(all_fights_display['Avg3DaysGap'].max())), key="spider_avg3")
-
-    # Odds
-    if not all_fights_display['FighterOddsNum'].isna().all():
-        spider_cur_odds = st.slider("Fighter Odds", int(all_fights_display['FighterOddsNum'].min()), int(all_fights_display['FighterOddsNum'].max()), (int(all_fights_display['FighterOddsNum'].min()), int(all_fights_display['FighterOddsNum'].max())), step=10, key="spider_odds")
-    else:
-        spider_cur_odds = (0, 0)
-    if not all_fights_display['PrevFighterOddsNum'].isna().all():
-        spider_prev_odds = st.slider("Prev Fight Odds", int(all_fights_display['PrevFighterOddsNum'].min()), int(all_fights_display['PrevFighterOddsNum'].max()), (int(all_fights_display['PrevFighterOddsNum'].min()), int(all_fights_display['PrevFighterOddsNum'].max())), step=10, key="spider_prevodds")
-    else:
-        spider_prev_odds = (0, 0)
-
+    spider_title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"], key="spider_title")
+    spider_hometown = st.selectbox("Hometown", ["All", "Yes", "No"], key="spider_home")
+    spider_opp_hometown = st.selectbox("Opp Hometown", ["All", "Yes", "No"], key="spider_opphome")
     spider_new_wc = st.checkbox("New Weight Class", key="spider_new_wc")
     spider_skip_nc = st.checkbox("Skip NC outcomes", key="spider_skip_nc")
     spider_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
@@ -1198,11 +1147,10 @@ else:
     spider_career1_col = 'Career1_Outcome_raw'; spider_career2_col = 'Career2_Outcome_raw'; spider_career3_col = 'Career3_Outcome_raw'
     spider_opp_career1_col = 'Opponent_Career1_Outcome_raw'; spider_opp_career2_col = 'Opponent_Career2_Outcome_raw'; spider_opp_career3_col = 'Opponent_Career3_Outcome_raw'
 
-# Previous outcome widgets (spider)
 all_outcomes_raw_spider = sorted(all_fights[spider_prev1_col].dropna().unique())
 all_outcomes_career_spider = sorted(all_fights[spider_career1_col].dropna().unique())
 
-with st.expander("Spider Previous Outcomes"):
+with st.expander("Previous Outcomes (Spider)"):
     spider_prev1 = st.multiselect("Prev Fight 1", all_outcomes_raw_spider, key="spider_prev1")
     spider_prev2 = st.multiselect("Prev Fight 2", all_outcomes_raw_spider, key="spider_prev2")
     spider_prev3 = st.multiselect("Prev Fight 3", all_outcomes_raw_spider, key="spider_prev3")
@@ -1219,7 +1167,7 @@ with st.expander("Spider Previous Outcomes"):
 # ---- Apply spider filters to all_fights_display copy ----
 spider_data = all_fights_display.copy()
 
-# Categorical
+# Categorical filters
 if spider_wc: spider_data = spider_data[spider_data['WC'].isin(spider_wc)]
 if spider_stance: spider_data = spider_data[spider_data['Stance'].isin(spider_stance)]
 if spider_country: spider_data = spider_data[spider_data['Country'].isin(spider_country)]
@@ -1228,37 +1176,6 @@ if spider_title_fight != "All": spider_data = spider_data[spider_data['Title'] =
 if spider_hometown != "All": spider_data = spider_data[spider_data['HometownFighter'] == spider_hometown]
 if spider_opp_hometown != "All": spider_data = spider_data[spider_data['Opponent_Hometown'] == spider_opp_hometown]
 if spider_event_country: spider_data = spider_data[spider_data['EventCountry'].isin(spider_event_country)]
-
-# Fight numbers
-spider_data = spider_data[(spider_data['FightNumber'] >= spider_fn_min) & (spider_data['FightNumber'] <= spider_fn_max)]
-spider_data = spider_data[(spider_data['Opponent_FightNumber'] >= spider_ofn_min) & (spider_data['Opponent_FightNumber'] <= spider_ofn_max)]
-# Career win %
-spider_data = spider_data[(spider_data['CareerWinPct'] >= spider_career_win_pct[0]) & (spider_data['CareerWinPct'] <= spider_career_win_pct[1])]
-# Physical
-spider_data = spider_data[(spider_data['Age'] >= spider_age[0]) & (spider_data['Age'] <= spider_age[1])]
-spider_data = spider_data[(spider_data['Height'] >= spider_height[0]) & (spider_data['Height'] <= spider_height[1])]
-spider_data = spider_data[(spider_data['Reach'] >= spider_reach[0]) & (spider_data['Reach'] <= spider_reach[1])]
-if 'Age_opp' in spider_data.columns:
-    spider_data = spider_data[(spider_data['Age_opp'] >= spider_age_opp[0]) & (spider_data['Age_opp'] <= spider_age_opp[1])]
-if 'Height_opp' in spider_data.columns:
-    spider_data = spider_data[(spider_data['Height_opp'] >= spider_height_opp[0]) & (spider_data['Height_opp'] <= spider_height_opp[1])]
-if 'Reach_opp' in spider_data.columns:
-    spider_data = spider_data[(spider_data['Reach_opp'] >= spider_reach_opp[0]) & (spider_data['Reach_opp'] <= spider_reach_opp[1])]
-
-spider_data = spider_data[(spider_data['AgeDiff'] >= spider_age_diff[0]) & (spider_data['AgeDiff'] <= spider_age_diff[1])]
-spider_data = spider_data[(spider_data['HeightDiff'] >= spider_height_diff[0]) & (spider_data['HeightDiff'] <= spider_height_diff[1])]
-spider_data = spider_data[(spider_data['ReachDiff'] >= spider_reach_diff[0]) & (spider_data['ReachDiff'] <= spider_reach_diff[1])]
-spider_data = spider_data[(spider_data['DaysSincePrev'] >= spider_days[0]) & (spider_data['DaysSincePrev'] <= spider_days[1])]
-spider_data = spider_data[(spider_data['Avg3DaysGap'] >= spider_avg3[0]) & (spider_data['Avg3DaysGap'] <= spider_avg3[1])]
-
-# Odds
-if not all_fights_display['FighterOddsNum'].isna().all():
-    spider_data = spider_data.dropna(subset=['FighterOddsNum'])
-    spider_data = spider_data[(spider_data['FighterOddsNum'] >= spider_cur_odds[0]) & (spider_data['FighterOddsNum'] <= spider_cur_odds[1])]
-if not all_fights_display['PrevFighterOddsNum'].isna().all():
-    spider_data = spider_data.dropna(subset=['PrevFighterOddsNum'])
-    spider_data = spider_data[(spider_data['PrevFighterOddsNum'] >= spider_prev_odds[0]) & (spider_data['PrevFighterOddsNum'] <= spider_prev_odds[1])]
-
 if spider_new_wc: spider_data = spider_data[spider_data['IsNewWeightClass'] == True]
 
 # Title/previous outcomes
@@ -1283,7 +1200,7 @@ for opp_shift, opp_widget in [(1, spider_opp_prev1), (2, spider_opp_prev2), (3, 
         if use_col in spider_data.columns and opp_widget:
             spider_data = spider_data[spider_data[use_col].isin(opp_widget)]
 
-# ---- Now extract upcoming fights from spider_data ----
+# ---- Extract upcoming fights from spider_data ----
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
 
 if spider_upcoming.empty:
@@ -1298,7 +1215,7 @@ else:
     else:
         spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])]
 
-        # Variable selector
+        # Variable selector – includes all numerical variables, including those that would have been sliders
         numeric_cols = [c for c in spider_upcoming.columns if pd.api.types.is_numeric_dtype(spider_upcoming[c])]
         clean_cols = [c for c in numeric_cols if not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')]
         wanted_keys = [
