@@ -749,64 +749,69 @@ st.sidebar.header("Recent Performance Settings")
 recent_window = st.sidebar.slider("Recent fights window", 1, 10, 5, key="recent_win")
 prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight")
 
-# We'll compute recent stats on the FULL historical data (all_fights_display)
-# but we'll keep the original data untouched until we merge at the end.
+# Work on full historical data to compute per‑fighter recent stats
 hist_full = all_fights_display[all_fights_display['Win?'].isin(['Yes','No'])].copy()
 hist_full = hist_full.sort_values(['Fighter','FightDate'])
 
-# 1. Compute overall (career) win rate per fighter as a Series
+# 1. Overall (career) win rate per fighter → Series indexed by Fighter
 overall_winrate = hist_full.groupby('Fighter')['Win?'].apply(
     lambda x: (x == 'Yes').mean() * 100
-).rename('OverallWinRate')
+)
 
-# 2. Compute recent win rate and recent averages per fighter, then concatenate all results
+# 2. Overall career averages per fighter → dictionary of Series
+overall_avg = {}
+for col in career_avg:
+    if col in hist_full.columns:
+        overall_avg[col] = hist_full.groupby('Fighter')[col].mean()
+
+# 3. Recent stats – we'll build a list of DataFrames, one per fighter, and concatenate
 recent_records = []
 for fighter, grp in hist_full.groupby('Fighter', sort=False):
     grp = grp.copy()
     wins = (grp['Win?'] == 'Yes').astype(int)
-    # rolling window for wins and total fights
+    # Recent win rate (rolling window, shifted to use only previous fights)
     grp['RecentWins'] = wins.rolling(recent_window, min_periods=1).sum().shift(1)
     grp['RecentTotal'] = wins.rolling(recent_window, min_periods=1).count().shift(1)
     grp['RecentWinRate'] = (grp['RecentWins'] / grp['RecentTotal'].replace(0, np.nan)) * 100
-    # recent averages for career stats
+    # Recent averages for career stats
     for col in career_avg:
         if col in grp.columns:
             grp[f'Recent_{col}'] = grp[col].rolling(recent_window, min_periods=1).mean().shift(1)
-    # keep only the needed columns
+    # Keep only the needed columns
     keep = ['FightID','Fighter','RecentWinRate'] + [f'Recent_{col}' for col in career_avg if f'Recent_{col}' in grp.columns]
     recent_records.append(grp[keep])
 
 recent_df = pd.concat(recent_records, ignore_index=True)
 
-# 3. Merge overall win rate into recent_df
-recent_df = recent_df.merge(overall_winrate, on='Fighter', how='left')
+# 4. Attach overall stats using .map() (safe, no merge issues)
+recent_df['OverallWinRate'] = recent_df['Fighter'].map(overall_winrate)
+for col in career_avg:
+    if col in overall_avg:
+        recent_df[f'OverallAvg_{col}'] = recent_df['Fighter'].map(overall_avg[col])
 
-# 4. Bayesian shrinkage
+# 5. Bayesian shrinkage for recent win rate
 recent_df['RecentWinRate_Shrunk'] = (
     (recent_df['OverallWinRate'] * prior_weight + recent_df['RecentWinRate'].fillna(0) * recent_window)
     / (prior_weight + recent_window)
 )
 
-# shrunken recent averages using overall career average as prior
+# 6. Shrunken recent averages using overall career average as prior
 for col in career_avg:
-    overall_avg = hist_full.groupby('Fighter')[col].transform('mean').rename(f'OverallAvg_{col}')
-    recent_df = recent_df.merge(overall_avg, on='Fighter', how='left')
     recent_col = f'Recent_{col}'
-    if recent_col in recent_df.columns:
+    if recent_col in recent_df.columns and f'OverallAvg_{col}' in recent_df.columns:
         recent_df[f'{recent_col}_Shrunk'] = (
             (recent_df[f'OverallAvg_{col}'] * prior_weight + recent_df[recent_col].fillna(0) * recent_window)
             / (prior_weight + recent_window)
         )
 
-# 5. Merge the shrunken features into the filtered data (only the columns we need)
+# 7. Merge the new shrunken features into the filtered data
 shrink_cols = ['FightID','Fighter','RecentWinRate_Shrunk'] + \
               [f'Recent_{col}_Shrunk' for col in career_avg if f'Recent_{col}' in recent_df.columns]
 data = data.merge(recent_df[shrink_cols], on=['FightID','Fighter'], how='left')
 
-# Add the new shrunken features to numerical_features so they become selectable
+# 8. Add the new shrunken features to numerical_features so they become selectable
 new_shrink_features = [c for c in shrink_cols if c not in ['FightID','Fighter'] and c in data.columns]
 numerical_features = numerical_features + new_shrink_features
-
 # ---------- 2D Win/Loss Prediction (Logistic Regression + KNN) ----------
 st.header("2D Win/Loss Prediction")
 st.markdown("Select two predictor variables. Logistic Regression and KNN models are fitted. Log‑loss, Brier score, and win probability are shown.")
