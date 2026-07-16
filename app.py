@@ -755,7 +755,10 @@ if len(available_pred) >= 2:
         pred_y = st.selectbox("Predictor Y", available_pred, key="pred_y")
 
     if pred_x and pred_y:
+        # Build the plot dataset (filtered fights + upcoming)
         plot_data = data[[pred_x, pred_y, 'DetailedResult', 'Fight', 'Win?']].copy()
+
+        # Historical data for model fitting
         hist = data[data['Win?'].isin(['Yes','No'])].copy()
         hist = hist[[pred_x, pred_y, 'Win?']].dropna()
         if len(hist) < 10 or hist['Win?'].nunique() < 2:
@@ -767,16 +770,21 @@ if len(available_pred) >= 2:
 
             logreg = LogisticRegression(max_iter=1000)
             logreg.fit(X_hist, y_hist)
+
+            # AUC
             y_prob = logreg.predict_proba(X_hist)[:, 1]
             auc = roc_auc_score(y_hist, y_prob)
 
+            # Decision boundary grid – uses exactly the two features the model was trained on
             x_min, x_max = X_hist[:, 0].min() - 0.5, X_hist[:, 0].max() + 0.5
             y_min, y_max = X_hist[:, 1].min() - 0.5, X_hist[:, 1].max() + 0.5
             xx, yy = np.meshgrid(np.linspace(x_min, x_max, 100),
                                  np.linspace(y_min, y_max, 100))
-            Z = logreg.predict_proba(np.c_[xx.ravel(), yy.ravel()])[:, 1]
-            Z = Z.reshape(xx.shape)
+            # predict_proba expects the same two columns in the same order as training
+            grid_points = np.c_[xx.ravel(), yy.ravel()]
+            Z = logreg.predict_proba(grid_points)[:, 1].reshape(xx.shape)
 
+            # Scatter plot with decision contour
             fig = px.scatter(
                 plot_data, x=pred_x, y=pred_y,
                 color='DetailedResult',
@@ -796,6 +804,7 @@ if len(available_pred) >= 2:
             st.plotly_chart(fig, use_container_width=True)
             st.caption(f"Logistic regression AUC: {auc:.3f}  (predicting Win from {pred_x} and {pred_y})")
 
+            # Win Probability Estimate
             st.subheader("Win Probability Estimate")
             all_upcoming_reg = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
             if not all_upcoming_reg.empty:
@@ -817,7 +826,6 @@ if len(available_pred) >= 2:
                 st.write("No upcoming fights available.")
 else:
     st.warning("Not enough numerical features for win/loss prediction.")
-
 # ---------- 3D Scatterplot (No R² plane) ----------
 st.header("3D Variable Relationships")
 st.markdown("Select three numerical variables to view their relationship with win/loss.")
