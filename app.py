@@ -1041,67 +1041,66 @@ else:
     st.write("No categorical columns with meaningful variation or no historical data to compute MI.")
 
 # =========================================================================
-# SPIDER CHART (DIFFERENTIALS) + SIMILARITY (FILTERED – COMPLETE FIGHTS ONLY)
+# SPIDER CHART (DIFFERENTIALS) + SIMILARITY (FILTERED DATA)
 # =========================================================================
 st.header("Fight Similarity & Comparison (Filtered)")
 
-# Upcoming = any row where Win? is not a known win or loss
-upcoming_all = data[~data['Win?'].isin(['Yes', 'No'])]
+upcoming_filtered = data[data['Win?'].isna() | (data['Win?'] == '')]
 
-if upcoming_all.empty:
+if upcoming_filtered.empty:
     st.write("No upcoming fights in the filtered dataset.")
 else:
-    # Keep only fights that still have BOTH fighters (exactly 2 rows)
-    fight_counts = upcoming_all.groupby('FightID').size()
-    complete_ids = fight_counts[fight_counts == 2].index
-    upcoming_complete = upcoming_all[upcoming_complete['FightID'].isin(complete_ids)]
+    numeric_cols = [c for c in upcoming_filtered.columns if pd.api.types.is_numeric_dtype(upcoming_filtered[c])]
 
-    if upcoming_complete.empty:
-        st.warning("No upcoming fight has both fighters after your current filters. Adjust your filters to see comparisons.")
+    clean_cols = []
+    for col in numeric_cols:
+        if re.match(r'Prev\d+_', col):
+            continue
+        if col.startswith('Opponent_Prev'):
+            continue
+        clean_cols.append(col)
+
+    wanted_keys = [
+        'Age', 'Height', 'Reach',
+        'DaysSincePrev', 'Avg3DaysGap',
+        'FightNumber', 'Opponent_FightNumber',
+        'FighterOddsNum', 'PrevFighterOddsNum',
+        'CareerWinPct', 'CareerAvg_', 'Opponent_CareerAvg_',
+        '_Diff'
+    ]
+    spider_vars = sorted([
+        c for c in clean_cols
+        if any(c.startswith(k) or k in c for k in wanted_keys)
+    ])
+
+    if not spider_vars:
+        st.warning("No numeric variables found in upcoming data after filtering.")
     else:
-        # Build numeric variable list from the available columns
-        numeric_cols = [c for c in upcoming_complete.columns if pd.api.types.is_numeric_dtype(upcoming_complete[c])]
-        clean_cols = []
-        for col in numeric_cols:
-            if re.match(r'Prev\d+_', col) or col.startswith('Opponent_Prev'):
-                continue
-            clean_cols.append(col)
+        selected_vars = st.multiselect(
+            "Select up to 8 variables",
+            spider_vars,
+            default=spider_vars[:5],
+            max_selections=8,
+            key="spider_select_vars"
+        )
 
-        wanted_keys = [
-            'Age', 'Height', 'Reach',
-            'DaysSincePrev', 'Avg3DaysGap',
-            'FightNumber', 'Opponent_FightNumber',
-            'FighterOddsNum', 'PrevFighterOddsNum',
-            'CareerWinPct', 'CareerAvg_', 'Opponent_CareerAvg_',
-            '_Diff'
-        ]
-        spider_vars = sorted([
-            c for c in clean_cols
-            if any(c.startswith(k) or k in c for k in wanted_keys)
-        ])
+    if selected_vars:
+        up_ids = upcoming_filtered['FightID'].unique()
+        chosen_fight = st.selectbox(
+            "Choose an upcoming fight",
+            sorted(up_ids),
+            key="spider_fight"
+        )
 
-        if not spider_vars:
-            st.warning("No numeric variables found in upcoming data.")
-        else:
-            selected_vars = st.multiselect(
-                "Select up to 8 variables",
-                spider_vars,
-                default=spider_vars[:5],
-                max_selections=8,
-                key="spider_vars"
-            )
-
-        if selected_vars:
-            up_ids = sorted(upcoming_complete['FightID'].unique())
-            chosen_fight = st.selectbox("Choose an upcoming fight", up_ids, key="spider_fight")
-
-            if chosen_fight:
-                fight_rows = upcoming_complete[upcoming_complete['FightID'] == chosen_fight]
+        if chosen_fight:
+            fight_rows = upcoming_filtered[upcoming_filtered['FightID'] == chosen_fight]
+            if len(fight_rows) != 2:
+                st.error("Could not load both fighters.")
+            else:
                 f1 = fight_rows.iloc[0]
                 f2 = fight_rows.iloc[1]
 
-                # Compute differentials (Fighter 1 minus Fighter 2)
-                radar_vals = []
+                radar_values = []
                 for var in selected_vars:
                     if var.endswith('_Diff') or var in {'AgeDiff', 'HeightDiff', 'ReachDiff'}:
                         val = f1[var] if pd.notna(f1[var]) else 0
@@ -1109,36 +1108,40 @@ else:
                         v1 = f1[var] if pd.notna(f1[var]) else 0
                         v2 = f2[var] if pd.notna(f2[var]) else 0
                         val = v1 - v2
-                    radar_vals.append(val)
+                    radar_values.append(val)
 
-                fig = go.Figure()
-                fig.add_trace(go.Scatterpolar(
-                    r=radar_vals,
+                fig_radar = go.Figure()
+                fig_radar.add_trace(go.Scatterpolar(
+                    r=radar_values,
                     theta=selected_vars,
                     fill='toself',
                     name=f"{f1['Fighter']} advantage"
                 ))
-                fig.update_layout(
+                fig_radar.update_layout(
                     polar=dict(radialaxis=dict(visible=True)),
                     title=f"Advantage: {f1['Fighter']} vs {f2['Fighter']}"
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig_radar, use_container_width=True)
 
                 # Similarity scorer (uses filtered historical data)
-                hist_filt = data[data['Win?'].isin(['Yes', 'No'])].dropna(subset=selected_vars)
-                if not hist_filt.empty:
-                    X_hist = hist_filt[selected_vars].values
+                hist_filtered = data[data['Win?'].isin(['Yes', 'No'])].dropna(subset=selected_vars)
+                if not hist_filtered.empty:
+                    up_row = f1
+                    X_hist = hist_filtered[selected_vars].values
                     scaler = StandardScaler()
-                    X_scaled = scaler.fit_transform(X_hist)
-                    up_vec = scaler.transform(f1[selected_vars].values.reshape(1, -1))
-                    dists = cdist(up_vec, X_scaled, metric='euclidean').flatten()
-                    similarity = 100 * (1 - dists / (dists.max() or 1))
+                    X_hist_scaled = scaler.fit_transform(X_hist)
+                    up_vec = up_row[selected_vars].values.reshape(1, -1)
+                    up_scaled = scaler.transform(up_vec)
 
-                    res_df = hist_filt[['FightDate','Fighter','Opponent','WC','Win?','Method']].copy()
+                    dists = cdist(up_scaled, X_hist_scaled, metric='euclidean').flatten()
+                    max_dist = dists.max() if dists.max() > 0 else 1
+                    similarity = 100 * (1 - dists / max_dist)
+
+                    res_df = hist_filtered[['FightDate', 'Fighter', 'Opponent', 'WC', 'Win?', 'Method']].copy()
                     res_df['Similarity'] = similarity.round(1)
                     res_df = res_df.sort_values('Similarity', ascending=False).head(20)
 
-                    st.write(f"**Most similar historical fights to {f1['Fighter']}**")
+                    st.write(f"**Most similar historical fights to {up_row['Fighter']}**")
                     st.dataframe(res_df, use_container_width=True)
 
                     high_sim = res_df[res_df['Similarity'] >= 90]
@@ -1151,4 +1154,4 @@ else:
                     else:
                         st.caption("No historical fight with ≥90% similarity.")
                 else:
-                    st.warning("No complete historical fights for similarity.")
+                    st.warning("No complete historical fights for similarity in the filtered data.")
