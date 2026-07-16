@@ -847,6 +847,7 @@ if len(three_d_features) >= 3:
             )
             st.plotly_chart(fig3d, use_container_width=True)
 
+            # Win probability + AUC using all three variables (X,Y,Z)
             st.subheader("Win Probability using X, Y, Z")
             all_upcoming_3d = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
             if not all_upcoming_3d.empty:
@@ -869,9 +870,17 @@ if len(three_d_features) >= 3:
                                 if len(np.unique(y_hist3d)) >= 2:
                                     logreg3d = LogisticRegression()
                                     logreg3d.fit(X_hist3d, y_hist3d)
+                                    # Compute AUC on the training data
+                                    y_prob3d = logreg3d.predict_proba(X_hist3d)[:, 1]
+                                    auc3d = roc_auc_score(y_hist3d, y_prob3d)
+
                                     up_val3d = np.array([fighter_row[feats_3d].values])
                                     prob3d = logreg3d.predict_proba(up_val3d)[0, 1]
-                                    st.metric(label=f"Win probability for {fighter_row['Fighter']} (using X,Y,Z)", value=f"{prob3d:.1%}")
+                                    col_a, col_b = st.columns(2)
+                                    with col_a:
+                                        st.metric(label=f"Win probability for {fighter_row['Fighter']}", value=f"{prob3d:.1%}")
+                                    with col_b:
+                                        st.metric(label="Model AUC (historical)", value=f"{auc3d:.3f}")
                                 else:
                                     st.warning("Target variable has no variation.")
                         else:
