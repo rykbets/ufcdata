@@ -970,30 +970,16 @@ else:
 
 # ---------- Best R² Combinations for Predicting Win/Loss ----------
 st.subheader("Best R² Variable Combinations for Win/Loss")
-st.markdown("Find which single, pair, or triple of numerical features best explains the Win/Loss outcome (linear R²).")
+st.markdown("Find which pairs / triples of numerical features best explain the Win/Loss outcome (linear R²).")
 
 hist_for_r2 = data[data['Win?'].isin(['Yes','No'])].copy()
 hist_for_r2['WinNum'] = (hist_for_r2['Win?'] == 'Yes').astype(int)
 
 candidates = [c for c in numerical_features if c in hist_for_r2.columns and hist_for_r2[c].nunique(dropna=True) >= 2]
 
-if len(candidates) >= 1:
+if len(candidates) >= 2:
     if st.button("Compute best R² combinations for Win/Loss", key="compute_win_r2"):
         from sklearn.linear_model import LinearRegression
-
-        # --- Single variable ---
-        r2_single = []
-        for col in candidates:
-            sub = hist_for_r2[[col, 'WinNum']].dropna()
-            if len(sub) < 10:
-                continue
-            X = sub[[col]].values
-            y = sub['WinNum'].values
-            model = LinearRegression().fit(X, y)
-            r2_single.append({'Variables': col, 'R²': model.score(X, y)})
-        df1 = pd.DataFrame(r2_single).sort_values('R²', ascending=False).head(20)
-        st.write("**Top 20 Single Variables**")
-        st.dataframe(df1, use_container_width=True)
 
         # --- Two variables ---
         r2_two = []
@@ -1013,9 +999,8 @@ if len(candidates) >= 1:
         st.dataframe(df2, use_container_width=True)
 
         # --- Three variables ---
-        r2_three = []
-        # Use itertools.combinations to avoid ordering duplicates and reduce compute
         import itertools
+        r2_three = []
         for combo in itertools.combinations(candidates, 3):
             sub = hist_for_r2[list(combo) + ['WinNum']].dropna()
             if len(sub) < 10:
@@ -1029,7 +1014,6 @@ if len(candidates) >= 1:
         st.dataframe(df3, use_container_width=True)
 else:
     st.warning("Not enough numerical features for R² analysis.")
-
 # =========================================================================
 # SPIDER CHART (DIFFERENTIALS) + SIMILARITY (FILTERED DATA)
 # =========================================================================
