@@ -759,7 +759,7 @@ recent_window = st.sidebar.slider("Recent fights window", 1, 100, 5, key="recent
 
 # ---------- 2D Win/Loss Prediction (Logistic Regression + KNN) ----------
 st.header("2D Win/Loss Prediction")
-st.markdown("Select two predictor variables. Logistic Regression and KNN models are fitted. Log‑loss, Brier score, and win probability are shown.")
+st.markdown("Select two predictor variables. Logistic Regression and KNN models are fitted. Log‑loss, Brier score, win probability, and dataset‑wide win rates are shown.")
 
 available_pred = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
 
@@ -796,6 +796,7 @@ if len(available_pred) >= 2:
             ll_knn = log_loss(y_hist, y_prob_knn)
             bs_knn = brier_score_loss(y_hist, y_prob_knn)
 
+            # Scatter plot
             plot_data = data[[pred_x, pred_y, 'DetailedResult', 'Fight', 'Win?']].copy()
             x_min, x_max = X_hist[:, 0].min() - 0.5, X_hist[:, 0].max() + 0.5
             y_min, y_max = X_hist[:, 1].min() - 0.5, X_hist[:, 1].max() + 0.5
@@ -844,35 +845,30 @@ if len(available_pred) >= 2:
                             prob_lr = logreg.predict_proba(up_val)[0, 1]
                             prob_knn = knn.predict_proba(up_val)[0, 1]
 
-                            # Win rates – use all historical rows that passed the main filters
-                            full_hist = data[data['Win?'].isin(['Yes','No'])]
-                            fighter_hist = full_hist[full_hist['Fighter'] == fighter_name].sort_values('FightDate')
-                            if len(fighter_hist) == 0:
-                                overall_wr = None
-                                recent_wr = None
-                                recent_cnt = 0
-                                shrunk = None
+                            # Dataset‑wide win rates (based on ALL filtered historical fights, before any feature drop)
+                            full_hist = data[data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
+                            if len(full_hist) > 0:
+                                overall_wr = (full_hist['Win?'] == 'Yes').mean() * 100
+                                recent = full_hist.tail(recent_window)
+                                recent_wr = (recent['Win?'] == 'Yes').mean() * 100 if len(recent) > 0 else 0.0
+                                # Bayesian shrinkage of model probability toward the overall win rate
+                                # shrunk = (prior_weight * overall_wr/100 + 1 * raw_prob) / (prior_weight + 1)
+                                shrunk_lr = (prior_weight * (overall_wr/100) + prob_lr) / (prior_weight + 1)
+                                shrunk_knn = (prior_weight * (overall_wr/100) + prob_knn) / (prior_weight + 1)
                             else:
-                                overall_wr = (fighter_hist['Win?'] == 'Yes').mean() * 100
-                                recent_fights = fighter_hist.tail(recent_window)
-                                recent_cnt = len(recent_fights)
-                                recent_wr = (recent_fights['Win?'] == 'Yes').mean() * 100 if recent_cnt > 0 else 0
-                                if recent_cnt > 0:
-                                    shrunk = (overall_wr * prior_weight + recent_wr * recent_cnt) / (prior_weight + recent_cnt)
-                                else:
-                                    shrunk = overall_wr
+                                overall_wr = recent_wr = 0.0
+                                shrunk_lr = shrunk_knn = None
 
-                            col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+                            col_p1, col_p2, col_p3 = st.columns(3)
                             with col_p1:
                                 st.metric("LR win prob", f"{prob_lr:.1%}")
+                                st.metric("LR shrunken", f"{shrunk_lr:.1%}" if shrunk_lr is not None else "N/A")
                             with col_p2:
                                 st.metric("KNN win prob", f"{prob_knn:.1%}")
+                                st.metric("KNN shrunken", f"{shrunk_knn:.1%}" if shrunk_knn is not None else "N/A")
                             with col_p3:
-                                st.metric("Overall Win%", f"{overall_wr:.1f}%" if overall_wr is not None else "N/A")
-                            with col_p4:
-                                st.metric("Recent Win%", f"{recent_wr:.1f}%" if recent_wr is not None else "N/A",
-                                          help=f"Last {recent_cnt} fights" if overall_wr is not None else "")
-                            st.metric("Shrunken Win%", f"{shrunk:.1f}%" if shrunk is not None else "N/A")
+                                st.metric("Overall Win% (dataset)", f"{overall_wr:.1f}%")
+                                st.metric("Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
                         else:
                             st.warning("Selected fighter does not have both predictor values.")
             else:
@@ -882,7 +878,7 @@ else:
 
 # ---------- 3D Win/Loss Prediction ----------
 st.header("3D Win/Loss Prediction")
-st.markdown("Select three numerical variables. Logistic Regression and KNN models are fitted. Log‑loss, Brier score, and win probability are shown.")
+st.markdown("Select three numerical variables. Logistic Regression and KNN models are fitted. Log‑loss, Brier score, win probability, and dataset‑wide win rates are shown.")
 
 three_d_features = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
 if len(three_d_features) >= 3:
@@ -952,35 +948,28 @@ if len(three_d_features) >= 3:
                             prob_lr = logreg3d.predict_proba(up_val3d)[0, 1]
                             prob_knn = knn3d.predict_proba(up_val3d)[0, 1]
 
-                            # Win rates from full filtered historical data
-                            full_hist = data[data['Win?'].isin(['Yes','No'])]
-                            fighter_hist = full_hist[full_hist['Fighter'] == fighter_name].sort_values('FightDate')
-                            if len(fighter_hist) == 0:
-                                overall_wr = None
-                                recent_wr = None
-                                recent_cnt = 0
-                                shrunk = None
+                            # Dataset‑wide win rates
+                            full_hist = data[data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
+                            if len(full_hist) > 0:
+                                overall_wr = (full_hist['Win?'] == 'Yes').mean() * 100
+                                recent = full_hist.tail(recent_window)
+                                recent_wr = (recent['Win?'] == 'Yes').mean() * 100 if len(recent) > 0 else 0.0
+                                shrunk_lr = (prior_weight * (overall_wr/100) + prob_lr) / (prior_weight + 1)
+                                shrunk_knn = (prior_weight * (overall_wr/100) + prob_knn) / (prior_weight + 1)
                             else:
-                                overall_wr = (fighter_hist['Win?'] == 'Yes').mean() * 100
-                                recent_fights = fighter_hist.tail(recent_window)
-                                recent_cnt = len(recent_fights)
-                                recent_wr = (recent_fights['Win?'] == 'Yes').mean() * 100 if recent_cnt > 0 else 0
-                                if recent_cnt > 0:
-                                    shrunk = (overall_wr * prior_weight + recent_wr * recent_cnt) / (prior_weight + recent_cnt)
-                                else:
-                                    shrunk = overall_wr
+                                overall_wr = recent_wr = 0.0
+                                shrunk_lr = shrunk_knn = None
 
-                            col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+                            col_p1, col_p2, col_p3 = st.columns(3)
                             with col_p1:
                                 st.metric("LR win prob", f"{prob_lr:.1%}")
+                                st.metric("LR shrunken", f"{shrunk_lr:.1%}" if shrunk_lr is not None else "N/A")
                             with col_p2:
                                 st.metric("KNN win prob", f"{prob_knn:.1%}")
+                                st.metric("KNN shrunken", f"{shrunk_knn:.1%}" if shrunk_knn is not None else "N/A")
                             with col_p3:
-                                st.metric("Overall Win%", f"{overall_wr:.1f}%" if overall_wr is not None else "N/A")
-                            with col_p4:
-                                st.metric("Recent Win%", f"{recent_wr:.1f}%" if recent_wr is not None else "N/A",
-                                          help=f"Last {recent_cnt} fights" if overall_wr is not None else "")
-                            st.metric("Shrunken Win%", f"{shrunk:.1f}%" if shrunk is not None else "N/A")
+                                st.metric("Overall Win% (dataset)", f"{overall_wr:.1f}%")
+                                st.metric("Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
                         else:
                             st.warning("Selected fighter does not have all predictor values.")
             else:
