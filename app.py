@@ -7,6 +7,7 @@ import re
 import os
 import gdown
 import itertools
+import hashlib
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
@@ -614,6 +615,8 @@ if not upcoming_data_unfiltered.empty:
                 st.write(f"**Fight #:** {row['FightNumber']} | **Opp Fight #:** {row['Opponent_FightNumber']}")
                 st.write(f"**Days Since Prev:** {row['DaysSincePrev']:.0f} days  | **Avg 3‑Fight Gap:** {row['Avg3DaysGap']:.0f} days")
                 st.write(f"**Career Win %:** {row['CareerWinPct']:.1f}%")
+                if 'RecentWinRate_Shrunk' in row:
+                    st.write(f"**Recent Win Rate (shrunk):** {row['RecentWinRate_Shrunk']:.1f}%")
                 st.write(f"**Odds (Fighter/Opp):** {row['FighterOddsBFO']} / {row['OpponentOddsBFO']}")
 
                 st.write("**Career Averages (before this fight):**")
@@ -694,7 +697,7 @@ display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
 
 # =========================================================================
-# COMMON DEFINITIONS
+# COMMON DEFINITIONS & BAYESIAN SHRINKAGE
 # =========================================================================
 # Build clean numerical feature list (no Prev, no Opponent_Prev)
 core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
@@ -741,6 +744,67 @@ color_map = {
     'Draw': 'gray'
 }
 
+# ---------- Bayesian Shrinkage for Recent Performance ----------
+st.sidebar.header("Recent Performance Settings")
+recent_window = st.sidebar.slider("Recent fights window", 1, 10, 5, key="recent_win")
+prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight")
+
+# Compute recent win rate and recent averages for each fighter's last N fights
+# This is done on the full historical data (all_fights_display) to ensure consistency
+# Then merged back to the filtered 'data' so all models can use them.
+
+# We'll compute on all_fights_display to cover all fighters, then left join to data
+historical_full = all_fights_display[all_fights_display['Win?'].isin(['Yes','No'])].copy()
+historical_full = historical_full.sort_values(['Fighter','FightDate'])
+
+def compute_recent_stats(group, window):
+    wins = (group['Win?'] == 'Yes').astype(int)
+    recent_wins = wins.rolling(window, min_periods=1).sum().shift(1)  # previous fights only
+    recent_total = wins.rolling(window, min_periods=1).count().shift(1)
+    recent_winrate = (recent_wins / recent_total.replace(0, np.nan)) * 100
+    group['RecentWinRate'] = recent_winrate
+    # recent averages for key stats
+    for col in career_avg:
+        if col in group.columns:
+            group[f'Recent_{col}'] = group[col].rolling(window, min_periods=1).mean().shift(1)
+    return group
+
+historical_full = historical_full.groupby('Fighter', group_keys=False).apply(
+    lambda x: compute_recent_stats(x, recent_window), include_groups=False
+)
+
+# Compute overall win rate per fighter as prior (career win rate)
+overall_winrate = historical_full.groupby('Fighter')['Win?'].apply(
+    lambda x: (x == 'Yes').mean() * 100
+).reset_index(name='OverallWinRate')
+
+historical_full = historical_full.merge(overall_winrate, on='Fighter', how='left')
+
+# Bayesian shrinkage for recent win rate
+historical_full['RecentWinRate_Shrunk'] = (
+    (historical_full['OverallWinRate'] * prior_weight + historical_full['RecentWinRate'].fillna(0) * recent_window)
+    / (prior_weight + recent_window)
+)
+
+# Also create shrunken recent averages (same formula but using overall career average as prior)
+for col in career_avg:
+    overall_avg = historical_full.groupby('Fighter')[col].transform('mean')
+    recent_col = f'Recent_{col}'
+    if recent_col in historical_full.columns:
+        historical_full[f'Recent_{col}_Shrunk'] = (
+            (overall_avg * prior_weight + historical_full[recent_col].fillna(0) * recent_window)
+            / (prior_weight + recent_window)
+        )
+
+# Merge the new features into the filtered data (keeping only the relevant columns)
+shrink_cols = ['FightID','Fighter','RecentWinRate_Shrunk'] + \
+              [f'Recent_{col}_Shrunk' for col in career_avg if f'Recent_{col}' in historical_full.columns]
+data = data.merge(historical_full[shrink_cols], on=['FightID','Fighter'], how='left')
+
+# Add the shrunken features to numerical_features list so they become selectable
+new_shrink_features = [c for c in shrink_cols if c not in ['FightID','Fighter'] and c in data.columns]
+numerical_features = numerical_features + new_shrink_features
+
 # ---------- 2D Win/Loss Prediction (Logistic Regression + KNN) ----------
 st.header("2D Win/Loss Prediction")
 st.markdown("Select two predictor variables. Logistic Regression and KNN models are fitted. Log‑loss, Brier score, and win probability are shown.")
@@ -779,7 +843,6 @@ if len(available_pred) >= 2:
             ll_knn = log_loss(y_hist, y_prob_knn)
             bs_knn = brier_score_loss(y_hist, y_prob_knn)
 
-            # Scatter plot with decision boundary from logistic regression
             plot_data = data[[pred_x, pred_y, 'DetailedResult', 'Fight', 'Win?']].copy()
             x_min, x_max = X_hist[:, 0].min() - 0.5, X_hist[:, 0].max() + 0.5
             y_min, y_max = X_hist[:, 1].min() - 0.5, X_hist[:, 1].max() + 0.5
@@ -805,7 +868,6 @@ if len(available_pred) >= 2:
             ))
             st.plotly_chart(fig, use_container_width=True)
 
-            # Metrics
             col_m1, col_m2 = st.columns(2)
             with col_m1:
                 st.metric("LR Log‑loss", f"{ll_lr:.3f}")
@@ -814,7 +876,6 @@ if len(available_pred) >= 2:
                 st.metric("KNN Log‑loss", f"{ll_knn:.3f}")
                 st.metric("KNN Brier", f"{bs_knn:.3f}")
 
-            # Win Probability
             st.subheader("Win Probability Estimate")
             all_upcoming_reg = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
             if not all_upcoming_reg.empty:
@@ -933,6 +994,7 @@ st.subheader("Feature Importance – Fighter Numerical Stats")
 importance_features = [c for c in numerical_features
                        if not c.startswith('Opponent_')
                        and not c.endswith('_Diff')
+                       and not c.startswith('Recent_')   # optional: exclude raw recent stats to avoid leakage
                        and not re.match(r'Prev\d+_', c)]
 
 @st.cache_data
@@ -960,7 +1022,6 @@ else:
 st.subheader("Best Variable Combinations for Win/Loss")
 st.markdown("Find the best 2‑ and 3‑variable combinations by log‑loss and Brier score. `FighterOddsNum` is excluded.")
 
-# Exclude FighterOddsNum from combo search
 combo_candidates = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
 
 data_fingerprint = hash(str(data.shape))
@@ -981,7 +1042,7 @@ else:
 
 num_top = st.slider("Number of top features to test", min_value=5, max_value=min(30, len(top_features)), value=10)
 candidates = top_features[:num_top]
-candidates = [c for c in candidates if c != 'FighterOddsNum']  # ensure exclusion
+candidates = [c for c in candidates if c != 'FighterOddsNum']
 
 if len(candidates) >= 2:
     compute_clicked = st.button("Compute best combinations", key="compute_combo")
@@ -1074,32 +1135,50 @@ else:
     st.write("No categorical columns with meaningful variation.")
 
 # =========================================================================
-# SPIDER CHART – LR & KNN PREDICTIONS (INDEPENDENT OF FILTERS)
+# SPIDER CHART WITH INDEPENDENT FILTERS, LR & KNN, AND SIMILARITY
 # =========================================================================
-st.header("Fight Similarity & Comparison (All Upcoming Fights)")
+st.header("Fight Similarity & Comparison (Independent Filters)")
 
-all_upcoming = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
+# ---- Spider‑specific categorical filters ----
+st.subheader("Spider Chart Filters (applied only here)")
+spider_cat_cols = ['WC','Stance','Country','EventCountry','Title','ScheduledRounds','HometownFighter','Opponent_Hometown']
+spider_filter_values = {}
+cols_spider = st.columns(len(spider_cat_cols))
+for i, col in enumerate(spider_cat_cols):
+    with cols_spider[i]:
+        spider_filter_values[col] = st.multiselect(f"{col}", sorted(all_fights_display[col].dropna().unique()), key=f"spider_{col}")
 
-if all_upcoming.empty:
-    st.write("No upcoming fights in the dataset.")
+# Apply spider filters to a copy of all_fights_display
+spider_data = all_fights_display.copy()
+for col, vals in spider_filter_values.items():
+    if vals:
+        spider_data = spider_data[spider_data[col].isin(vals)]
+
+# Extract upcoming fights for spider chart
+spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
+
+if spider_upcoming.empty:
+    st.write("No upcoming fights after spider filters.")
 else:
-    fight_counts = all_upcoming.groupby('FightID').size()
+    fight_counts = spider_upcoming.groupby('FightID').size()
     complete_ids = fight_counts[fight_counts == 2].index
-    upcoming_complete = all_upcoming[all_upcoming['FightID'].isin(complete_ids)]
+    spider_upcoming = spider_upcoming[spider_upcoming['FightID'].isin(complete_ids)]
 
-    if upcoming_complete.empty:
-        st.warning("No upcoming fight has both fighters (unusual).")
+    if spider_upcoming.empty:
+        st.warning("No upcoming fight has both fighters after spider filters.")
     else:
-        numeric_cols = [c for c in upcoming_complete.columns if pd.api.types.is_numeric_dtype(upcoming_complete[c])]
+        # Train models on spider-filtered historical data
+        spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])]
+        # Select variables for modeling (same as before)
+        numeric_cols = [c for c in spider_upcoming.columns if pd.api.types.is_numeric_dtype(spider_upcoming[c])]
         clean_cols = [c for c in numeric_cols if not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')]
-
         wanted_keys = [
             'Age', 'Height', 'Reach',
             'DaysSincePrev', 'Avg3DaysGap',
             'FightNumber', 'Opponent_FightNumber',
             'FighterOddsNum', 'PrevFighterOddsNum',
             'CareerWinPct', 'CareerAvg_', 'Opponent_CareerAvg_',
-            '_Diff'
+            '_Diff', 'RecentWinRate_Shrunk', 'Recent_'
         ]
         spider_vars = sorted([c for c in clean_cols if any(c.startswith(k) or k in c for k in wanted_keys)])
 
@@ -1110,31 +1189,29 @@ else:
                                            default=spider_vars[:5], max_selections=8, key="spider_vars")
 
         if selected_vars:
-            # Train models on full historical data
-            hist_full = all_fights_display[all_fights_display['Win?'].isin(['Yes','No'])].dropna(subset=selected_vars)
-            if len(hist_full) < 10 or hist_full['Win?'].nunique() < 2:
+            spider_hist = spider_hist.dropna(subset=selected_vars)
+            if len(spider_hist) < 10 or spider_hist['Win?'].nunique() < 2:
                 st.warning("Not enough historical data to train models.")
             else:
-                hist_full['target'] = (hist_full['Win?'] == 'Yes').astype(int)
-                X_full = hist_full[selected_vars].values
-                y_full = hist_full['target'].values
+                spider_hist['target'] = (spider_hist['Win?'] == 'Yes').astype(int)
+                X_spider = spider_hist[selected_vars].values
+                y_spider = spider_hist['target'].values
 
                 # Logistic Regression
                 lr_spider = LogisticRegression(max_iter=1000)
-                lr_spider.fit(X_full, y_full)
-                y_prob_lr = lr_spider.predict_proba(X_full)[:, 1]
-                ll_lr_spider = log_loss(y_full, y_prob_lr)
-                bs_lr_spider = brier_score_loss(y_full, y_prob_lr)
+                lr_spider.fit(X_spider, y_spider)
+                y_prob_lr = lr_spider.predict_proba(X_spider)[:, 1]
+                ll_lr_spider = log_loss(y_spider, y_prob_lr)
+                bs_lr_spider = brier_score_loss(y_spider, y_prob_lr)
 
                 # KNN
-                k_spider = st.slider("KNN neighbors (spider)", min_value=1, max_value=20, value=5, key="knn_spider")
+                k_spider = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_spider")
                 knn_spider = KNeighborsClassifier(n_neighbors=k_spider)
-                knn_spider.fit(X_full, y_full)
-                y_prob_knn_spider = knn_spider.predict_proba(X_full)[:, 1]
-                ll_knn_spider = log_loss(y_full, y_prob_knn_spider)
-                bs_knn_spider = brier_score_loss(y_full, y_prob_knn_spider)
+                knn_spider.fit(X_spider, y_spider)
+                y_prob_knn_spider = knn_spider.predict_proba(X_spider)[:, 1]
+                ll_knn_spider = log_loss(y_spider, y_prob_knn_spider)
+                bs_knn_spider = brier_score_loss(y_spider, y_prob_knn_spider)
 
-                # Show metrics
                 col_sm1, col_sm2 = st.columns(2)
                 with col_sm1:
                     st.metric("LogReg Log‑loss", f"{ll_lr_spider:.3f}")
@@ -1143,16 +1220,16 @@ else:
                     st.metric("KNN Log‑loss", f"{ll_knn_spider:.3f}")
                     st.metric("KNN Brier", f"{bs_knn_spider:.3f}")
 
-                # Pick an upcoming fight for prediction
-                up_ids = sorted(upcoming_complete['FightID'].unique())
+                # Pick upcoming fight
+                up_ids = sorted(spider_upcoming['FightID'].unique())
                 chosen_fight = st.selectbox("Choose an upcoming fight", up_ids, key="spider_fight")
 
                 if chosen_fight:
-                    fight_rows = upcoming_complete[upcoming_complete['FightID'] == chosen_fight]
+                    fight_rows = spider_upcoming[spider_upcoming['FightID'] == chosen_fight]
                     f1 = fight_rows.iloc[0]
                     f2 = fight_rows.iloc[1]
 
-                    # Radar chart of differentials
+                    # Radar of differentials
                     radar_vals = []
                     for var in selected_vars:
                         if var.endswith('_Diff') or var in {'AgeDiff','HeightDiff','ReachDiff'}:
@@ -1169,7 +1246,7 @@ else:
                                       title=f"Advantage: {f1['Fighter']} vs {f2['Fighter']}")
                     st.plotly_chart(fig, use_container_width=True)
 
-                    # Win probabilities for the upcoming fighter
+                    # Win probabilities
                     up_vec = f1[selected_vars].values.reshape(1, -1)
                     prob_lr_f1 = lr_spider.predict_proba(up_vec)[0, 1]
                     prob_knn_f1 = knn_spider.predict_proba(up_vec)[0, 1]
@@ -1178,3 +1255,20 @@ else:
                         st.metric(f"LogReg win prob for {f1['Fighter']}", f"{prob_lr_f1:.1%}")
                     with col_sp2:
                         st.metric(f"KNN win prob for {f1['Fighter']}", f"{prob_knn_f1:.1%}")
+
+                    # ---- Similarity Score (most similar historical fights) ----
+                    st.subheader("Most Similar Historical Fights")
+                    # Use Euclidean distance on selected variables (scaled)
+                    scaler = StandardScaler()
+                    X_spider_scaled = scaler.fit_transform(X_spider)
+                    up_scaled = scaler.transform(up_vec)
+                    dists = cdist(up_scaled, X_spider_scaled, 'euclidean').flatten()
+                    sim_scores = 100 * (1 - dists / (dists.max() or 1))
+                    top_sim = pd.DataFrame({
+                        'FightDate': spider_hist['FightDate'].values,
+                        'Fighter': spider_hist['Fighter'].values,
+                        'Opponent': spider_hist['Opponent'].values,
+                        'Win?': spider_hist['Win?'].values,
+                        'Similarity': sim_scores.round(1)
+                    }).sort_values('Similarity', ascending=False).head(20)
+                    st.dataframe(top_sim, use_container_width=True)
