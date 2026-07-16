@@ -815,32 +815,42 @@ else:
         st.plotly_chart(fig_l, use_container_width=True)
 
 # =========================================================================
-# SPIDER CHART + SIMILARITY (COMPLETELY INDEPENDENT OF MAIN FILTERS)
+# SPIDER CHART + SIMILARITY (INDEPENDENT OF MAIN FILTERS)
 # =========================================================================
 st.header("Fight Similarity & Comparison (All Data)")
 
+# All upcoming fights (unfiltered)
 all_upcoming = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
 
 if all_upcoming.empty:
     st.write("No upcoming fights in dataset.")
 else:
-    # Collect numeric columns directly from the upcoming dataframe (now includes Opponent_CareerAvg_*)
+    # Collect numeric columns directly from the upcoming dataframe
     numeric_cols = [c for c in all_upcoming.columns if pd.api.types.is_numeric_dtype(all_upcoming[c])]
+
+    # Define the variables we want to offer for the spider chart
+    # Include basic stats, career averages, and opponent career averages
     preferred = ['Age','Height','Reach','Age_opp','Height_opp','Reach_opp',
                  'AgeDiff','HeightDiff','ReachDiff',
-                 'DaysSincePrev','Avg3DaysGap','FightNumber','Opponent_FightNumber',
-                 'FighterOddsNum','PrevFighterOddsNum','CareerWinPct',
-                 'Opponent_CareerWinPct']
+                 'DaysSincePrev','Avg3DaysGap',
+                 'FightNumber','Opponent_FightNumber',
+                 'FighterOddsNum','PrevFighterOddsNum',
+                 'CareerWinPct','Opponent_CareerWinPct']
     career_avg_cols = [c for c in numeric_cols if c.startswith('CareerAvg_')]
     opp_career_cols = [c for c in numeric_cols if c.startswith('Opponent_CareerAvg_')]
     spider_vars = [c for c in preferred + career_avg_cols + opp_career_cols if c in numeric_cols]
 
-    if spider_vars:
+    # Debug: show available variables (remove after confirming)
+    with st.expander("Debug: Available spider variables", expanded=False):
+        st.write(spider_vars)
+
+    if not spider_vars:
+        st.warning("No numeric variables available for spider chart.")
+        selected_vars = []
+    else:
         selected_vars = st.multiselect("Select up to 8 numerical variables", spider_vars,
                                        default=spider_vars[:5], max_selections=8,
                                        key="spider_vars")
-    else:
-        selected_vars = []
 
     if selected_vars:
         up_ids = all_upcoming['FightID'].unique()
@@ -854,7 +864,7 @@ else:
                 f1 = fight_rows.iloc[0]
                 f2 = fight_rows.iloc[1]
 
-                # Compute differentials for each selected metric
+                # Compute differentials (fighter1 - fighter2)
                 diffs = []
                 diff_labels = []
                 missing_vars = []
@@ -863,7 +873,7 @@ else:
                     v2 = f2[var] if pd.notna(f2[var]) else 0
                     diff = v1 - v2
                     diffs.append(diff)
-                    diff_labels.append(f"{var} Diff")
+                    diff_labels.append(f"{var} Δ")
                     if pd.isna(f1[var]) or pd.isna(f2[var]):
                         missing_vars.append(var)
 
@@ -884,7 +894,7 @@ else:
                 )
                 st.plotly_chart(fig_radar, use_container_width=True)
 
-                # Similarity scorer – uses ALL historical fights (ignore filters)
+                # ---------- Similarity scorer (uses the same selected_vars) ----------
                 hist_full = all_fights_display[all_fights_display['Win?'].isin(['Yes','No'])].dropna(subset=selected_vars)
                 if not hist_full.empty:
                     up_row = f1
