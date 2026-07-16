@@ -790,14 +790,14 @@ if len(available_pred) >= 2:
                 ll_lr = log_loss(y_hist, y_prob_lr)
                 bs_lr = brier_score_loss(y_hist, y_prob_lr)
 
-                # KNN (weighted, scaled, cross‑validated metrics, clipped)
+                # KNN (weighted, scaled) – realistic metrics via 5‑fold CV
                 k = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_2d")
                 from sklearn.model_selection import cross_val_predict
                 scaler_knn = StandardScaler()
                 X_hist_scaled = scaler_knn.fit_transform(X_hist)
                 knn_cv = KNeighborsClassifier(n_neighbors=k, weights='distance')
+                # Cross‑validated probabilities (each test point not in its own training fold)
                 y_prob_knn = cross_val_predict(knn_cv, X_hist_scaled, y_hist, cv=5, method='predict_proba')[:, 1]
-                y_prob_knn = np.clip(y_prob_knn, 0.1, 0.9)
                 ll_knn = log_loss(y_hist, y_prob_knn)
                 bs_knn = brier_score_loss(y_hist, y_prob_knn)
 
@@ -859,10 +859,11 @@ if len(available_pred) >= 2:
                             if all(pd.notna(fighter_row[f]) for f in [pred_x, pred_y]):
                                 up_val = np.array([[fighter_row[pred_x], fighter_row[pred_y]]])
                                 prob_lr = logreg.predict_proba(up_val)[0, 1]
+                                # Scale the upcoming point with the same scaler
                                 up_val_scaled = scaler_knn.transform(up_val)
                                 prob_knn = knn.predict_proba(up_val_scaled)[0, 1]
-                                prob_knn = np.clip(prob_knn, 0.1, 0.9)
 
+                                # Dataset‑wide win rates
                                 full_hist = data[data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
                                 if len(full_hist) > 0:
                                     overall_wr = (full_hist['Win?'] == 'Yes').mean() * 100
@@ -922,14 +923,13 @@ if len(three_d_features) >= 3:
             ll_lr3d = log_loss(y_hist3d, y_prob_lr3d)
             bs_lr3d = brier_score_loss(y_hist3d, y_prob_lr3d)
 
-            # KNN (weighted, scaled, cross‑validated, clipped)
+            # KNN (weighted, scaled) – cross‑validated metrics
             k3d = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_3d")
             scaler_knn3d = StandardScaler()
             X_hist_scaled3d = scaler_knn3d.fit_transform(X_hist3d)
             knn_cv3d = KNeighborsClassifier(n_neighbors=k3d, weights='distance')
             from sklearn.model_selection import cross_val_predict
             y_prob_knn3d = cross_val_predict(knn_cv3d, X_hist_scaled3d, y_hist3d, cv=5, method='predict_proba')[:, 1]
-            y_prob_knn3d = np.clip(y_prob_knn3d, 0.1, 0.9)
             ll_knn3d = log_loss(y_hist3d, y_prob_knn3d)
             bs_knn3d = brier_score_loss(y_hist3d, y_prob_knn3d)
 
@@ -971,7 +971,6 @@ if len(three_d_features) >= 3:
                             prob_lr = logreg3d.predict_proba(up_val3d)[0, 1]
                             up_val_scaled3d = scaler_knn3d.transform(up_val3d)
                             prob_knn = knn3d.predict_proba(up_val_scaled3d)[0, 1]
-                            prob_knn = np.clip(prob_knn, 0.1, 0.9)
 
                             full_hist = data[data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
                             if len(full_hist) > 0:
@@ -1035,9 +1034,9 @@ if not mi_df.empty:
 else:
     st.warning("Not enough historical data for feature importance.")
 
-# ---------- Best Variable Combinations (Weighted KNN, Brier) ----------
+# ---------- Best Variable Combinations (Log‑loss & Brier, excluding FighterOddsNum) ----------
 st.subheader("Best Variable Combinations for Win/Loss")
-st.markdown("Find the best 2‑ and 3‑variable combinations using weighted KNN (k=5), scaled, with 5‑fold CV, ranked by Brier score. `FighterOddsNum` is excluded.")
+st.markdown("Find the best 2‑ and 3‑variable combinations by log‑loss and Brier score. `FighterOddsNum` is excluded.")
 
 combo_candidates = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
 
@@ -1081,17 +1080,14 @@ if len(candidates) >= 2:
                     X = sub[[x_col, y_col]].values
                     y = sub['WinNum'].values
                     try:
-                        scaler = StandardScaler()
-                        X_scaled = scaler.fit_transform(X)
-                        knn_cv = KNeighborsClassifier(n_neighbors=5, weights='distance')
-                        y_prob = cross_val_predict(knn_cv, X_scaled, y, cv=5, method='predict_proba')[:, 1]
-                        y_prob = np.clip(y_prob, 0.1, 0.9)
+                        lr = LogisticRegression(max_iter=1000).fit(X, y)
+                        y_prob = lr.predict_proba(X)[:, 1]
                         ll = log_loss(y, y_prob)
                         bs = brier_score_loss(y, y_prob)
                         combo_two.append({'Variables': f"{x_col}, {y_col}", 'LogLoss': ll, 'Brier': bs})
                     except:
                         pass
-            df2 = pd.DataFrame(combo_two).sort_values('Brier').head(20)
+            df2 = pd.DataFrame(combo_two).sort_values('LogLoss').head(20)
 
             # --- Three variables ---
             combo_three = []
@@ -1102,24 +1098,21 @@ if len(candidates) >= 2:
                 X = sub[list(combo)].values
                 y = sub['WinNum'].values
                 try:
-                    scaler = StandardScaler()
-                    X_scaled = scaler.fit_transform(X)
-                    knn_cv = KNeighborsClassifier(n_neighbors=5, weights='distance')
-                    y_prob = cross_val_predict(knn_cv, X_scaled, y, cv=5, method='predict_proba')[:, 1]
-                    y_prob = np.clip(y_prob, 0.1, 0.9)
+                    lr = LogisticRegression(max_iter=1000).fit(X, y)
+                    y_prob = lr.predict_proba(X)[:, 1]
                     ll = log_loss(y, y_prob)
                     bs = brier_score_loss(y, y_prob)
                     combo_three.append({'Variables': ', '.join(combo), 'LogLoss': ll, 'Brier': bs})
                 except:
                     pass
-            df3 = pd.DataFrame(combo_three).sort_values('Brier').head(20)
+            df3 = pd.DataFrame(combo_three).sort_values('LogLoss').head(20)
 
             st.session_state.combo_results = {'two': df2, 'three': df3}
 
     if st.session_state.combo_results is not None:
-        st.write("**Top 20 Two‑Variable Combinations (Brier)**")
+        st.write("**Top 20 Two‑Variable Combinations (Log‑loss)**")
         st.dataframe(st.session_state.combo_results['two'], use_container_width=True)
-        st.write("**Top 20 Three‑Variable Combinations (Brier)**")
+        st.write("**Top 20 Three‑Variable Combinations (Log‑loss)**")
         st.dataframe(st.session_state.combo_results['three'], use_container_width=True)
     else:
         st.info("Click the button above to compute the best combinations.")
@@ -1286,14 +1279,13 @@ else:
                 ll_lr_spider = log_loss(y_spider, y_prob_lr)
                 bs_lr_spider = brier_score_loss(y_spider, y_prob_lr)
 
-                # KNN (weighted, scaled, cross‑validated, clipped)
+                # KNN (weighted, scaled) – cross‑validated metrics
                 k_spider = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_spider")
                 scaler_knn_spider = StandardScaler()
                 X_spider_scaled_knn = scaler_knn_spider.fit_transform(X_spider)
                 knn_cv_spider = KNeighborsClassifier(n_neighbors=k_spider, weights='distance')
                 from sklearn.model_selection import cross_val_predict
                 y_prob_knn_spider = cross_val_predict(knn_cv_spider, X_spider_scaled_knn, y_spider, cv=5, method='predict_proba')[:, 1]
-                y_prob_knn_spider = np.clip(y_prob_knn_spider, 0.1, 0.9)
                 ll_knn_spider = log_loss(y_spider, y_prob_knn_spider)
                 bs_knn_spider = brier_score_loss(y_spider, y_prob_knn_spider)
 
@@ -1339,7 +1331,7 @@ else:
                     up_vec = f1[selected_vars].values.reshape(1, -1)
                     prob_lr_f1 = lr_spider.predict_proba(up_vec)[0, 1]
                     up_vec_scaled = scaler_knn_spider.transform(up_vec)
-                    prob_knn_f1 = np.clip(knn_spider.predict_proba(up_vec_scaled)[0, 1], 0.1, 0.9)
+                    prob_knn_f1 = knn_spider.predict_proba(up_vec_scaled)[0, 1]
 
                     # Dataset‑wide win rates (based ONLY on rows that passed the mask)
                     overall_wr_spider = (spider_hist_filtered['Win?'] == 'Yes').mean() * 100 if len(spider_hist_filtered) > 0 else 0.0
