@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import re
 import os
 import gdown
+import itertools
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
@@ -831,7 +832,6 @@ if len(three_d_features) >= 3:
             st.warning("Not enough data for 3D plot.")
         else:
             # Fit plane: Z ~ X + Y
-            from sklearn.linear_model import LinearRegression
             X_plane = plot_data[[x3d, y3d]].values
             Z_plane = plot_data[z3d].values
             plane_model = LinearRegression()
@@ -967,6 +967,55 @@ if not cat_mi_df.empty:
     st.plotly_chart(fig_cat, use_container_width=True)
 else:
     st.write("No categorical columns with meaningful variation or no historical data to compute MI.")
+
+# ---------- Best R² Combinations ----------
+st.subheader("Best R² Variable Combinations")
+st.markdown("Find which variable pairs / triples explain each other best in the filtered data.")
+
+hist_for_r2 = data[data['Win?'].isin(['Yes','No'])].copy()
+candidates = [c for c in numerical_features if c in hist_for_r2.columns and hist_for_r2[c].nunique(dropna=True) >= 2]
+if len(candidates) >= 2:
+    if st.button("Compute best R² combinations", key="compute_r2"):
+        from sklearn.linear_model import LinearRegression
+
+        # ---- 2D (Y ~ X) ----
+        r2_2d_list = []
+        for x_col in candidates:
+            for y_col in candidates:
+                if x_col == y_col:
+                    continue
+                sub = hist_for_r2[[x_col, y_col]].dropna()
+                if len(sub) < 10:
+                    continue
+                X = sub[[x_col]].values
+                y = sub[y_col].values
+                model = LinearRegression().fit(X, y)
+                r2_2d_list.append({'X': x_col, 'Y': y_col, 'R²': model.score(X, y)})
+        df_2d = pd.DataFrame(r2_2d_list).sort_values('R²', ascending=False).head(20)
+        st.write("**Top 20 2‑D Regressions (Y ~ X)**")
+        st.dataframe(df_2d, use_container_width=True)
+
+        # ---- 3D (Z ~ X + Y) ----
+        r2_3d_list = []
+        for x_col in candidates:
+            for y_col in candidates:
+                if x_col == y_col:
+                    continue
+                for z_col in candidates:
+                    if z_col in (x_col, y_col):
+                        continue
+                    sub = hist_for_r2[[x_col, y_col, z_col]].dropna()
+                    if len(sub) < 10:
+                        continue
+                    X = sub[[x_col, y_col]].values
+                    Z = sub[z_col].values
+                    model = LinearRegression().fit(X, Z)
+                    r2_3d_list.append({'X': x_col, 'Y': y_col, 'Z': z_col, 'R²': model.score(X, Z)})
+        df_3d = pd.DataFrame(r2_3d_list).sort_values('R²', ascending=False).head(20)
+        st.write("**Top 20 3‑D Regressions (Z ~ X + Y)**")
+        st.dataframe(df_3d, use_container_width=True)
+else:
+    st.warning("Not enough numerical features for R² analysis.")
 
 # =========================================================================
 # SPIDER CHART (DIFFERENTIALS) + SIMILARITY (FILTERED DATA)
