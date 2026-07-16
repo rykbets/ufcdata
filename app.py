@@ -780,28 +780,63 @@ overall_winrate = historical_full.groupby('Fighter')['Win?'].apply(
 
 historical_full = historical_full.merge(overall_winrate, on='Fighter', how='left')
 
+# ---------- Bayesian Shrinkage for Recent Performance ----------
+st.sidebar.header("Recent Performance Settings")
+recent_window = st.sidebar.slider("Recent fights window", 1, 10, 5, key="recent_win")
+prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight")
+
+# Use the full historical data for shrinkage calculations (all_fights_display)
+historical_full = all_fights_display[all_fights_display['Win?'].isin(['Yes','No'])].copy()
+historical_full = historical_full.sort_values(['Fighter','FightDate'])
+
+# Initialize new columns
+historical_full['RecentWinRate'] = np.nan
+for col in career_avg:
+    if col in historical_full.columns:
+        historical_full[f'Recent_{col}'] = np.nan
+
+# Compute recent stats per fighter
+for fighter, grp in historical_full.groupby('Fighter'):
+    grp = grp.copy()
+    wins = (grp['Win?'] == 'Yes').astype(int)
+    grp['RecentWinRate'] = wins.rolling(recent_window, min_periods=1).sum().shift(1) / \
+                           wins.rolling(recent_window, min_periods=1).count().shift(1) * 100
+    for col in career_avg:
+        if col in grp.columns:
+            grp[f'Recent_{col}'] = grp[col].rolling(recent_window, min_periods=1).mean().shift(1)
+    historical_full.loc[grp.index, 'RecentWinRate'] = grp['RecentWinRate']
+    for col in career_avg:
+        if col in grp.columns:
+            historical_full.loc[grp.index, f'Recent_{col}'] = grp[f'Recent_{col}']
+
+# Overall win rate per fighter (career win rate)
+overall_winrate = historical_full.groupby('Fighter')['Win?'].apply(
+    lambda x: (x == 'Yes').mean() * 100
+).reset_index(name='OverallWinRate')
+historical_full = historical_full.merge(overall_winrate, on='Fighter', how='left')
+
 # Bayesian shrinkage for recent win rate
 historical_full['RecentWinRate_Shrunk'] = (
     (historical_full['OverallWinRate'] * prior_weight + historical_full['RecentWinRate'].fillna(0) * recent_window)
     / (prior_weight + recent_window)
 )
 
-# Also create shrunken recent averages (same formula but using overall career average as prior)
+# Shrunken recent averages using overall career average as prior
 for col in career_avg:
     overall_avg = historical_full.groupby('Fighter')[col].transform('mean')
     recent_col = f'Recent_{col}'
     if recent_col in historical_full.columns:
-        historical_full[f'Recent_{col}_Shrunk'] = (
+        historical_full[f'{recent_col}_Shrunk'] = (
             (overall_avg * prior_weight + historical_full[recent_col].fillna(0) * recent_window)
             / (prior_weight + recent_window)
         )
 
-# Merge the new features into the filtered data (keeping only the relevant columns)
+# Merge the new features into the filtered data
 shrink_cols = ['FightID','Fighter','RecentWinRate_Shrunk'] + \
               [f'Recent_{col}_Shrunk' for col in career_avg if f'Recent_{col}' in historical_full.columns]
 data = data.merge(historical_full[shrink_cols], on=['FightID','Fighter'], how='left')
 
-# Add the shrunken features to numerical_features list so they become selectable
+# Add the shrunken features to numerical_features so they become selectable
 new_shrink_features = [c for c in shrink_cols if c not in ['FightID','Fighter'] and c in data.columns]
 numerical_features = numerical_features + new_shrink_features
 
