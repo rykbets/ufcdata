@@ -838,7 +838,6 @@ else:
                        title="Top 20 Category Values by Loss Count",
                        color_discrete_sequence=['red'])
         st.plotly_chart(fig_l, use_container_width=True)
-
 # =========================================================================
 # SPIDER CHART (DIFFERENTIALS) + SIMILARITY (INDEPENDENT OF FILTERS)
 # =========================================================================
@@ -849,27 +848,51 @@ all_upcoming = all_fights_display[all_fights_display['Win?'].isna() | (all_fight
 if all_upcoming.empty:
     st.write("No upcoming fights in dataset.")
 else:
-    # Collect every numeric column that could be useful
+    # ----- Collect numeric columns, EXCLUDING shift‑based historical diffs -----
     numeric_cols = [c for c in all_upcoming.columns if pd.api.types.is_numeric_dtype(all_upcoming[c])]
-    # Pick columns that are likely relevant: basic stats, career averages, differentials
-    wanted_keys = ['Age','Height','Reach',
-                   'DaysSincePrev','Avg3DaysGap',
-                   'FightNumber','Opponent_FightNumber',
-                   'FighterOddsNum','PrevFighterOddsNum',
-                   'CareerWinPct','CareerAvg_','Opponent_CareerAvg_',
-                   '_Diff']   # this catches all our new differential columns
-    spider_vars = sorted([c for c in numeric_cols if any(c.startswith(k) or k in c for k in wanted_keys)])
+
+    clean_cols = []
+    for col in numeric_cols:
+        # Skip any column that starts with "Prev" followed by a digit (e.g. Prev1_AgeDiff)
+        if re.match(r'Prev\d+_', col):
+            continue
+        # Also skip opponent previous‑shift columns (Opponent_Prev1_…)
+        if col.startswith('Opponent_Prev'):
+            continue
+        clean_cols.append(col)
+
+    # Keep only the stats we care about (current fight, career averages, differentials)
+    wanted_keys = [
+        'Age', 'Height', 'Reach',
+        'DaysSincePrev', 'Avg3DaysGap',
+        'FightNumber', 'Opponent_FightNumber',
+        'FighterOddsNum', 'PrevFighterOddsNum',
+        'CareerWinPct', 'CareerAvg_', 'Opponent_CareerAvg_',
+        '_Diff'                # this catches AgeDiff, CareerAvg_SS_Diff, etc.
+    ]
+    spider_vars = sorted([
+        c for c in clean_cols
+        if any(c.startswith(k) or k in c for k in wanted_keys)
+    ])
 
     if not spider_vars:
         st.warning("No numeric variables found in upcoming data.")
     else:
-        selected_vars = st.multiselect("Select up to 8 variables", spider_vars,
-                                       default=spider_vars[:5], max_selections=8,
-                                       key="spider_select_vars")
+        selected_vars = st.multiselect(
+            "Select up to 8 variables",
+            spider_vars,
+            default=spider_vars[:5],
+            max_selections=8,
+            key="spider_select_vars"
+        )
 
     if selected_vars:
         up_ids = all_upcoming['FightID'].unique()
-        chosen_fight = st.selectbox("Choose an upcoming fight", sorted(up_ids), key="spider_fight")
+        chosen_fight = st.selectbox(
+            "Choose an upcoming fight",
+            sorted(up_ids),
+            key="spider_fight"
+        )
 
         if chosen_fight:
             fight_rows = all_upcoming[all_upcoming['FightID'] == chosen_fight]
@@ -879,13 +902,11 @@ else:
                 f1 = fight_rows.iloc[0]
                 f2 = fight_rows.iloc[1]
 
-                # ----- Values for the radar chart -----
+                # ----- Build the radar values -----
                 radar_values = []
                 for var in selected_vars:
-                    # If the variable already is a differential (e.g. AgeDiff), just use it
-                    # Otherwise subtract Fighter2 from Fighter1
-                    if var.endswith('_Diff') or var in ['AgeDiff','HeightDiff','ReachDiff']:
-                        # Already a difference column
+                    # If the variable is already a differential, use it directly
+                    if var.endswith('_Diff') or var in {'AgeDiff', 'HeightDiff', 'ReachDiff'}:
                         val = f1[var] if pd.notna(f1[var]) else 0
                     else:
                         v1 = f1[var] if pd.notna(f1[var]) else 0
@@ -893,7 +914,7 @@ else:
                         val = v1 - v2
                     radar_values.append(val)
 
-                # ----- Radar chart (always displayed) -----
+                # ----- Radar chart -----
                 fig_radar = go.Figure()
                 fig_radar.add_trace(go.Scatterpolar(
                     r=radar_values,
@@ -907,8 +928,11 @@ else:
                 )
                 st.plotly_chart(fig_radar, use_container_width=True)
 
-                # ----- Similarity scorer (uses the same selected_vars) -----
-                hist_full = all_fights_display[all_fights_display['Win?'].isin(['Yes','No'])].dropna(subset=selected_vars)
+                # ----- Similarity scorer (unchanged) -----
+                hist_full = all_fights_display[
+                    all_fights_display['Win?'].isin(['Yes', 'No'])
+                ].dropna(subset=selected_vars)
+
                 if not hist_full.empty:
                     up_row = f1
                     X_hist = hist_full[selected_vars].values
@@ -921,7 +945,7 @@ else:
                     max_dist = dists.max() if dists.max() > 0 else 1
                     similarity = 100 * (1 - dists / max_dist)
 
-                    res_df = hist_full[['FightDate','Fighter','Opponent','WC','Win?','Method']].copy()
+                    res_df = hist_full[['FightDate', 'Fighter', 'Opponent', 'WC', 'Win?', 'Method']].copy()
                     res_df['Similarity'] = similarity.round(1)
                     res_df = res_df.sort_values('Similarity', ascending=False).head(20)
 
