@@ -774,37 +774,42 @@ else:
     st.warning("Not enough numerical features for regression.")
 
 # =========================================================================
-# ADVANCED ANALYSIS (filtered data)
+# ADVANCED ANALYSIS (filtered data) – cached importance
 # =========================================================================
 st.header("Advanced Analysis")
 
 # ---------- 1. Numerical Feature Importance (fighter stats only) ----------
 st.subheader("Feature Importance – Fighter Numerical Stats")
 
-# Filter to only fighter's own stats (no opponent, no diffs, no Prev shifts)
+# Build a dedicated list of fighter-only numerical features (no opponent, no diffs)
 importance_features = [c for c in numerical_features
                        if not c.startswith('Opponent_')
                        and not c.endswith('_Diff')
                        and not re.match(r'Prev\d+_', c)]
 
-hist_data = data[data['Win?'].isin(['Yes','No'])].copy()
-hist_data['Target'] = (hist_data['Win?'] == 'Yes').astype(int)
-
-if importance_features:
-    X = hist_data[importance_features].dropna()
-    y = hist_data.loc[X.index, 'Target']
+@st.cache_data
+def numerical_importance(_data, features):
+    """Return MI scores for the given features on the filtered dataset."""
+    hist = _data[_data['Win?'].isin(['Yes','No'])].copy()
+    hist['Target'] = (hist['Win?'] == 'Yes').astype(int)
+    X = hist[features].dropna()
+    y = hist.loc[X.index, 'Target']
     if len(X) > 10:
+        from sklearn.impute import SimpleImputer
+        from sklearn.feature_selection import mutual_info_classif
         X_imp = SimpleImputer(strategy='median').fit_transform(X)
-        mi_scores = mutual_info_classif(X_imp, y, discrete_features=False)
-        mi_df = pd.DataFrame({'Feature': importance_features, 'Mutual Information': mi_scores}).sort_values('Mutual Information', ascending=False).head(20)
+        mi = mutual_info_classif(X_imp, y, discrete_features=False)
+        return pd.DataFrame({'Feature': features, 'Mutual Information': mi}).sort_values('Mutual Information', ascending=False).head(20)
+    return pd.DataFrame()
 
-        fig_mi = px.bar(mi_df, x='Mutual Information', y='Feature', orientation='h',
-                        title="Top 20 Fighter Stats by Mutual Information with Win/Loss")
-        st.plotly_chart(fig_mi, use_container_width=True)
-    else:
-        st.warning("Not enough historical data for feature importance.")
+mi_df = numerical_importance(data, importance_features)
+
+if not mi_df.empty:
+    fig_mi = px.bar(mi_df, x='Mutual Information', y='Feature', orientation='h',
+                    title="Top 20 Fighter Stats by Mutual Information with Win/Loss")
+    st.plotly_chart(fig_mi, use_container_width=True)
 else:
-    st.warning("No numerical features available.")
+    st.warning("Not enough historical data for feature importance.")
 
 # ---------- 2. Categorical Feature Importance (Mutual Information) ----------
 st.subheader("Categorical Feature Importance with Win/Loss")
@@ -812,32 +817,31 @@ st.subheader("Categorical Feature Importance with Win/Loss")
 potential_cat_cols = ['WC','Stance','Country','EventCountry','Title','ScheduledRounds','HometownFighter','Opponent_Hometown']
 categorical_cols = [c for c in potential_cat_cols if c in data.columns and data[c].nunique(dropna=True) > 1]
 
-if not categorical_cols:
-    st.write("No categorical columns with meaningful variation remain after filtering.")
-else:
-    valid = data[data['Win?'].isin(['Yes','No'])].copy()
+@st.cache_data
+def categorical_importance(_data, cat_cols):
+    valid = _data[_data['Win?'].isin(['Yes','No'])].copy()
     valid['Target'] = (valid['Win?'] == 'Yes').astype(int)
-
-    mi_scores = {}
-    for col in categorical_cols:
+    scores = {}
+    for col in cat_cols:
         sub = valid[[col, 'Target']].dropna()
         if sub[col].nunique() < 2:
             continue
         codes, _ = pd.factorize(sub[col])
-        mi = mutual_info_score(codes, sub['Target'])
-        mi_scores[col] = mi
+        from sklearn.metrics import mutual_info_score
+        scores[col] = mutual_info_score(codes, sub['Target'])
+    if scores:
+        return pd.DataFrame({'Feature': list(scores.keys()), 'Mutual Information': list(scores.values())}).sort_values('Mutual Information', ascending=False).head(20)
+    return pd.DataFrame()
 
-    if mi_scores:
-        mi_cat = pd.DataFrame({'Feature': list(mi_scores.keys()),
-                               'Mutual Information': list(mi_scores.values())})
-        mi_cat = mi_cat.sort_values('Mutual Information', ascending=False).head(20)
+cat_mi_df = categorical_importance(data, categorical_cols)
 
-        fig_cat = px.bar(mi_cat, x='Mutual Information', y='Feature', orientation='h',
-                         title="Top Categorical Features by Mutual Information with Win/Loss",
-                         color_discrete_sequence=['#636efa'])
-        st.plotly_chart(fig_cat, use_container_width=True)
-    else:
-        st.write("Could not compute mutual information for any categorical column.")
+if not cat_mi_df.empty:
+    fig_cat = px.bar(cat_mi_df, x='Mutual Information', y='Feature', orientation='h',
+                     title="Top Categorical Features by Mutual Information with Win/Loss",
+                     color_discrete_sequence=['#636efa'])
+    st.plotly_chart(fig_cat, use_container_width=True)
+else:
+    st.write("No categorical columns with meaningful variation or no historical data to compute MI.")
 
 # =========================================================================
 # SPIDER CHART (DIFFERENTIALS) + SIMILARITY (INDEPENDENT OF FILTERS)
