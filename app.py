@@ -738,36 +738,41 @@ st.header("Advanced Analysis")
 # ---------- 1. Top Winners / Losers Across All Categories ----------
 st.subheader("Top 20 Categorical Values – Most Wins & Most Losses")
 
-categorical_cols = [col for col in ['WC','Stance','Country','EventCountry','Title','ScheduledRounds','HometownFighter','Opponent_Hometown']
-                    if col in data.columns]
+# Collect all potential categorical columns, then keep only those with >1 unique value
+potential_cat_cols = ['WC','Stance','Country','EventCountry','Title','ScheduledRounds','HometownFighter','Opponent_Hometown']
+categorical_cols = []
+for col in potential_cat_cols:
+    if col in data.columns and data[col].nunique(dropna=True) > 1:
+        categorical_cols.append(col)
 
-# Build a list of (Category: Value, Win count) and (Category: Value, Loss count) pairs
-win_pairs = []
-loss_pairs = []
+if not categorical_cols:
+    st.write("No categorical columns with meaningful variation remain after filtering.")
+else:
+    win_pairs = []
+    loss_pairs = []
 
-for col in categorical_cols:
-    win_counts = data[data['Win?'] == 'Yes'][col].value_counts()
-    loss_counts = data[data['Win?'] == 'No'][col].value_counts()
-    for val, cnt in win_counts.items():
-        win_pairs.append((f"{col}: {val}", cnt))
-    for val, cnt in loss_counts.items():
-        loss_pairs.append((f"{col}: {val}", cnt))
+    for col in categorical_cols:
+        win_counts = data[data['Win?'] == 'Yes'][col].value_counts()
+        loss_counts = data[data['Win?'] == 'No'][col].value_counts()
+        for val, cnt in win_counts.items():
+            win_pairs.append((f"{col}: {val}", cnt))
+        for val, cnt in loss_counts.items():
+            loss_pairs.append((f"{col}: {val}", cnt))
 
-# Convert to DataFrames and take top 20
-win_df = pd.DataFrame(win_pairs, columns=['Category', 'Wins']).sort_values('Wins', ascending=False).head(20)
-loss_df = pd.DataFrame(loss_pairs, columns=['Category', 'Losses']).sort_values('Losses', ascending=False).head(20)
+    win_df = pd.DataFrame(win_pairs, columns=['Category', 'Wins']).sort_values('Wins', ascending=False).head(20)
+    loss_df = pd.DataFrame(loss_pairs, columns=['Category', 'Losses']).sort_values('Losses', ascending=False).head(20)
 
-if not win_df.empty:
-    fig_w = px.bar(win_df, x='Wins', y='Category', orientation='h',
-                   title="Top 20 Category Values by Win Count",
-                   color_discrete_sequence=['green'])
-    st.plotly_chart(fig_w, use_container_width=True)
+    if not win_df.empty:
+        fig_w = px.bar(win_df, x='Wins', y='Category', orientation='h',
+                       title="Top 20 Category Values by Win Count",
+                       color_discrete_sequence=['green'])
+        st.plotly_chart(fig_w, use_container_width=True)
 
-if not loss_df.empty:
-    fig_l = px.bar(loss_df, x='Losses', y='Category', orientation='h',
-                   title="Top 20 Category Values by Loss Count",
-                   color_discrete_sequence=['red'])
-    st.plotly_chart(fig_l, use_container_width=True)
+    if not loss_df.empty:
+        fig_l = px.bar(loss_df, x='Losses', y='Category', orientation='h',
+                       title="Top 20 Category Values by Loss Count",
+                       color_discrete_sequence=['red'])
+        st.plotly_chart(fig_l, use_container_width=True)
 
 # ---------- 2. Spider Chart (optional – you can keep or remove) ----------
 st.subheader("Spider Chart – Fighter Comparison")
