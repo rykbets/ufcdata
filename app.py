@@ -691,7 +691,53 @@ display_cols = ['FightDate','Fighter','Opponent','WC','Win?','Method','Age','Hei
 if 'CareerAvg_Ctrl' in data.columns: display_cols.append('CareerAvg_Ctrl')
 display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
+# Build clean numerical feature list (no Prev, no Opponent_Prev)
+core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
+        'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev', 'Avg3DaysGap',
+        'FightNumber', 'Opponent_FightNumber', 'FighterOddsNum', 'PrevFighterOddsNum',
+        'CareerWinPct', 'Opponent_CareerWinPct']
+career_avg = [c for c in data.columns if c.startswith('CareerAvg_') and not c.startswith('Opponent_CareerAvg_')]
+opp_career_avg = [c for c in data.columns if c.startswith('Opponent_CareerAvg_')]
+diff_cols = [c for c in data.columns if c.endswith('_Diff')]
+numerical_features = list(dict.fromkeys(
+    c for c in core + career_avg + opp_career_avg + diff_cols
+    if c in data.columns and not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')
+    and data[c].nunique(dropna=True) >= 2
+))
 
+# DetailedResult and color_map (already defined earlier? If not, add them)
+def detailed_result(row):
+    win_raw = row.get('Win?')
+    if win_raw is None or pd.isna(win_raw) or str(win_raw).strip().lower() in ('', 'none', 'nan'):
+        return 'Upcoming'
+    win_val = str(win_raw).strip()
+    method = str(row.get('Method', '')).strip().lower()
+    if 'dq' in method or 'disqualif' in method:
+        return 'Win by DQ' if win_val == 'Yes' else 'Loss by DQ'
+    if win_val in ('No Contest', 'NC'):
+        return 'No Contest'
+    if win_val == 'Draw':
+        return 'Draw'
+    if win_val == 'Yes':
+        return 'Win'
+    if win_val == 'No':
+        return 'Loss'
+    return 'Upcoming'
+
+if 'DetailedResult' not in data.columns:
+    data['DetailedResult'] = data.apply(detailed_result, axis=1)
+if 'Fight' not in data.columns:
+    data['Fight'] = data['Fighter'].astype(str) + ' vs ' + data['Opponent'].astype(str)
+
+color_map = {
+    'Win': 'green',
+    'Loss': 'red',
+    'Win by DQ': 'limegreen',
+    'Loss by DQ': 'darkred',
+    'No Contest': 'purple',
+    'Upcoming': 'blue',
+    'Draw': 'gray'
+}
 # ---------- Win/Loss Prediction (AUC) ----------
 st.header("Win/Loss Prediction")
 st.markdown("Select two predictor variables. A logistic regression is fitted to separate wins from losses (AUC shown).")
