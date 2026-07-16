@@ -772,21 +772,8 @@ if len(available_reg) >= 2:
             ))
             st.plotly_chart(fig_reg, use_container_width=True)
 
-            # ---------- Win Probability Estimate (Logistic Regression) ----------
+            # ---------- Win Probability Estimate (Logistic Regression using X and Y) ----------
             st.subheader("Win Probability Estimate")
-            prob_features = st.radio(
-                "Predictor(s) for win probability:",
-                ["X only", "Y only", "X and Y"],
-                index=0,
-                key="prob_feature_choice"
-            )
-            if prob_features == "X only":
-                feats = [reg_x]
-            elif prob_features == "Y only":
-                feats = [reg_y]
-            else:
-                feats = [reg_x, reg_y]
-
             all_upcoming_reg = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
             if not all_upcoming_reg.empty:
                 up_ids = all_upcoming_reg['FightID'].unique()
@@ -795,28 +782,28 @@ if len(available_reg) >= 2:
                     up_rows = all_upcoming_reg[all_upcoming_reg['FightID'] == chosen_up]
                     if len(up_rows) == 2:
                         fighter_row = up_rows.iloc[0]
-                        if all(pd.notna(fighter_row[f]) for f in feats):
+                        if all(pd.notna(fighter_row[f]) for f in [reg_x, reg_y]):
                             hist = data[data['Win?'].isin(['Yes','No'])].copy()
-                            hist = hist[feats + ['Win?']].dropna()
+                            hist = hist[[reg_x, reg_y, 'Win?']].dropna()
                             if len(hist) < 10:
                                 st.warning("Not enough historical data for logistic regression.")
                             else:
                                 hist['target'] = (hist['Win?'] == 'Yes').astype(int)
-                                X_hist = hist[feats].values
+                                X_hist = hist[[reg_x, reg_y]].values
                                 y_hist = hist['target'].values
                                 if len(np.unique(y_hist)) >= 2:
                                     logreg = LogisticRegression()
                                     logreg.fit(X_hist, y_hist)
-                                    up_val = np.array([fighter_row[feats].values])
+                                    up_val = np.array([[fighter_row[reg_x], fighter_row[reg_y]]])
                                     prob = logreg.predict_proba(up_val)[0, 1]
                                     st.metric(
-                                        label=f"Win probability for {fighter_row['Fighter']} (using {', '.join(feats)})",
+                                        label=f"Win probability for {fighter_row['Fighter']} (using X and Y)",
                                         value=f"{prob:.1%}"
                                     )
                                 else:
                                     st.warning("Target variable has no variation.")
                         else:
-                            st.warning("Selected fighter does not have all required predictor values.")
+                            st.warning("Selected fighter does not have both X and Y values.")
                 else:
                     st.info("Choose an upcoming fight to see win probability.")
             else:
@@ -824,9 +811,9 @@ if len(available_reg) >= 2:
 else:
     st.warning("Not enough numerical features for regression.")
 
-# ---------- 3D Scatterplot ----------
+# ---------- 3D Scatterplot with Regression Plane and Win Probability ----------
 st.header("3D Variable Relationships")
-st.markdown("Select three numerical variables to explore their interaction with win/loss.")
+st.markdown("Select three numerical variables. A regression plane is fitted to predict Z from X and Y (R² shown). Also estimate win probability using all three variables.")
 
 three_d_features = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
 if len(three_d_features) >= 3:
@@ -843,15 +830,76 @@ if len(three_d_features) >= 3:
         if len(plot_data) < 10:
             st.warning("Not enough data for 3D plot.")
         else:
+            # Fit plane: Z ~ X + Y
+            from sklearn.linear_model import LinearRegression
+            X_plane = plot_data[[x3d, y3d]].values
+            Z_plane = plot_data[z3d].values
+            plane_model = LinearRegression()
+            plane_model.fit(X_plane, Z_plane)
+            r2_plane = plane_model.score(X_plane, Z_plane)
+
+            # Create a grid for the plane surface
+            x_range = np.linspace(X_plane[:, 0].min(), X_plane[:, 0].max(), 20)
+            y_range = np.linspace(X_plane[:, 1].min(), X_plane[:, 1].max(), 20)
+            X_grid, Y_grid = np.meshgrid(x_range, y_range)
+            Z_grid = plane_model.predict(np.c_[X_grid.ravel(), Y_grid.ravel()]).reshape(X_grid.shape)
+
             fig3d = px.scatter_3d(
                 plot_data,
                 x=x3d, y=y3d, z=z3d,
                 color='DetailedResult',
                 color_discrete_map=color_map,
                 hover_data=['Fight'],
-                title=f"3D Scatter: {x3d} vs {y3d} vs {z3d}"
+                title=f"3D Scatter: {x3d} vs {y3d} vs {z3d} (Plane R² = {r2_plane:.3f})"
             )
+
+            # Add the regression plane as a surface trace
+            fig3d.add_trace(go.Surface(
+                x=x_range, y=y_range, z=Z_grid,
+                opacity=0.5,
+                colorscale='Greys',
+                showscale=False,
+                name='Regression plane'
+            ))
+
             st.plotly_chart(fig3d, use_container_width=True)
+            st.caption(f"Multiple linear regression: {z3d} ~ {x3d} + {y3d}   |   R² = {r2_plane:.3f}")
+
+            # Win probability using all three variables (X,Y,Z) via logistic regression
+            st.subheader("Win Probability using X, Y, Z")
+            all_upcoming_3d = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
+            if not all_upcoming_3d.empty:
+                up_ids_3d = all_upcoming_3d['FightID'].unique()
+                chosen_up_3d = st.selectbox("Select upcoming fight", sorted(up_ids_3d), key="prob_3d_up")
+                if chosen_up_3d:
+                    up_rows_3d = all_upcoming_3d[all_upcoming_3d['FightID'] == chosen_up_3d]
+                    if len(up_rows_3d) == 2:
+                        fighter_row = up_rows_3d.iloc[0]
+                        feats_3d = [x3d, y3d, z3d]
+                        if all(pd.notna(fighter_row[f]) for f in feats_3d):
+                            hist3d = data[data['Win?'].isin(['Yes','No'])].copy()
+                            hist3d = hist3d[feats_3d + ['Win?']].dropna()
+                            if len(hist3d) < 10:
+                                st.warning("Not enough historical data for logistic regression.")
+                            else:
+                                hist3d['target'] = (hist3d['Win?'] == 'Yes').astype(int)
+                                X_hist3d = hist3d[feats_3d].values
+                                y_hist3d = hist3d['target'].values
+                                if len(np.unique(y_hist3d)) >= 2:
+                                    logreg3d = LogisticRegression()
+                                    logreg3d.fit(X_hist3d, y_hist3d)
+                                    up_val3d = np.array([fighter_row[feats_3d].values])
+                                    prob3d = logreg3d.predict_proba(up_val3d)[0, 1]
+                                    st.metric(
+                                        label=f"Win probability for {fighter_row['Fighter']} (using X,Y,Z)",
+                                        value=f"{prob3d:.1%}"
+                                    )
+                                else:
+                                    st.warning("Target variable has no variation.")
+                        else:
+                            st.warning("Selected fighter does not have all three predictor values.")
+            else:
+                st.write("No upcoming fights available.")
 else:
     st.warning("Not enough numerical features for a 3D plot (need at least 3).")
 
