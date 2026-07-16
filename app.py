@@ -692,88 +692,73 @@ if 'CareerAvg_Ctrl' in data.columns: display_cols.append('CareerAvg_Ctrl')
 display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
 
-# ---------- Regression Plot ----------
-st.header("Regression Analysis")
-st.markdown("Select two variables to explore relationships. Points are colored by detailed outcome.")
+# ---------- Win/Loss Prediction (AUC) ----------
+st.header("Win/Loss Prediction")
+st.markdown("Select two predictor variables. A logistic regression is fitted to separate wins from losses (AUC shown).")
 
-def detailed_result(row):
-    win_raw = row.get('Win?')
-    if win_raw is None or pd.isna(win_raw) or str(win_raw).strip().lower() in ('', 'none', 'nan'):
-        return 'Upcoming'
-    win_val = str(win_raw).strip()
-    method = str(row.get('Method', '')).strip().lower()
-    if 'dq' in method or 'disqualif' in method:
-        return 'Win by DQ' if win_val == 'Yes' else 'Loss by DQ'
-    if win_val in ('No Contest', 'NC'):
-        return 'No Contest'
-    if win_val == 'Draw':
-        return 'Draw'
-    if win_val == 'Yes':
-        return 'Win'
-    if win_val == 'No':
-        return 'Loss'
-    return 'Upcoming'
+# Use the same numerical_features list
+available_pred = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
 
-data['DetailedResult'] = data.apply(detailed_result, axis=1)
-data['Fight'] = data['Fighter'].astype(str) + ' vs ' + data['Opponent'].astype(str)
-
-color_map = {
-    'Win': 'green',
-    'Loss': 'red',
-    'Win by DQ': 'limegreen',
-    'Loss by DQ': 'darkred',
-    'No Contest': 'purple',
-    'Upcoming': 'blue',
-    'Draw': 'gray'
-}
-
-# Build clean numerical feature list (no Prev, no Opponent_Prev)
-core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
-        'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev', 'Avg3DaysGap',
-        'FightNumber', 'Opponent_FightNumber', 'FighterOddsNum', 'PrevFighterOddsNum',
-        'CareerWinPct', 'Opponent_CareerWinPct']
-career_avg = [c for c in data.columns if c.startswith('CareerAvg_') and not c.startswith('Opponent_CareerAvg_')]
-opp_career_avg = [c for c in data.columns if c.startswith('Opponent_CareerAvg_')]
-diff_cols = [c for c in data.columns if c.endswith('_Diff')]
-numerical_features = list(dict.fromkeys(
-    c for c in core + career_avg + opp_career_avg + diff_cols
-    if c in data.columns and not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')
-    and data[c].nunique(dropna=True) >= 2
-))
-
-available_reg = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
-if len(available_reg) >= 2:
+if len(available_pred) >= 2:
     col1, col2 = st.columns(2)
     with col1:
-        reg_x = st.selectbox("X variable", available_reg, key="reg_x")
+        pred_x = st.selectbox("Predictor X", available_pred, key="pred_x")
     with col2:
-        reg_y = st.selectbox("Y variable", available_reg, key="reg_y")
+        pred_y = st.selectbox("Predictor Y", available_pred, key="pred_y")
 
-    if reg_x and reg_y:
-        reg_data = data[[reg_x, reg_y, 'DetailedResult', 'Fight']].dropna()
-        if len(reg_data) < 10:
-            st.warning("Not enough data for regression.")
+    if pred_x and pred_y:
+        # Scatter data (filtered fights + upcoming)
+        plot_data = data[[pred_x, pred_y, 'DetailedResult', 'Fight', 'Win?']].copy()
+
+        # Fit logistic regression on historical data only
+        hist = data[data['Win?'].isin(['Yes','No'])].copy()
+        hist = hist[[pred_x, pred_y, 'Win?']].dropna()
+        if len(hist) < 10 or hist['Win?'].nunique() < 2:
+            st.warning("Not enough historical data for logistic regression.")
         else:
-            X_reg = reg_data[[reg_x]].values
-            y_reg = reg_data[reg_y].values
-            lr = LinearRegression().fit(X_reg, y_reg)
-            r2 = lr.score(X_reg, y_reg)
-            reg_line_x = np.linspace(X_reg.min(), X_reg.max(), 100).reshape(-1, 1)
-            reg_line_y = lr.predict(reg_line_x)
+            hist['target'] = (hist['Win?'] == 'Yes').astype(int)
+            X_hist = hist[[pred_x, pred_y]].values
+            y_hist = hist['target'].values
 
-            fig_reg = px.scatter(
-                reg_data, x=reg_x, y=reg_y, color='DetailedResult',
+            from sklearn.linear_model import LogisticRegression
+            from sklearn.metrics import roc_auc_score
+
+            logreg = LogisticRegression(max_iter=1000)
+            logreg.fit(X_hist, y_hist)
+
+            # AUC
+            y_prob = logreg.predict_proba(X_hist)[:, 1]
+            auc = roc_auc_score(y_hist, y_prob)
+
+            # Create a grid for decision boundary
+            x_min, x_max = X_hist[:, 0].min() - 0.5, X_hist[:, 0].max() + 0.5
+            y_min, y_max = X_hist[:, 1].min() - 0.5, X_hist[:, 1].max() + 0.5
+            xx, yy = np.meshgrid(np.linspace(x_min, x_max, 100),
+                                 np.linspace(y_min, y_max, 100))
+            Z = logreg.predict_proba(np.c_[xx.ravel(), yy.ravel()])[:, 1]
+            Z = Z.reshape(xx.shape)
+
+            # Plot scatter with decision contour
+            fig = px.scatter(
+                plot_data, x=pred_x, y=pred_y,
+                color='DetailedResult',
                 color_discrete_map=color_map,
                 hover_data=['Fight'],
-                title=f"{reg_y} vs {reg_x} (R² = {r2:.3f})"
+                title=f"Logistic Regression: {pred_x} & {pred_y} (AUC = {auc:.3f})"
             )
-            fig_reg.add_trace(go.Scatter(
-                x=reg_line_x.flatten(), y=reg_line_y, mode='lines',
-                name='Regression', line=dict(color='white')
+            fig.add_trace(go.Contour(
+                x=np.linspace(x_min, x_max, 100),
+                y=np.linspace(y_min, y_max, 100),
+                z=Z,
+                contours_coloring='lines',
+                line_width=1,
+                showscale=False,
+                name='Decision boundary'
             ))
-            st.plotly_chart(fig_reg, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption(f"Logistic regression AUC: {auc:.3f}  (predicting Win from {pred_x} and {pred_y})")
 
-            # ---------- Win Probability Estimate (Logistic Regression using X and Y) ----------
+            # ---------- Win Probability for an upcoming fight ----------
             st.subheader("Win Probability Estimate")
             all_upcoming_reg = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
             if not all_upcoming_reg.empty:
@@ -783,34 +768,21 @@ if len(available_reg) >= 2:
                     up_rows = all_upcoming_reg[all_upcoming_reg['FightID'] == chosen_up]
                     if len(up_rows) == 2:
                         fighter_row = up_rows.iloc[0]
-                        if all(pd.notna(fighter_row[f]) for f in [reg_x, reg_y]):
-                            hist = data[data['Win?'].isin(['Yes','No'])].copy()
-                            hist = hist[[reg_x, reg_y, 'Win?']].dropna()
-                            if len(hist) < 10:
-                                st.warning("Not enough historical data for logistic regression.")
-                            else:
-                                hist['target'] = (hist['Win?'] == 'Yes').astype(int)
-                                X_hist = hist[[reg_x, reg_y]].values
-                                y_hist = hist['target'].values
-                                if len(np.unique(y_hist)) >= 2:
-                                    logreg = LogisticRegression()
-                                    logreg.fit(X_hist, y_hist)
-                                    up_val = np.array([[fighter_row[reg_x], fighter_row[reg_y]]])
-                                    prob = logreg.predict_proba(up_val)[0, 1]
-                                    st.metric(
-                                        label=f"Win probability for {fighter_row['Fighter']} (using X and Y)",
-                                        value=f"{prob:.1%}"
-                                    )
-                                else:
-                                    st.warning("Target variable has no variation.")
+                        if all(pd.notna(fighter_row[f]) for f in [pred_x, pred_y]):
+                            up_val = np.array([[fighter_row[pred_x], fighter_row[pred_y]]])
+                            prob = logreg.predict_proba(up_val)[0, 1]
+                            st.metric(
+                                label=f"Win probability for {fighter_row['Fighter']}",
+                                value=f"{prob:.1%}"
+                            )
                         else:
-                            st.warning("Selected fighter does not have both X and Y values.")
+                            st.warning("Selected fighter does not have both predictor values.")
                 else:
                     st.info("Choose an upcoming fight to see win probability.")
             else:
                 st.write("No upcoming fights available.")
 else:
-    st.warning("Not enough numerical features for regression.")
+    st.warning("Not enough numerical features for win/loss prediction.")
 
 # ---------- 3D Scatterplot with Regression Plane and Win Probability ----------
 st.header("3D Variable Relationships")
