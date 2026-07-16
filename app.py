@@ -1,4 +1,4 @@
-import streamlit as st
+import streamlit as stimport streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -7,10 +7,11 @@ import re
 import os
 import gdown
 import itertools
+import hashlib
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import mutual_info_score
+from sklearn.metrics import mutual_info_score, roc_auc_score
 from sklearn.linear_model import LinearRegression, LogisticRegression
 from scipy.spatial.distance import cdist
 
@@ -696,7 +697,20 @@ st.dataframe(last20[display_cols])
 st.header("Win/Loss Prediction")
 st.markdown("Select two predictor variables. A logistic regression is fitted to separate wins from losses (AUC shown).")
 
-# Use the same numerical_features list
+# Build clean numerical feature list (no Prev, no Opponent_Prev)
+core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
+        'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev', 'Avg3DaysGap',
+        'FightNumber', 'Opponent_FightNumber', 'FighterOddsNum', 'PrevFighterOddsNum',
+        'CareerWinPct', 'Opponent_CareerWinPct']
+career_avg = [c for c in data.columns if c.startswith('CareerAvg_') and not c.startswith('Opponent_CareerAvg_')]
+opp_career_avg = [c for c in data.columns if c.startswith('Opponent_CareerAvg_')]
+diff_cols = [c for c in data.columns if c.endswith('_Diff')]
+numerical_features = list(dict.fromkeys(
+    c for c in core + career_avg + opp_career_avg + diff_cols
+    if c in data.columns and not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')
+    and data[c].nunique(dropna=True) >= 2
+))
+
 available_pred = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
 
 if len(available_pred) >= 2:
@@ -909,6 +923,93 @@ if not mi_df.empty:
 else:
     st.warning("Not enough historical data for feature importance.")
 
+# ---------- Best Variable Combinations for Win/Loss (AUC) – Fast & Optimised ----------
+st.subheader("Best Variable Combinations for Win/Loss")
+st.markdown("Search among the top‑ranked features from the importance chart above. Results persist across widget changes.")
+
+# Lightweight fingerprint – only changes when the underlying filtered data changes
+data_fingerprint = hash(str(data.shape))
+
+if "auc_results" not in st.session_state:
+    st.session_state.auc_results = None
+if "last_data_hash" not in st.session_state:
+    st.session_state.last_data_hash = data_fingerprint
+
+if st.session_state.last_data_hash != data_fingerprint:
+    st.session_state.auc_results = None
+    st.session_state.last_data_hash = data_fingerprint
+
+# Use the already‑computed importance DataFrame (mi_df) from the section above
+if mi_df.empty:
+    st.warning("Feature importance has not been computed. Please run that section first.")
+else:
+    top_features = mi_df['Feature'].tolist()
+    num_top = st.slider("Number of top features to test", min_value=5, max_value=min(30, len(top_features)), value=10)
+    candidates = top_features[:num_top]
+
+    if len(candidates) >= 2:
+        compute_clicked = st.button("Compute best AUC combinations (fast)", key="compute_auc_fast")
+
+        if compute_clicked or st.session_state.auc_results is None:
+            with st.spinner(f"Testing combinations among top {num_top} features…"):
+                hist = data[data['Win?'].isin(['Yes','No'])].copy()
+                hist['WinNum'] = (hist['Win?'] == 'Yes').astype(int)
+
+                from sklearn.linear_model import LogisticRegression
+                from sklearn.metrics import roc_auc_score
+
+                # --- Two variables ---
+                auc_two = []
+                for x_col in candidates:
+                    for y_col in candidates:
+                        if x_col == y_col:
+                            continue
+                        sub = hist[[x_col, y_col, 'WinNum']].dropna()
+                        if len(sub) < 10 or sub['WinNum'].nunique() < 2:
+                            continue
+                        X = sub[[x_col, y_col]].values
+                        y = sub['WinNum'].values
+                        try:
+                            model = LogisticRegression(max_iter=1000).fit(X, y)
+                            y_prob = model.predict_proba(X)[:, 1]
+                            auc = roc_auc_score(y, y_prob)
+                            auc_two.append({'Variables': f"{x_col}, {y_col}", 'AUC': auc})
+                        except:
+                            pass
+                df_auc2 = pd.DataFrame(auc_two).sort_values('AUC', ascending=False).head(20)
+
+                # --- Three variables ---
+                auc_three = []
+                for combo in itertools.combinations(candidates, 3):
+                    sub = hist[list(combo) + ['WinNum']].dropna()
+                    if len(sub) < 10 or sub['WinNum'].nunique() < 2:
+                        continue
+                    X = sub[list(combo)].values
+                    y = sub['WinNum'].values
+                    try:
+                        model = LogisticRegression(max_iter=1000).fit(X, y)
+                        y_prob = model.predict_proba(X)[:, 1]
+                        auc = roc_auc_score(y, y_prob)
+                        auc_three.append({'Variables': ', '.join(combo), 'AUC': auc})
+                    except:
+                        pass
+                df_auc3 = pd.DataFrame(auc_three).sort_values('AUC', ascending=False).head(20)
+
+                st.session_state.auc_results = {
+                    'two_vars': df_auc2,
+                    'three_vars': df_auc3
+                }
+
+        if st.session_state.auc_results is not None:
+            st.write("**Top 20 Two‑Variable Win/Loss Predictors (AUC)**")
+            st.dataframe(st.session_state.auc_results['two_vars'], use_container_width=True)
+            st.write("**Top 20 Three‑Variable Win/Loss Predictors (AUC)**")
+            st.dataframe(st.session_state.auc_results['three_vars'], use_container_width=True)
+        else:
+            st.info("Click the button above to compute the best variable combinations.")
+    else:
+        st.warning("Not enough features to test.")
+
 # ---------- 2. Categorical Feature Importance (Mutual Information) ----------
 st.subheader("Categorical Feature Importance with Win/Loss")
 
@@ -940,101 +1041,6 @@ if not cat_mi_df.empty:
 else:
     st.write("No categorical columns with meaningful variation or no historical data to compute MI.")
 
-# ---------- Best Variable Combinations for Win/Loss (AUC) – Speed-Optimised ----------
-st.subheader("Best Variable Combinations for Win/Loss")
-st.markdown("Limit the search to the top‑N most important numerical features to speed things up.")
-
-# Fingerprint of current filtered data to detect real filter changes
-import hashlib
-data_fingerprint = hashlib.md5(pd.util.hash_pandas_object(data).values).hexdigest()
-
-if "auc_results" not in st.session_state:
-    st.session_state.auc_results = None
-if "last_data_hash" not in st.session_state:
-    st.session_state.last_data_hash = data_fingerprint
-
-# Clear results only when the filtered data actually changes
-if st.session_state.last_data_hash != data_fingerprint:
-    st.session_state.auc_results = None
-    st.session_state.last_data_hash = data_fingerprint
-
-# Re‑use the feature importance list (or compute it on the fly)
-# importance_features is already defined earlier and contains only fighter-side numerical stats.
-# We'll take the top N features by mutual information.
-if 'importance_features' in dir() and importance_features:
-    mi_df_all = numerical_importance(data, importance_features)
-    top_features = mi_df_all['Feature'].tolist()
-else:
-    # Fallback – use all numerical features (already computed earlier)
-    top_features = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
-
-# Let the user choose how many top features to test
-num_top = st.slider("Number of top features to test", min_value=5, max_value=min(30, len(top_features)), value=10)
-candidates = top_features[:num_top]
-
-if len(candidates) >= 2:
-    compute_clicked = st.button("Compute best AUC combinations (fast)", key="compute_auc_fast")
-
-    if compute_clicked or st.session_state.auc_results is None:
-        with st.spinner(f"Computing AUC combinations among top {num_top} features… (should be fast)"):
-            hist = data[data['Win?'].isin(['Yes','No'])].copy()
-            hist['WinNum'] = (hist['Win?'] == 'Yes').astype(int)
-
-            from sklearn.linear_model import LogisticRegression
-            from sklearn.metrics import roc_auc_score
-
-            # --- Two variables ---
-            auc_two = []
-            for x_col in candidates:
-                for y_col in candidates:
-                    if x_col == y_col:
-                        continue
-                    sub = hist[[x_col, y_col, 'WinNum']].dropna()
-                    if len(sub) < 10 or sub['WinNum'].nunique() < 2:
-                        continue
-                    X = sub[[x_col, y_col]].values
-                    y = sub['WinNum'].values
-                    try:
-                        model = LogisticRegression(max_iter=1000).fit(X, y)
-                        y_prob = model.predict_proba(X)[:, 1]
-                        auc = roc_auc_score(y, y_prob)
-                        auc_two.append({'Variables': f"{x_col}, {y_col}", 'AUC': auc})
-                    except:
-                        pass
-            df_auc2 = pd.DataFrame(auc_two).sort_values('AUC', ascending=False).head(20)
-
-            # --- Three variables ---
-            import itertools
-            auc_three = []
-            for combo in itertools.combinations(candidates, 3):
-                sub = hist[list(combo) + ['WinNum']].dropna()
-                if len(sub) < 10 or sub['WinNum'].nunique() < 2:
-                    continue
-                X = sub[list(combo)].values
-                y = sub['WinNum'].values
-                try:
-                    model = LogisticRegression(max_iter=1000).fit(X, y)
-                    y_prob = model.predict_proba(X)[:, 1]
-                    auc = roc_auc_score(y, y_prob)
-                    auc_three.append({'Variables': ', '.join(combo), 'AUC': auc})
-                except:
-                    pass
-            df_auc3 = pd.DataFrame(auc_three).sort_values('AUC', ascending=False).head(20)
-
-            st.session_state.auc_results = {
-                'two_vars': df_auc2,
-                'three_vars': df_auc3
-            }
-
-    if st.session_state.auc_results is not None:
-        st.write("**Top 20 Two‑Variable Win/Loss Predictors (AUC)**")
-        st.dataframe(st.session_state.auc_results['two_vars'], use_container_width=True)
-        st.write("**Top 20 Three‑Variable Win/Loss Predictors (AUC)**")
-        st.dataframe(st.session_state.auc_results['three_vars'], use_container_width=True)
-    else:
-        st.info("Click the button above to compute the best variable combinations.")
-else:
-    st.warning("Not enough numerical features for AUC analysis.")
 # =========================================================================
 # SPIDER CHART (DIFFERENTIALS) + SIMILARITY (FILTERED DATA)
 # =========================================================================
