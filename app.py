@@ -968,52 +968,89 @@ if not cat_mi_df.empty:
 else:
     st.write("No categorical columns with meaningful variation or no historical data to compute MI.")
 
-# ---------- Best R² Combinations for Predicting Win/Loss ----------
-st.subheader("Best R² Variable Combinations for Win/Loss")
-st.markdown("Find which pairs / triples of numerical features best explain the Win/Loss outcome (linear R²).")
+# ---------- Best Variable Combinations for Win/Loss (AUC) ----------
+st.subheader("Best Variable Combinations for Win/Loss")
+st.markdown("Find which pairs / triples of numerical features best separate wins from losses (AUC).")
 
-hist_for_r2 = data[data['Win?'].isin(['Yes','No'])].copy()
-hist_for_r2['WinNum'] = (hist_for_r2['Win?'] == 'Yes').astype(int)
+# Fingerprint of current filtered data to detect real filter changes
+import hashlib
+data_fingerprint = hashlib.md5(pd.util.hash_pandas_object(data).values).hexdigest()
 
-candidates = [c for c in numerical_features if c in hist_for_r2.columns and hist_for_r2[c].nunique(dropna=True) >= 2]
+if "auc_results" not in st.session_state:
+    st.session_state.auc_results = None
+if "last_data_hash" not in st.session_state:
+    st.session_state.last_data_hash = data_fingerprint
+
+# Clear results only when the filtered data actually changes
+if st.session_state.last_data_hash != data_fingerprint:
+    st.session_state.auc_results = None
+    st.session_state.last_data_hash = data_fingerprint
+
+candidates = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
 
 if len(candidates) >= 2:
-    if st.button("Compute best R² combinations for Win/Loss", key="compute_win_r2"):
-        from sklearn.linear_model import LinearRegression
+    compute_clicked = st.button("Compute best AUC combinations for Win/Loss", key="compute_auc")
 
-        # --- Two variables ---
-        r2_two = []
-        for x_col in candidates:
-            for y_col in candidates:
-                if x_col == y_col:
+    if compute_clicked or st.session_state.auc_results is None:
+        with st.spinner("Computing AUC combinations... (may take a moment)"):
+            hist = data[data['Win?'].isin(['Yes','No'])].copy()
+            hist['WinNum'] = (hist['Win?'] == 'Yes').astype(int)
+
+            from sklearn.linear_model import LogisticRegression
+            from sklearn.metrics import roc_auc_score
+
+            # --- Two variables ---
+            auc_two = []
+            for x_col in candidates:
+                for y_col in candidates:
+                    if x_col == y_col:
+                        continue
+                    sub = hist[[x_col, y_col, 'WinNum']].dropna()
+                    if len(sub) < 10 or sub['WinNum'].nunique() < 2:
+                        continue
+                    X = sub[[x_col, y_col]].values
+                    y = sub['WinNum'].values
+                    try:
+                        model = LogisticRegression(max_iter=1000).fit(X, y)
+                        y_prob = model.predict_proba(X)[:, 1]
+                        auc = roc_auc_score(y, y_prob)
+                        auc_two.append({'Variables': f"{x_col}, {y_col}", 'AUC': auc})
+                    except:
+                        pass
+            df_auc2 = pd.DataFrame(auc_two).sort_values('AUC', ascending=False).head(20)
+
+            # --- Three variables ---
+            auc_three = []
+            import itertools
+            for combo in itertools.combinations(candidates, 3):
+                sub = hist[list(combo) + ['WinNum']].dropna()
+                if len(sub) < 10 or sub['WinNum'].nunique() < 2:
                     continue
-                sub = hist_for_r2[[x_col, y_col, 'WinNum']].dropna()
-                if len(sub) < 10:
-                    continue
-                X = sub[[x_col, y_col]].values
+                X = sub[list(combo)].values
                 y = sub['WinNum'].values
-                model = LinearRegression().fit(X, y)
-                r2_two.append({'Variables': f"{x_col}, {y_col}", 'R²': model.score(X, y)})
-        df2 = pd.DataFrame(r2_two).sort_values('R²', ascending=False).head(20)
-        st.write("**Top 20 Two‑Variable Combinations**")
-        st.dataframe(df2, use_container_width=True)
+                try:
+                    model = LogisticRegression(max_iter=1000).fit(X, y)
+                    y_prob = model.predict_proba(X)[:, 1]
+                    auc = roc_auc_score(y, y_prob)
+                    auc_three.append({'Variables': ', '.join(combo), 'AUC': auc})
+                except:
+                    pass
+            df_auc3 = pd.DataFrame(auc_three).sort_values('AUC', ascending=False).head(20)
 
-        # --- Three variables ---
-        import itertools
-        r2_three = []
-        for combo in itertools.combinations(candidates, 3):
-            sub = hist_for_r2[list(combo) + ['WinNum']].dropna()
-            if len(sub) < 10:
-                continue
-            X = sub[list(combo)].values
-            y = sub['WinNum'].values
-            model = LinearRegression().fit(X, y)
-            r2_three.append({'Variables': ', '.join(combo), 'R²': model.score(X, y)})
-        df3 = pd.DataFrame(r2_three).sort_values('R²', ascending=False).head(20)
-        st.write("**Top 20 Three‑Variable Combinations**")
-        st.dataframe(df3, use_container_width=True)
+            st.session_state.auc_results = {
+                'two_vars': df_auc2,
+                'three_vars': df_auc3
+            }
+
+    if st.session_state.auc_results is not None:
+        st.write("**Top 20 Two‑Variable Win/Loss Predictors (AUC)**")
+        st.dataframe(st.session_state.auc_results['two_vars'], use_container_width=True)
+        st.write("**Top 20 Three‑Variable Win/Loss Predictors (AUC)**")
+        st.dataframe(st.session_state.auc_results['three_vars'], use_container_width=True)
+    else:
+        st.info("Click the button above to compute the best variable combinations.")
 else:
-    st.warning("Not enough numerical features for R² analysis.")
+    st.warning("Not enough numerical features for AUC analysis.")
 # =========================================================================
 # SPIDER CHART (DIFFERENTIALS) + SIMILARITY (FILTERED DATA)
 # =========================================================================
