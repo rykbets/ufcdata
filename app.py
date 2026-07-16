@@ -1138,7 +1138,7 @@ else:
     st.write("No categorical columns with meaningful variation.")
 
 # =========================================================================
-# SPIDER CHART – FIGHTER‑SIDE FILTERS (KEEPS BOTH FIGHTERS) + LR/KNN + SIMILARITY + BAYESIAN WIN RATES
+# SPIDER CHART – FIGHTER‑SIDE FILTERS (WIN RATE ON FILTERED ROWS) + LR/KNN + SIMILARITY + BAYESIAN WIN RATES
 # =========================================================================
 st.header("Fight Similarity & Comparison (Independent Filters)")
 
@@ -1185,7 +1185,7 @@ spider_data = all_fights_display.copy()
 
 mask = pd.Series(True, index=spider_data.index)
 
-# Apply each filter to the mask (only where the filter is active)
+# Apply each filter to the mask
 if spider_wc: mask &= spider_data['WC'].isin(spider_wc)
 if spider_stance: mask &= spider_data['Stance'].isin(spider_stance)
 if spider_country: mask &= spider_data['Country'].isin(spider_country)
@@ -1217,7 +1217,7 @@ spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] 
 if spider_upcoming.empty:
     st.write("No upcoming fights after spider filters.")
 else:
-    # Only keep fights that have both fighters (should almost always be true now)
+    # Keep only complete fights (both fighters present) – should always be true now
     fight_counts = spider_upcoming.groupby('FightID').size()
     complete_ids = fight_counts[fight_counts == 2].index
     spider_upcoming = spider_upcoming[spider_upcoming['FightID'].isin(complete_ids)]
@@ -1225,8 +1225,11 @@ else:
     if spider_upcoming.empty:
         st.warning("No upcoming fight has both fighters after spider filters.")
     else:
-        # Full historical data (all fights that passed the FightID‑based filtering)
+        # Full historical data (all rows for these FightIDs)
         spider_hist_full = spider_data[spider_data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
+
+        # For overall win rate, use only the rows that actually passed the mask (the fighters that met criteria)
+        spider_hist_filtered = spider_data.loc[mask & spider_data['Win?'].isin(['Yes','No'])]
 
         # Variable selector
         numeric_cols = [c for c in spider_upcoming.columns if pd.api.types.is_numeric_dtype(spider_upcoming[c])]
@@ -1310,9 +1313,10 @@ else:
                     prob_lr_f1 = lr_spider.predict_proba(up_vec)[0, 1]
                     prob_knn_f1 = knn_spider.predict_proba(up_vec)[0, 1]
 
-                    # Dataset‑wide win rates (based on ALL spider_hist_full)
-                    overall_wr_spider = (spider_hist_full['Win?'] == 'Yes').mean() * 100 if len(spider_hist_full) > 0 else 0.0
-                    recent_spider = spider_hist_full.tail(recent_window)
+                    # Dataset‑wide win rates (based ONLY on rows that passed the mask)
+                    overall_wr_spider = (spider_hist_filtered['Win?'] == 'Yes').mean() * 100 if len(spider_hist_filtered) > 0 else 0.0
+                    # Recent win rate also from filtered rows
+                    recent_spider = spider_hist_filtered.tail(recent_window)
                     recent_wr_spider = (recent_spider['Win?'] == 'Yes').mean() * 100 if len(recent_spider) > 0 else 0.0
                     shrunk_lr_spider = (prior_weight * (overall_wr_spider / 100) + prob_lr_f1) / (prior_weight + 1)
                     shrunk_knn_spider = (prior_weight * (overall_wr_spider / 100) + prob_knn_f1) / (prior_weight + 1)
@@ -1325,7 +1329,7 @@ else:
                         st.metric("KNN win prob", f"{prob_knn_f1:.1%}")
                         st.metric("KNN shrunken", f"{shrunk_knn_spider:.1%}")
                     with col_sp3:
-                        st.metric("Overall Win% (spider)", f"{overall_wr_spider:.1f}%")
+                        st.metric("Overall Win% (filtered)", f"{overall_wr_spider:.1f}%")
                         st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr_spider:.1f}%")
 
                     # ---- Similarity Score (restricted to the most recent N fights) ----
