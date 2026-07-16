@@ -793,7 +793,7 @@ if len(available_pred) >= 2:
 
                 # KNN
                 k = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_2d")
-                knn = KNeighborsClassifier(n_neighbors=k)
+                knn = KNeighborsClassifier(n_neighbors=k, weights='distance')
                 knn.fit(X_hist, y_hist)
                 y_prob_knn = knn.predict_proba(X_hist)[:, 1]
                 ll_knn = log_loss(y_hist, y_prob_knn)
@@ -917,7 +917,7 @@ if len(three_d_features) >= 3:
             bs_lr3d = brier_score_loss(y_hist3d, y_prob_lr3d)
 
             k3d = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_3d")
-            knn3d = KNeighborsClassifier(n_neighbors=k3d)
+            knn3d = KNeighborsClassifier(n_neighbors=k3d, weights='distance')
             knn3d.fit(X_hist3d, y_hist3d)
             y_prob_knn3d = knn3d.predict_proba(X_hist3d)[:, 1]
             ll_knn3d = log_loss(y_hist3d, y_prob_knn3d)
@@ -1268,7 +1268,7 @@ else:
 
                 # KNN
                 k_spider = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_spider")
-                knn_spider = KNeighborsClassifier(n_neighbors=k_spider)
+                knn_spider = KNeighborsClassifier(n_neighbors=k_spider, weights='distance')
                 knn_spider.fit(X_spider, y_spider)
                 y_prob_knn_spider = knn_spider.predict_proba(X_spider)[:, 1]
                 ll_knn_spider = log_loss(y_spider, y_prob_knn_spider)
