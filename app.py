@@ -1138,12 +1138,12 @@ else:
     st.write("No categorical columns with meaningful variation.")
 
 # =========================================================================
-# SPIDER CHART – INDEPENDENT CATEGORICAL FILTERS + LR/KNN + SIMILARITY + BAYESIAN WIN RATES
+# SPIDER CHART – FIGHTER‑SIDE CATEGORICAL FILTERS ONLY + LR/KNN + SIMILARITY + BAYESIAN WIN RATES
 # =========================================================================
 st.header("Fight Similarity & Comparison (Independent Filters)")
 
-# ---- Spider‑specific categorical filters (fighter‑side only) ----
-st.subheader("Spider Chart Filters (applied only here)")
+# ---- Spider‑specific fighter‑side categorical filters ----
+st.subheader("Spider Chart Filters (fighter data only)")
 
 col_sp1, col_sp2 = st.columns(2)
 
@@ -1157,21 +1157,17 @@ with col_sp1:
 with col_sp2:
     spider_title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"], key="spider_title")
     spider_hometown = st.selectbox("Hometown", ["All", "Yes", "No"], key="spider_home")
-    spider_opp_hometown = st.selectbox("Opp Hometown", ["All", "Yes", "No"], key="spider_opphome")
     spider_new_wc = st.checkbox("New Weight Class", key="spider_new_wc")
     spider_skip_nc = st.checkbox("Skip NC outcomes", key="spider_skip_nc")
     spider_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
-    spider_opp_prev_title = st.selectbox("Opp Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_opp_prev_title")
 
-# Previous outcome columns (spider version, depends on spider_skip_nc)
+# Previous outcome columns (spider version, based on spider_skip_nc)
 if spider_skip_nc:
     spider_prev1_col = 'Prev1_Outcome_skipNC'; spider_prev2_col = 'Prev2_Outcome_skipNC'; spider_prev3_col = 'Prev3_Outcome_skipNC'
     spider_career1_col = 'Career1_Outcome_skipNC'; spider_career2_col = 'Career2_Outcome_skipNC'; spider_career3_col = 'Career3_Outcome_skipNC'
-    spider_opp_career1_col = 'Opponent_Career1_Outcome_skipNC'; spider_opp_career2_col = 'Opponent_Career2_Outcome_skipNC'; spider_opp_career3_col = 'Opponent_Career3_Outcome_skipNC'
 else:
     spider_prev1_col = 'Prev1_Outcome_raw'; spider_prev2_col = 'Prev2_Outcome_raw'; spider_prev3_col = 'Prev3_Outcome_raw'
     spider_career1_col = 'Career1_Outcome_raw'; spider_career2_col = 'Career2_Outcome_raw'; spider_career3_col = 'Career3_Outcome_raw'
-    spider_opp_career1_col = 'Opponent_Career1_Outcome_raw'; spider_opp_career2_col = 'Opponent_Career2_Outcome_raw'; spider_opp_career3_col = 'Opponent_Career3_Outcome_raw'
 
 all_outcomes_raw_spider = sorted(all_fights[spider_prev1_col].dropna().unique())
 all_outcomes_career_spider = sorted(all_fights[spider_career1_col].dropna().unique())
@@ -1180,51 +1176,32 @@ with st.expander("Previous Outcomes (Spider)"):
     spider_prev1 = st.multiselect("Prev Fight 1", all_outcomes_raw_spider, key="spider_prev1")
     spider_prev2 = st.multiselect("Prev Fight 2", all_outcomes_raw_spider, key="spider_prev2")
     spider_prev3 = st.multiselect("Prev Fight 3", all_outcomes_raw_spider, key="spider_prev3")
-    spider_opp_prev1 = st.multiselect("Opp Prev 1", all_outcomes_raw_spider, key="spider_opp_prev1")
-    spider_opp_prev2 = st.multiselect("Opp Prev 2", all_outcomes_raw_spider, key="spider_opp_prev2")
-    spider_opp_prev3 = st.multiselect("Opp Prev 3", all_outcomes_raw_spider, key="spider_opp_prev3")
     spider_career1 = st.multiselect("Career F1", all_outcomes_career_spider, key="spider_career1")
     spider_career2 = st.multiselect("Career F2", all_outcomes_career_spider, key="spider_career2")
     spider_career3 = st.multiselect("Career F3", all_outcomes_career_spider, key="spider_career3")
-    spider_opp_career1 = st.multiselect("Opp Career F1", all_outcomes_career_spider, key="spider_opp_career1")
-    spider_opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career_spider, key="spider_opp_career2")
-    spider_opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career_spider, key="spider_opp_career3")
 
 # ---- Apply spider filters to a copy of all_fights_display ----
 spider_data = all_fights_display.copy()
 
-# Categorical filters (all fighter‑side, safe)
+# Apply fighter‑side filters only
 if spider_wc: spider_data = spider_data[spider_data['WC'].isin(spider_wc)]
 if spider_stance: spider_data = spider_data[spider_data['Stance'].isin(spider_stance)]
 if spider_country: spider_data = spider_data[spider_data['Country'].isin(spider_country)]
 if spider_sched_rounds: spider_data = spider_data[spider_data['ScheduledRounds'].isin(spider_sched_rounds)]
 if spider_title_fight != "All": spider_data = spider_data[spider_data['Title'] == spider_title_fight]
 if spider_hometown != "All": spider_data = spider_data[spider_data['HometownFighter'] == spider_hometown]
-if spider_opp_hometown != "All": spider_data = spider_data[spider_data['Opponent_Hometown'] == spider_opp_hometown]
 if spider_event_country: spider_data = spider_data[spider_data['EventCountry'].isin(spider_event_country)]
 if spider_new_wc: spider_data = spider_data[spider_data['IsNewWeightClass'] == True]
-
-# Title/previous outcomes
 if spider_prev_title != "All":
     spider_data = spider_data[spider_data['Prev1_Title'] == spider_prev_title]
-if spider_opp_prev_title != "All":
-    spider_data = spider_data[spider_data['Opponent_Prev1_Title'] == spider_opp_prev_title]
+
+# Previous outcomes (fighter only)
 if spider_prev1: spider_data = spider_data[spider_data[spider_prev1_col].isin(spider_prev1)]
 if spider_prev2: spider_data = spider_data[spider_data[spider_prev2_col].isin(spider_prev2)]
 if spider_prev3: spider_data = spider_data[spider_data[spider_prev3_col].isin(spider_prev3)]
 if spider_career1: spider_data = spider_data[spider_data[spider_career1_col].isin(spider_career1)]
 if spider_career2: spider_data = spider_data[spider_data[spider_career2_col].isin(spider_career2)]
 if spider_career3: spider_data = spider_data[spider_data[spider_career3_col].isin(spider_career3)]
-if spider_opp_career1: spider_data = spider_data[spider_data[spider_opp_career1_col].isin(spider_opp_career1)]
-if spider_opp_career2: spider_data = spider_data[spider_data[spider_opp_career2_col].isin(spider_opp_career2)]
-if spider_opp_career3: spider_data = spider_data[spider_data[spider_opp_career3_col].isin(spider_opp_career3)]
-
-for opp_shift, opp_widget in [(1, spider_opp_prev1), (2, spider_opp_prev2), (3, spider_opp_prev3)]:
-    raw_col = f'Opponent_Prev{opp_shift}_Outcome_raw'
-    if raw_col in spider_data.columns:
-        use_col = f'Opponent_Prev{opp_shift}_Outcome_skipNC' if spider_skip_nc else raw_col
-        if use_col in spider_data.columns and opp_widget:
-            spider_data = spider_data[spider_data[use_col].isin(opp_widget)]
 
 # ---- Extract upcoming fights from spider_data ----
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
