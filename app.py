@@ -1138,7 +1138,7 @@ else:
     st.write("No categorical columns with meaningful variation.")
 
 # =========================================================================
-# SPIDER CHART – FIGHTER‑SIDE CATEGORICAL FILTERS ONLY + LR/KNN + SIMILARITY + BAYESIAN WIN RATES
+# SPIDER CHART – FIGHTER‑SIDE FILTERS (KEEPS BOTH FIGHTERS) + LR/KNN + SIMILARITY + BAYESIAN WIN RATES
 # =========================================================================
 st.header("Fight Similarity & Comparison (Independent Filters)")
 
@@ -1180,28 +1180,36 @@ with st.expander("Previous Outcomes (Spider)"):
     spider_career2 = st.multiselect("Career F2", all_outcomes_career_spider, key="spider_career2")
     spider_career3 = st.multiselect("Career F3", all_outcomes_career_spider, key="spider_career3")
 
-# ---- Apply spider filters to a copy of all_fights_display ----
+# ---- Build a mask of rows that satisfy the spider filters (fighter‑side) ----
 spider_data = all_fights_display.copy()
 
-# Fighter‑side filters only
-if spider_wc: spider_data = spider_data[spider_data['WC'].isin(spider_wc)]
-if spider_stance: spider_data = spider_data[spider_data['Stance'].isin(spider_stance)]
-if spider_country: spider_data = spider_data[spider_data['Country'].isin(spider_country)]
-if spider_sched_rounds: spider_data = spider_data[spider_data['ScheduledRounds'].isin(spider_sched_rounds)]
-if spider_title_fight != "All": spider_data = spider_data[spider_data['Title'] == spider_title_fight]
-if spider_hometown != "All": spider_data = spider_data[spider_data['HometownFighter'] == spider_hometown]
-if spider_event_country: spider_data = spider_data[spider_data['EventCountry'].isin(spider_event_country)]
-if spider_new_wc: spider_data = spider_data[spider_data['IsNewWeightClass'] == True]
+mask = pd.Series(True, index=spider_data.index)
+
+# Apply each filter to the mask (only where the filter is active)
+if spider_wc: mask &= spider_data['WC'].isin(spider_wc)
+if spider_stance: mask &= spider_data['Stance'].isin(spider_stance)
+if spider_country: mask &= spider_data['Country'].isin(spider_country)
+if spider_sched_rounds: mask &= spider_data['ScheduledRounds'].isin(spider_sched_rounds)
+if spider_title_fight != "All": mask &= spider_data['Title'] == spider_title_fight
+if spider_hometown != "All": mask &= spider_data['HometownFighter'] == spider_hometown
+if spider_event_country: mask &= spider_data['EventCountry'].isin(spider_event_country)
+if spider_new_wc: mask &= spider_data['IsNewWeightClass'] == True
 if spider_prev_title != "All":
-    spider_data = spider_data[spider_data['Prev1_Title'] == spider_prev_title]
+    mask &= spider_data['Prev1_Title'] == spider_prev_title
 
 # Fighter‑side previous outcomes
-if spider_prev1: spider_data = spider_data[spider_data[spider_prev1_col].isin(spider_prev1)]
-if spider_prev2: spider_data = spider_data[spider_data[spider_prev2_col].isin(spider_prev2)]
-if spider_prev3: spider_data = spider_data[spider_data[spider_prev3_col].isin(spider_prev3)]
-if spider_career1: spider_data = spider_data[spider_data[spider_career1_col].isin(spider_career1)]
-if spider_career2: spider_data = spider_data[spider_data[spider_career2_col].isin(spider_career2)]
-if spider_career3: spider_data = spider_data[spider_data[spider_career3_col].isin(spider_career3)]
+if spider_prev1: mask &= spider_data[spider_prev1_col].isin(spider_prev1)
+if spider_prev2: mask &= spider_data[spider_prev2_col].isin(spider_prev2)
+if spider_prev3: mask &= spider_data[spider_prev3_col].isin(spider_prev3)
+if spider_career1: mask &= spider_data[spider_career1_col].isin(spider_career1)
+if spider_career2: mask &= spider_data[spider_career2_col].isin(spider_career2)
+if spider_career3: mask &= spider_data[spider_career3_col].isin(spider_career3)
+
+# Find FightIDs where at least one row passes the mask
+valid_fight_ids = spider_data.loc[mask, 'FightID'].unique()
+
+# Keep all rows for those FightIDs (so both fighters stay together)
+spider_data = spider_data[spider_data['FightID'].isin(valid_fight_ids)]
 
 # ---- Extract upcoming fights from spider_data ----
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
@@ -1209,14 +1217,15 @@ spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] 
 if spider_upcoming.empty:
     st.write("No upcoming fights after spider filters.")
 else:
+    # Only keep fights that have both fighters (should almost always be true now)
     fight_counts = spider_upcoming.groupby('FightID').size()
     complete_ids = fight_counts[fight_counts == 2].index
     spider_upcoming = spider_upcoming[spider_upcoming['FightID'].isin(complete_ids)]
 
     if spider_upcoming.empty:
-        st.warning("No upcoming fight has both fighters after spider filters. Adjust your spider filters to see comparisons.")
+        st.warning("No upcoming fight has both fighters after spider filters.")
     else:
-        # Full historical data (all fights passing spider filters)
+        # Full historical data (all fights that passed the FightID‑based filtering)
         spider_hist_full = spider_data[spider_data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
 
         # Variable selector
