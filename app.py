@@ -790,15 +790,20 @@ if len(available_pred) >= 2:
                 ll_lr = log_loss(y_hist, y_prob_lr)
                 bs_lr = brier_score_loss(y_hist, y_prob_lr)
 
-                # KNN (weighted, scaled)
+                # KNN (weighted, scaled) – realistic metrics via 5‑fold CV
                 k = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_2d")
+                from sklearn.model_selection import cross_val_predict
                 scaler_knn = StandardScaler()
                 X_hist_scaled = scaler_knn.fit_transform(X_hist)
-                knn = KNeighborsClassifier(n_neighbors=k, weights='distance')
-                knn.fit(X_hist_scaled, y_hist)
-                y_prob_knn = knn.predict_proba(X_hist_scaled)[:, 1]
+                knn_cv = KNeighborsClassifier(n_neighbors=k, weights='distance')
+                # Cross‑validated probabilities (each test point not in its own training fold)
+                y_prob_knn = cross_val_predict(knn_cv, X_hist_scaled, y_hist, cv=5, method='predict_proba')[:, 1]
                 ll_knn = log_loss(y_hist, y_prob_knn)
                 bs_knn = brier_score_loss(y_hist, y_prob_knn)
+
+                # Train final KNN on all data for prediction
+                knn = KNeighborsClassifier(n_neighbors=k, weights='distance')
+                knn.fit(X_hist_scaled, y_hist)
 
                 # Scatter plot with decision boundary
                 plot_data = data[[pred_x, pred_y, 'DetailedResult', 'Fight', 'Win?']].copy()
@@ -918,15 +923,19 @@ if len(three_d_features) >= 3:
             ll_lr3d = log_loss(y_hist3d, y_prob_lr3d)
             bs_lr3d = brier_score_loss(y_hist3d, y_prob_lr3d)
 
-            # KNN (weighted, scaled)
+            # KNN (weighted, scaled) – cross‑validated metrics
             k3d = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_3d")
             scaler_knn3d = StandardScaler()
             X_hist_scaled3d = scaler_knn3d.fit_transform(X_hist3d)
-            knn3d = KNeighborsClassifier(n_neighbors=k3d, weights='distance')
-            knn3d.fit(X_hist_scaled3d, y_hist3d)
-            y_prob_knn3d = knn3d.predict_proba(X_hist_scaled3d)[:, 1]
+            knn_cv3d = KNeighborsClassifier(n_neighbors=k3d, weights='distance')
+            from sklearn.model_selection import cross_val_predict
+            y_prob_knn3d = cross_val_predict(knn_cv3d, X_hist_scaled3d, y_hist3d, cv=5, method='predict_proba')[:, 1]
             ll_knn3d = log_loss(y_hist3d, y_prob_knn3d)
             bs_knn3d = brier_score_loss(y_hist3d, y_prob_knn3d)
+
+            # Final KNN for prediction
+            knn3d = KNeighborsClassifier(n_neighbors=k3d, weights='distance')
+            knn3d.fit(X_hist_scaled3d, y_hist3d)
 
             plot_data3d = data[[x3d, y3d, z3d, 'DetailedResult', 'Fight']].dropna()
             fig3d = px.scatter_3d(
@@ -1270,15 +1279,19 @@ else:
                 ll_lr_spider = log_loss(y_spider, y_prob_lr)
                 bs_lr_spider = brier_score_loss(y_spider, y_prob_lr)
 
-                # KNN (weighted, scaled)
+                # KNN (weighted, scaled) – cross‑validated metrics
                 k_spider = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_spider")
                 scaler_knn_spider = StandardScaler()
                 X_spider_scaled_knn = scaler_knn_spider.fit_transform(X_spider)
-                knn_spider = KNeighborsClassifier(n_neighbors=k_spider, weights='distance')
-                knn_spider.fit(X_spider_scaled_knn, y_spider)
-                y_prob_knn_spider = knn_spider.predict_proba(X_spider_scaled_knn)[:, 1]
+                knn_cv_spider = KNeighborsClassifier(n_neighbors=k_spider, weights='distance')
+                from sklearn.model_selection import cross_val_predict
+                y_prob_knn_spider = cross_val_predict(knn_cv_spider, X_spider_scaled_knn, y_spider, cv=5, method='predict_proba')[:, 1]
                 ll_knn_spider = log_loss(y_spider, y_prob_knn_spider)
                 bs_knn_spider = brier_score_loss(y_spider, y_prob_knn_spider)
+
+                # Final KNN for prediction
+                knn_spider = KNeighborsClassifier(n_neighbors=k_spider, weights='distance')
+                knn_spider.fit(X_spider_scaled_knn, y_spider)
 
                 col_sm1, col_sm2 = st.columns(2)
                 with col_sm1:
