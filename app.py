@@ -8,19 +8,16 @@ import os
 import gdown
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.preprocessing import StandardScaler
-from sklearn.neighbors import NearestNeighbors
-from sklearn.decomposition import PCA
-import hashlib
-import json
+from sklearn.impute import SimpleImputer
+from scipy.spatial.distance import cdist
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
 # ============================================================
-# 🔑 YOUR GOOGLE DRIVE FILE IDS (make sure files are publicly shared)
+# 🔑 YOUR GOOGLE DRIVE FILE IDS
 # ============================================================
-MAIN_FILE_ID      = "1eWDGGS8qQdLWvS_dgJ-HqObsr4ie9RcD"          # ufc_all_data.csv
-UPCOMING_FILE_ID  = "1mUyNR2WLHQjC8IuvG7RA6LoXPjJq3aZ1"      # upcoming_fights.csv (or "" if none)
-# ============================================================
+MAIN_FILE_ID      = "1eWDGGS8qQdLWvS_dgJ-HqObsr4ie9RcD"
+UPCOMING_FILE_ID  = "1mUyNR2WLHQjC8IuvG7RA6LoXPjJq3aZ1"
 
 # ---------- Cached data loader ----------
 @st.cache_data
@@ -143,14 +140,14 @@ def load_full_data():
     pairs['AgeDiff'] = pairs['Age'] - pairs['Age_opp']
     pairs['HeightDiff'] = pairs['Height'] - pairs['Height_opp']
     pairs['ReachDiff'] = pairs['Reach'] - pairs['Reach_opp']
-    fight_totals = pairs.copy()   # now contains Age_opp, Height_opp, Reach_opp
+    fight_totals = pairs.copy()
 
-    # ---------- Career pre‑fight averages (striking/grappling) – FIXED ----------
+    # ---------- FIXED CAREER AVERAGES ----------
     career_stat_cols = ['SS','SSA','TS','TSA','TD','TDA','Subs','Reversals','KD','DSL']
     if 'Ctrl' in fight_totals.columns:
         career_stat_cols.append('Ctrl')
 
-    # Work on a copy of rows that have real fight stats
+    # Work on a copy of rows that have real fight stats (historical)
     has_stats = fight_totals['SS'].notna()
     stats_df = fight_totals[has_stats].copy()
     stats_df.sort_values(['Fighter','FightDate'], inplace=True)
@@ -352,7 +349,7 @@ for col in ['EventCountry', 'Country', 'Stance', 'WC', 'Title', 'ScheduledRounds
     if col in all_fights_display.columns:
         all_fights_display[col] = all_fights_display[col].fillna('').astype(str)
 
-# ---------- Sidebar Filters ----------
+# ---------- Sidebar Filters (unchanged) ----------
 st.sidebar.title("Filters")
 
 with st.sidebar.expander("General", expanded=True):
@@ -701,7 +698,7 @@ color_map = {
     'Draw': 'gray'
 }
 
-# Build numerical feature list for regression and later use
+# Build numerical feature list for regression (using filtered data)
 core = [
     'Age', 'Height', 'Reach',
     'Age_opp', 'Height_opp', 'Reach_opp',
@@ -750,7 +747,7 @@ else:
     st.warning("Not enough numerical features for regression.")
 
 # =========================================================================
-# ADVANCED ANALYSIS
+# ADVANCED ANALYSIS (filtered data)
 # =========================================================================
 st.header("Advanced Analysis")
 
@@ -763,7 +760,6 @@ if numerical_features:
     X = hist_data[numerical_features].dropna()
     y = hist_data.loc[X.index, 'Target']
     if len(X) > 10:
-        from sklearn.impute import SimpleImputer
         X_imp = SimpleImputer(strategy='median').fit_transform(X)
         mi_scores = mutual_info_classif(X_imp, y, discrete_features=False)
         mi_df = pd.DataFrame({'Feature': numerical_features, 'Mutual Information': mi_scores}).sort_values('Mutual Information', ascending=False).head(20)
@@ -811,18 +807,31 @@ else:
                        color_discrete_sequence=['red'])
         st.plotly_chart(fig_l, use_container_width=True)
 
-# ---------- 3. Combined Spider Chart + Similarity Scorer ----------
-st.subheader("Fight Similarity & Comparison")
+# =========================================================================
+# SPIDER CHART + SIMILARITY (COMPLETELY INDEPENDENT OF MAIN FILTERS)
+# =========================================================================
+st.header("Fight Similarity & Comparison (All Data)")
+
+# Use the FULL upcoming dataset (all_fights_display), not the filtered one
 all_upcoming = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
 
 if all_upcoming.empty:
     st.write("No upcoming fights in dataset.")
 else:
-    available_num = [c for c in numerical_features if c in all_upcoming.columns]
-    if available_num:
-        selected_vars = st.multiselect("Select up to 8 numerical variables", available_num,
-                                       default=available_num[:5], max_selections=8,
-                                       key="shared_metrics")
+    # Collect numeric columns directly from the upcoming dataframe
+    numeric_cols = [c for c in all_upcoming.columns if pd.api.types.is_numeric_dtype(all_upcoming[c])]
+    # Preferred list: physical, days, career averages, odds, fight numbers
+    preferred = ['Age','Height','Reach','Age_opp','Height_opp','Reach_opp',
+                 'AgeDiff','HeightDiff','ReachDiff',
+                 'DaysSincePrev','Avg3DaysGap','FightNumber','Opponent_FightNumber',
+                 'FighterOddsNum','PrevFighterOddsNum','CareerWinPct']
+    career_avg_cols = [c for c in numeric_cols if c.startswith('CareerAvg_')]
+    spider_vars = [c for c in preferred + career_avg_cols if c in numeric_cols]
+
+    if spider_vars:
+        selected_vars = st.multiselect("Select up to 8 numerical variables", spider_vars,
+                                       default=spider_vars[:5], max_selections=8,
+                                       key="spider_vars")
     else:
         selected_vars = []
 
@@ -833,67 +842,46 @@ else:
         if selected_fight_spider:
             fight_rows = all_upcoming[all_upcoming['FightID'] == selected_fight_spider]
             if len(fight_rows) != 2:
-                st.error("Could not load both fighters for this fight.")
+                st.error("Could not load both fighters.")
             else:
                 f1 = fight_rows.iloc[0]
                 f2 = fight_rows.iloc[1]
 
-                # Build values, replacing NaN with 0
-                f1_vals = []
-                f2_vals = []
-                missing_vars = []
-                for var in selected_vars:
-                    v1 = f1[var] if pd.notna(f1[var]) else 0
-                    v2 = f2[var] if pd.notna(f2[var]) else 0
-                    f1_vals.append(v1)
-                    f2_vals.append(v2)
-                    if pd.isna(f1[var]) or pd.isna(f2[var]):
-                        missing_vars.append(var)
+                f1_vals = [f1[var] if pd.notna(f1[var]) else 0 for var in selected_vars]
+                f2_vals = [f2[var] if pd.notna(f2[var]) else 0 for var in selected_vars]
 
-                if missing_vars:
-                    st.caption(f"⚠️ Missing data (shown as 0): {', '.join(missing_vars)}")
+                missing = [var for var in selected_vars if pd.isna(f1[var]) or pd.isna(f2[var])]
+                if missing:
+                    st.caption(f"⚠️ Missing data (shown as 0): {', '.join(missing)}")
 
                 fig_radar = go.Figure()
-                fig_radar.add_trace(go.Scatterpolar(
-                    r=f1_vals,
-                    theta=selected_vars,
-                    fill='toself',
-                    name=f1['Fighter']
-                ))
-                fig_radar.add_trace(go.Scatterpolar(
-                    r=f2_vals,
-                    theta=selected_vars,
-                    fill='toself',
-                    name=f2['Fighter']
-                ))
-                fig_radar.update_layout(
-                    polar=dict(radialaxis=dict(visible=True)),
-                    title=f"{f1['Fighter']} vs {f2['Fighter']}"
-                )
+                fig_radar.add_trace(go.Scatterpolar(r=f1_vals, theta=selected_vars, fill='toself', name=f1['Fighter']))
+                fig_radar.add_trace(go.Scatterpolar(r=f2_vals, theta=selected_vars, fill='toself', name=f2['Fighter']))
+                fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True)),
+                                        title=f"{f1['Fighter']} vs {f2['Fighter']}")
                 st.plotly_chart(fig_radar, use_container_width=True)
 
-                # Similarity scorer (uses the same selected_vars, but drops historical rows with any NaN)
-                hist_for_sim = data[data['Win?'].isin(['Yes','No'])].dropna(subset=selected_vars)
-                if not hist_for_sim.empty:
+                # Similarity scorer – use ALL historical fights (ignore filters)
+                hist_full = all_fights_display[all_fights_display['Win?'].isin(['Yes','No'])].dropna(subset=selected_vars)
+                if not hist_full.empty:
                     up_row = f1
-                    X_hist = hist_for_sim[selected_vars].values
+                    X_hist = hist_full[selected_vars].values
                     scaler = StandardScaler()
                     X_hist_scaled = scaler.fit_transform(X_hist)
                     up_vec = up_row[selected_vars].values.reshape(1, -1)
                     up_scaled = scaler.transform(up_vec)
 
-                    from scipy.spatial.distance import cdist
                     dists = cdist(up_scaled, X_hist_scaled, metric='euclidean').flatten()
                     max_dist = dists.max() if dists.max() > 0 else 1
                     similarity = 100 * (1 - dists / max_dist)
 
-                    res_df = hist_for_sim[['FightDate','Fighter','Opponent','WC','Win?','Method']].copy()
+                    res_df = hist_full[['FightDate','Fighter','Opponent','WC','Win?','Method']].copy()
                     res_df['Similarity'] = similarity.round(1)
                     res_df = res_df.sort_values('Similarity', ascending=False).head(20)
 
                     st.write(f"**Most similar historical fights to {up_row['Fighter']}**")
                     st.dataframe(res_df, use_container_width=True)
                 else:
-                    st.warning("No historical fights with the selected metrics for similarity.")
+                    st.warning("No complete historical fights for selected metrics.")
     else:
         st.info("Select at least one numerical variable to enable comparison.")
