@@ -130,7 +130,7 @@ def load_full_data():
     else:
         fight_totals['OpponentOddsNum'] = np.nan
 
-    # Differences with opponent (also keep opponent's raw attributes)
+    # Differences with opponent (physical)
     pairs = fight_totals.merge(
         fight_totals[['FightID','Fighter','Age','Height','Reach']],
         left_on=['FightID','Opponent'], right_on=['FightID','Fighter'],
@@ -188,6 +188,36 @@ def load_full_data():
     opp_career.rename(columns={'Fighter':'Opponent', **{c: f'Opponent_{c}' for c in avg_cols}}, inplace=True)
     fight_totals = fight_totals.merge(opp_career, on=['FightID','Opponent'], how='left')
 
+    # ---------- Opponent days & gaps ----------
+    opp_days = fight_totals[['FightID','Fighter','DaysSincePrev','Avg3DaysGap']].copy()
+    opp_days.rename(columns={
+        'Fighter':'Opponent',
+        'DaysSincePrev':'Opponent_DaysSincePrev',
+        'Avg3DaysGap':'Opponent_Avg3DaysGap'
+    }, inplace=True)
+    fight_totals = fight_totals.merge(opp_days, on=['FightID','Opponent'], how='left')
+
+    # ---------- CREATE DIFFERENTIAL COLUMNS (Fighter − Opponent) ----------
+    diff_pairs = [
+        ('CareerAvg_SS', 'Opponent_CareerAvg_SS'),
+        ('CareerAvg_SSA', 'Opponent_CareerAvg_SSA'),
+        ('CareerAvg_TS', 'Opponent_CareerAvg_TS'),
+        ('CareerAvg_TSA', 'Opponent_CareerAvg_TSA'),
+        ('CareerAvg_TD', 'Opponent_CareerAvg_TD'),
+        ('CareerAvg_TDA', 'Opponent_CareerAvg_TDA'),
+        ('CareerAvg_Subs', 'Opponent_CareerAvg_Subs'),
+        ('CareerAvg_Reversals', 'Opponent_CareerAvg_Reversals'),
+        ('CareerAvg_KD', 'Opponent_CareerAvg_KD'),
+        ('CareerAvg_DSL', 'Opponent_CareerAvg_DSL'),
+        ('CareerAvg_Ctrl', 'Opponent_CareerAvg_Ctrl'),
+        ('CareerWinPct', 'Opponent_CareerWinPct'),
+        ('DaysSincePrev', 'Opponent_DaysSincePrev'),
+        ('Avg3DaysGap', 'Opponent_Avg3DaysGap'),
+    ]
+    for f_col, o_col in diff_pairs:
+        if f_col in fight_totals.columns and o_col in fight_totals.columns:
+            fight_totals[f'{f_col}_Diff'] = fight_totals[f_col] - fight_totals[o_col]
+
     # Accuracy
     if 'CareerAvg_SS' in fight_totals.columns and 'CareerAvg_SSA' in fight_totals.columns:
         fight_totals['CareerAvg_SS_Acc'] = (
@@ -196,13 +226,13 @@ def load_full_data():
 
     fight_totals['prev_fights_count'] = fight_totals['FightNumber'] - 1
 
-    # Previous fight stats (shifts)
+    # Previous fight stats (shifts) – unchanged
     for shift in [1,2,3]:
         for col in ['Win?','Method','Round','WC','Title'] + agg_cols + ['AgeDiff','HeightDiff','ReachDiff']:
             fight_totals[f'Prev{shift}_{col}'] = fight_totals.groupby('Fighter')[col].shift(shift)
         fight_totals.rename(columns={f'Prev{shift}_Win?': f'Prev{shift}_Win'}, inplace=True)
 
-    # Outcome classification helpers
+    # Outcome classification helpers (unchanged)
     def extract_round_from_method(method_str):
         if not isinstance(method_str, str): return None
         m = re.search(r'[Rr]ound\s*(\d)', method_str)
@@ -239,6 +269,7 @@ def load_full_data():
             if pd.notna(r[f'Prev{shift}_Method']) else None, axis=1
         )
 
+    # Skip NC outcomes (unchanged)
     def get_skip_nc_outcomes(group):
         results = {1: [], 2: [], 3: []}
         methods = group['Method'].tolist()
@@ -693,7 +724,7 @@ color_map = {
     'Draw': 'gray'
 }
 
-# Numerical features (including opponent career averages)
+# Numerical features (including opponent career averages and differentials)
 core = [
     'Age', 'Height', 'Reach',
     'Age_opp', 'Height_opp', 'Reach_opp',
@@ -701,11 +732,13 @@ core = [
     'DaysSincePrev', 'Avg3DaysGap',
     'FightNumber', 'Opponent_FightNumber',
     'FighterOddsNum', 'PrevFighterOddsNum',
-    'CareerWinPct', 'Opponent_CareerWinPct'
+    'CareerWinPct', 'Opponent_CareerWinPct',
+    'DaysSincePrev_Diff', 'Avg3DaysGap_Diff', 'CareerWinPct_Diff'
 ]
 career_avg = [col for col in data.columns if col.startswith('CareerAvg_') and not col.startswith('Opponent_CareerAvg_')]
 opp_career_avg = [col for col in data.columns if col.startswith('Opponent_CareerAvg_')]
-numerical_features = [c for c in core + career_avg + opp_career_avg if c in data.columns and data[c].nunique(dropna=True) >= 2]
+diff_cols = [col for col in data.columns if col.endswith('_Diff')]
+numerical_features = [c for c in core + career_avg + opp_career_avg + diff_cols if c in data.columns and data[c].nunique(dropna=True) >= 2]
 
 available_reg = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
 if len(available_reg) >= 2:
@@ -804,24 +837,25 @@ else:
         st.plotly_chart(fig_l, use_container_width=True)
 
 # =========================================================================
-# SPIDER CHART (DIFFERENTIALS) + SIMILARITY
+# SPIDER CHART (DIFFERENTIALS) + SIMILARITY (INDEPENDENT OF FILTERS)
 # =========================================================================
 st.header("Fight Similarity & Comparison (All Data)")
 
 all_upcoming = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
 
 if all_upcoming.empty:
-    st.write("No upcoming fights.")
+    st.write("No upcoming fights in dataset.")
 else:
-    # Pick numeric columns available in the upcoming data
-    num_cols = [c for c in all_upcoming.columns if pd.api.types.is_numeric_dtype(all_upcoming[c])]
-    # Include everything that looks like a stat: career averages, opponent career averages, physical, etc.
-    spider_vars = sorted([c for c in num_cols if any(
-        c.startswith(p) for p in ['Age','Height','Reach','DaysSincePrev','Avg3DaysGap',
-                                  'FightNumber','Opponent_FightNumber',
-                                  'FighterOddsNum','PrevFighterOddsNum',
-                                  'CareerWinPct','CareerAvg_','Opponent_CareerAvg_']
-    )])
+    # Collect every numeric column that could be useful
+    numeric_cols = [c for c in all_upcoming.columns if pd.api.types.is_numeric_dtype(all_upcoming[c])]
+    # Pick columns that are likely relevant: basic stats, career averages, differentials
+    wanted_keys = ['Age','Height','Reach',
+                   'DaysSincePrev','Avg3DaysGap',
+                   'FightNumber','Opponent_FightNumber',
+                   'FighterOddsNum','PrevFighterOddsNum',
+                   'CareerWinPct','CareerAvg_','Opponent_CareerAvg_',
+                   '_Diff']   # this catches all our new differential columns
+    spider_vars = sorted([c for c in numeric_cols if any(c.startswith(k) or k in c for k in wanted_keys)])
 
     if not spider_vars:
         st.warning("No numeric variables found in upcoming data.")
@@ -830,57 +864,65 @@ else:
                                        default=spider_vars[:5], max_selections=8,
                                        key="spider_select_vars")
 
-        if selected_vars:
-            upcoming_fight_ids = all_upcoming['FightID'].unique()
-            chosen_fight = st.selectbox("Choose an upcoming fight", sorted(upcoming_fight_ids), key="spider_fight")
+    if selected_vars:
+        up_ids = all_upcoming['FightID'].unique()
+        chosen_fight = st.selectbox("Choose an upcoming fight", sorted(up_ids), key="spider_fight")
 
-            if chosen_fight:
-                fight_rows = all_upcoming[all_upcoming['FightID'] == chosen_fight]
-                if len(fight_rows) == 2:
-                    f1 = fight_rows.iloc[0]
-                    f2 = fight_rows.iloc[1]
+        if chosen_fight:
+            fight_rows = all_upcoming[all_upcoming['FightID'] == chosen_fight]
+            if len(fight_rows) != 2:
+                st.error("Could not load both fighters.")
+            else:
+                f1 = fight_rows.iloc[0]
+                f2 = fight_rows.iloc[1]
 
-                    # ----- THE ONLY THING YOU WANT: SUBTRACT TWO NUMBERS -----
-                    diffs = []
-                    for var in selected_vars:
+                # ----- Values for the radar chart -----
+                radar_values = []
+                for var in selected_vars:
+                    # If the variable already is a differential (e.g. AgeDiff), just use it
+                    # Otherwise subtract Fighter2 from Fighter1
+                    if var.endswith('_Diff') or var in ['AgeDiff','HeightDiff','ReachDiff']:
+                        # Already a difference column
+                        val = f1[var] if pd.notna(f1[var]) else 0
+                    else:
                         v1 = f1[var] if pd.notna(f1[var]) else 0
                         v2 = f2[var] if pd.notna(f2[var]) else 0
-                        diffs.append(v1 - v2)
+                        val = v1 - v2
+                    radar_values.append(val)
 
-                    # ----- RADAR CHART (ALWAYS SHOWN) -----
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatterpolar(
-                        r=diffs,
-                        theta=selected_vars,
-                        fill='toself',
-                        name=f"{f1['Fighter']} advantage"
-                    ))
-                    fig.update_layout(
-                        polar=dict(radialaxis=dict(visible=True)),
-                        title=f"Advantage: {f1['Fighter']} vs {f2['Fighter']}"
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
+                # ----- Radar chart (always displayed) -----
+                fig_radar = go.Figure()
+                fig_radar.add_trace(go.Scatterpolar(
+                    r=radar_values,
+                    theta=selected_vars,
+                    fill='toself',
+                    name=f"{f1['Fighter']} advantage"
+                ))
+                fig_radar.update_layout(
+                    polar=dict(radialaxis=dict(visible=True)),
+                    title=f"Advantage: {f1['Fighter']} vs {f2['Fighter']}"
+                )
+                st.plotly_chart(fig_radar, use_container_width=True)
 
-                    # ----- Similarity scorer (optional, uses same selected_vars) -----
-                    hist_full = all_fights_display[all_fights_display['Win?'].isin(['Yes','No'])].dropna(subset=selected_vars)
-                    if not hist_full.empty:
-                        up_row = f1
-                        X_hist = hist_full[selected_vars].values
-                        scaler = StandardScaler()
-                        X_hist_scaled = scaler.fit_transform(X_hist)
-                        up_vec = up_row[selected_vars].values.reshape(1, -1)
-                        up_scaled = scaler.transform(up_vec)
+                # ----- Similarity scorer (uses the same selected_vars) -----
+                hist_full = all_fights_display[all_fights_display['Win?'].isin(['Yes','No'])].dropna(subset=selected_vars)
+                if not hist_full.empty:
+                    up_row = f1
+                    X_hist = hist_full[selected_vars].values
+                    scaler = StandardScaler()
+                    X_hist_scaled = scaler.fit_transform(X_hist)
+                    up_vec = up_row[selected_vars].values.reshape(1, -1)
+                    up_scaled = scaler.transform(up_vec)
 
-                        from scipy.spatial.distance import cdist
-                        dists = cdist(up_scaled, X_hist_scaled, metric='euclidean').flatten()
-                        max_dist = dists.max() if dists.max() > 0 else 1
-                        similarity = 100 * (1 - dists / max_dist)
+                    dists = cdist(up_scaled, X_hist_scaled, metric='euclidean').flatten()
+                    max_dist = dists.max() if dists.max() > 0 else 1
+                    similarity = 100 * (1 - dists / max_dist)
 
-                        res_df = hist_full[['FightDate','Fighter','Opponent','WC','Win?','Method']].copy()
-                        res_df['Similarity'] = similarity.round(1)
-                        res_df = res_df.sort_values('Similarity', ascending=False).head(20)
+                    res_df = hist_full[['FightDate','Fighter','Opponent','WC','Win?','Method']].copy()
+                    res_df['Similarity'] = similarity.round(1)
+                    res_df = res_df.sort_values('Similarity', ascending=False).head(20)
 
-                        st.write(f"**Most similar historical fights to {up_row['Fighter']}**")
-                        st.dataframe(res_df, use_container_width=True)
-                    else:
-                        st.warning("No complete historical fights for similarity.")
+                    st.write(f"**Most similar historical fights to {up_row['Fighter']}**")
+                    st.dataframe(res_df, use_container_width=True)
+                else:
+                    st.warning("No complete historical fights for similarity.")
