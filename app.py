@@ -615,8 +615,6 @@ if not upcoming_data_unfiltered.empty:
                 st.write(f"**Fight #:** {row['FightNumber']} | **Opp Fight #:** {row['Opponent_FightNumber']}")
                 st.write(f"**Days Since Prev:** {row['DaysSincePrev']:.0f} days  | **Avg 3‑Fight Gap:** {row['Avg3DaysGap']:.0f} days")
                 st.write(f"**Career Win %:** {row['CareerWinPct']:.1f}%")
-                if 'RecentWinRate_Shrunk' in row:
-                    st.write(f"**Recent Win Rate (shrunk):** {row['RecentWinRate_Shrunk']:.1f}%")
                 st.write(f"**Odds (Fighter/Opp):** {row['FighterOddsBFO']} / {row['OpponentOddsBFO']}")
 
                 st.write("**Career Averages (before this fight):**")
@@ -697,9 +695,8 @@ display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
 
 # =========================================================================
-# COMMON DEFINITIONS & BAYESIAN SHRINKAGE
+# COMMON DEFINITIONS
 # =========================================================================
-# Build clean numerical feature list (no Prev, no Opponent_Prev)
 core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
         'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev', 'Avg3DaysGap',
         'FightNumber', 'Opponent_FightNumber', 'FighterOddsNum', 'PrevFighterOddsNum',
@@ -744,47 +741,22 @@ color_map = {
     'Draw': 'gray'
 }
 
-# ---------- Bayesian Shrinkage for Recent Win Rate (only) ----------
-st.sidebar.header("Recent Performance Settings")
-recent_window = st.sidebar.slider("Recent fights window", 1, 10, 5, key="recent_win")
-prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight")
+# ---------- Bayesian Shrinkage Helper ----------
+def compute_win_rates(fighter_name, hist_df, recent_window=5):
+    """Return (overall_winrate, recent_winrate, recent_count) for a fighter in hist_df."""
+    fighter_fights = hist_df[hist_df['Fighter'] == fighter_name].sort_values('FightDate')
+    if len(fighter_fights) == 0:
+        return 0, 0, 0
+    overall_winrate = (fighter_fights['Win?'] == 'Yes').mean() * 100
+    recent_fights = fighter_fights.tail(recent_window)
+    recent_count = len(recent_fights)
+    recent_winrate = (recent_fights['Win?'] == 'Yes').mean() * 100 if recent_count > 0 else 0
+    return overall_winrate, recent_winrate, recent_count
 
-# Work on full historical data to compute per‑fighter recent win rate
-hist_full = all_fights_display[all_fights_display['Win?'].isin(['Yes','No'])].copy()
-hist_full = hist_full.sort_values(['Fighter','FightDate'])
+# Shrinkage slider
+prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight_global")
+recent_window = st.sidebar.slider("Recent fights window", 1, 20, 5, key="recent_win_global")
 
-# 1. Overall (career) win rate per fighter → Series indexed by Fighter
-overall_winrate = hist_full.groupby('Fighter')['Win?'].apply(
-    lambda x: (x == 'Yes').mean() * 100
-)
-
-# 2. Recent win rate – rolling window, shifted to use only previous fights
-recent_records = []
-for fighter, grp in hist_full.groupby('Fighter', sort=False):
-    grp = grp.copy()
-    wins = (grp['Win?'] == 'Yes').astype(int)
-    grp['RecentWins'] = wins.rolling(recent_window, min_periods=1).sum().shift(1)
-    grp['RecentTotal'] = wins.rolling(recent_window, min_periods=1).count().shift(1)
-    grp['RecentWinRate'] = (grp['RecentWins'] / grp['RecentTotal'].replace(0, np.nan)) * 100
-    recent_records.append(grp[['FightID','Fighter','RecentWinRate']])
-
-recent_df = pd.concat(recent_records, ignore_index=True)
-
-# 3. Attach overall win rate using .map()
-recent_df['OverallWinRate'] = recent_df['Fighter'].map(overall_winrate)
-
-# 4. Bayesian shrinkage for recent win rate
-recent_df['RecentWinRate_Shrunk'] = (
-    (recent_df['OverallWinRate'] * prior_weight + recent_df['RecentWinRate'].fillna(0) * recent_window)
-    / (prior_weight + recent_window)
-)
-
-# 5. Merge the new features into the filtered data
-shrink_cols = ['FightID','Fighter','RecentWinRate','RecentWinRate_Shrunk']
-data = data.merge(recent_df[shrink_cols], on=['FightID','Fighter'], how='left')
-
-# 6. Add the new features to numerical_features so they become selectable
-numerical_features = numerical_features + ['RecentWinRate','RecentWinRate_Shrunk']
 # ---------- 2D Win/Loss Prediction (Logistic Regression + KNN) ----------
 st.header("2D Win/Loss Prediction")
 st.markdown("Select two predictor variables. Logistic Regression and KNN models are fitted. Log‑loss, Brier score, and win probability are shown.")
@@ -808,14 +780,12 @@ if len(available_pred) >= 2:
             X_hist = hist[[pred_x, pred_y]].values
             y_hist = hist['target'].values
 
-            # Logistic Regression
             logreg = LogisticRegression(max_iter=1000)
             logreg.fit(X_hist, y_hist)
             y_prob_lr = logreg.predict_proba(X_hist)[:, 1]
             ll_lr = log_loss(y_hist, y_prob_lr)
             bs_lr = brier_score_loss(y_hist, y_prob_lr)
 
-            # KNN
             k = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_2d")
             knn = KNeighborsClassifier(n_neighbors=k)
             knn.fit(X_hist, y_hist)
@@ -865,15 +835,30 @@ if len(available_pred) >= 2:
                     up_rows = all_upcoming_reg[all_upcoming_reg['FightID'] == chosen_up]
                     if len(up_rows) == 2:
                         fighter_row = up_rows.iloc[0]
+                        fighter_name = fighter_row['Fighter']
                         if all(pd.notna(fighter_row[f]) for f in [pred_x, pred_y]):
                             up_val = np.array([[fighter_row[pred_x], fighter_row[pred_y]]])
                             prob_lr = logreg.predict_proba(up_val)[0, 1]
                             prob_knn = knn.predict_proba(up_val)[0, 1]
-                            col_p1, col_p2 = st.columns(2)
+                            
+                            # Win rate calculations on the filtered historical data
+                            overall_wr, recent_wr, recent_cnt = compute_win_rates(fighter_name, data[data['Win?'].isin(['Yes','No'])], recent_window)
+                            # Bayesian shrinkage
+                            if recent_cnt > 0:
+                                shrunk = (overall_wr * prior_weight + recent_wr * recent_cnt) / (prior_weight + recent_cnt)
+                            else:
+                                shrunk = overall_wr
+
+                            col_p1, col_p2, col_p3, col_p4 = st.columns(4)
                             with col_p1:
-                                st.metric(f"LR win prob for {fighter_row['Fighter']}", f"{prob_lr:.1%}")
+                                st.metric("LR win prob", f"{prob_lr:.1%}")
                             with col_p2:
-                                st.metric(f"KNN win prob for {fighter_row['Fighter']}", f"{prob_knn:.1%}")
+                                st.metric("KNN win prob", f"{prob_knn:.1%}")
+                            with col_p3:
+                                st.metric("Overall Win%", f"{overall_wr:.1f}%", help="Career win rate under current filters")
+                            with col_p4:
+                                st.metric("Recent Win%", f"{recent_wr:.1f}%", help=f"Last {recent_cnt} fights")
+                            st.metric("Shrunken Win%", f"{shrunk:.1f}%", help="Bayesian shrinkage of recent win rate toward overall")
                         else:
                             st.warning("Selected fighter does not have both predictor values.")
             else:
@@ -946,16 +931,29 @@ if len(three_d_features) >= 3:
                     up_rows_3d = all_upcoming_3d[all_upcoming_3d['FightID'] == chosen_up_3d]
                     if len(up_rows_3d) == 2:
                         fighter_row = up_rows_3d.iloc[0]
+                        fighter_name = fighter_row['Fighter']
                         feats = [x3d, y3d, z3d]
                         if all(pd.notna(fighter_row[f]) for f in feats):
                             up_val3d = np.array([fighter_row[feats].values])
                             prob_lr = logreg3d.predict_proba(up_val3d)[0, 1]
                             prob_knn = knn3d.predict_proba(up_val3d)[0, 1]
-                            col_p1, col_p2 = st.columns(2)
+
+                            overall_wr, recent_wr, recent_cnt = compute_win_rates(fighter_name, data[data['Win?'].isin(['Yes','No'])], recent_window)
+                            if recent_cnt > 0:
+                                shrunk = (overall_wr * prior_weight + recent_wr * recent_cnt) / (prior_weight + recent_cnt)
+                            else:
+                                shrunk = overall_wr
+
+                            col_p1, col_p2, col_p3, col_p4 = st.columns(4)
                             with col_p1:
-                                st.metric(f"LR win prob for {fighter_row['Fighter']}", f"{prob_lr:.1%}")
+                                st.metric("LR win prob", f"{prob_lr:.1%}")
                             with col_p2:
-                                st.metric(f"KNN win prob for {fighter_row['Fighter']}", f"{prob_knn:.1%}")
+                                st.metric("KNN win prob", f"{prob_knn:.1%}")
+                            with col_p3:
+                                st.metric("Overall Win%", f"{overall_wr:.1f}%")
+                            with col_p4:
+                                st.metric("Recent Win%", f"{recent_wr:.1f}%")
+                            st.metric("Shrunken Win%", f"{shrunk:.1f}%")
                         else:
                             st.warning("Selected fighter does not have all predictor values.")
             else:
@@ -974,7 +972,6 @@ st.subheader("Feature Importance – Fighter Numerical Stats")
 importance_features = [c for c in numerical_features
                        if not c.startswith('Opponent_')
                        and not c.endswith('_Diff')
-                       and not c.startswith('Recent_')   # optional: exclude raw recent stats to avoid leakage
                        and not re.match(r'Prev\d+_', c)]
 
 @st.cache_data
@@ -1119,7 +1116,7 @@ else:
 # =========================================================================
 st.header("Fight Similarity & Comparison (Independent Filters)")
 
-# ---- Spider‑specific categorical filters ----
+# Spider‑specific categorical filters
 st.subheader("Spider Chart Filters (applied only here)")
 spider_cat_cols = ['WC','Stance','Country','EventCountry','Title','ScheduledRounds','HometownFighter','Opponent_Hometown']
 spider_filter_values = {}
@@ -1149,7 +1146,7 @@ else:
     else:
         # Train models on spider-filtered historical data
         spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])]
-        # Select variables for modeling (same as before)
+        # Select variables for modeling
         numeric_cols = [c for c in spider_upcoming.columns if pd.api.types.is_numeric_dtype(spider_upcoming[c])]
         clean_cols = [c for c in numeric_cols if not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')]
         wanted_keys = [
@@ -1158,7 +1155,7 @@ else:
             'FightNumber', 'Opponent_FightNumber',
             'FighterOddsNum', 'PrevFighterOddsNum',
             'CareerWinPct', 'CareerAvg_', 'Opponent_CareerAvg_',
-            '_Diff', 'RecentWinRate_Shrunk', 'Recent_'
+            '_Diff'
         ]
         spider_vars = sorted([c for c in clean_cols if any(c.startswith(k) or k in c for k in wanted_keys)])
 
@@ -1236,9 +1233,18 @@ else:
                     with col_sp2:
                         st.metric(f"KNN win prob for {f1['Fighter']}", f"{prob_knn_f1:.1%}")
 
+                    # Win rate statistics for the selected fighter using spider_hist
+                    overall_wr, recent_wr, recent_cnt = compute_win_rates(f1['Fighter'], spider_hist, recent_window)
+                    if recent_cnt > 0:
+                        shrunk_spider = (overall_wr * prior_weight + recent_wr * recent_cnt) / (prior_weight + recent_cnt)
+                    else:
+                        shrunk_spider = overall_wr
+                    st.metric("Overall Win% (spider)", f"{overall_wr:.1f}%")
+                    st.metric("Recent Win% (spider)", f"{recent_wr:.1f}%", help=f"Last {recent_cnt} fights")
+                    st.metric("Shrunken Win% (spider)", f"{shrunk_spider:.1f}%")
+
                     # ---- Similarity Score (most similar historical fights) ----
                     st.subheader("Most Similar Historical Fights")
-                    # Use Euclidean distance on selected variables (scaled)
                     scaler = StandardScaler()
                     X_spider_scaled = scaler.fit_transform(X_spider)
                     up_scaled = scaler.transform(up_vec)
