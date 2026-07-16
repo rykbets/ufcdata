@@ -682,54 +682,64 @@ color_map = {
 # ---------- Advanced Analysis ----------
 st.header("Advanced Analysis")
 
-# ---------- 1. Categorical Winners & Losers Bar Charts ----------
-st.subheader("Top Categorical Metrics for Winners")
-# Get winners only (from filtered data, exclude upcoming)
-winners_data = data[data['Win?'] == 'Yes']
-losers_data = data[data['Win?'] == 'No']
-
+# ---------- 1. Categorical Winners & Losers – Stacked Outcome Bars ----------
+st.subheader("Categorical Metrics Breakdown by Outcome")
 categorical_cols = [col for col in ['WC','Stance','Country','EventCountry','Title','ScheduledRounds','HometownFighter','Opponent_Hometown']
                     if col in data.columns]
 
-if len(categorical_cols) > 0 and not winners_data.empty:
-    top_n = 20
-    # Collect all category-value pairs with win counts
-    win_entries = []
-    for col in categorical_cols:
-        counts = winners_data[col].value_counts().head(top_n)
-        for val, cnt in counts.items():
-            win_entries.append({'Category': f"{col}: {val}", 'Wins': cnt})
-    if win_entries:
-        win_df = pd.DataFrame(win_entries).sort_values('Wins', ascending=False).head(top_n)
-        fig_wins = px.bar(win_df, x='Wins', y='Category', orientation='h', title=f"Top {top_n} Categorical Values by Win Count")
-        st.plotly_chart(fig_wins, use_container_width=True)
-    else:
-        st.write("No categorical winner data to display.")
-else:
-    st.write("No winners or categorical columns found.")
+# Combine all data into long-form with outcome classification
+def outcome_label(row):
+    win_raw = row.get('Win?')
+    if win_raw is None or pd.isna(win_raw) or str(win_raw).strip().lower() in ('', 'none', 'nan'):
+        return 'Upcoming'
+    win_val = str(win_raw).strip()
+    method = str(row.get('Method', '')).strip().lower()
+    if 'dq' in method or 'disqualif' in method:
+        return 'Win by DQ' if win_val == 'Yes' else 'Loss by DQ'
+    if win_val in ('No Contest', 'NC'):
+        return 'No Contest'
+    if win_val == 'Draw':
+        return 'Draw'
+    if win_val == 'Yes':
+        return 'Win'
+    if win_val == 'No':
+        return 'Loss'
+    return 'Upcoming'
 
-st.subheader("Top Categorical Metrics for Losers")
-if len(categorical_cols) > 0 and not losers_data.empty:
-    top_n = 20
-    loss_entries = []
-    for col in categorical_cols:
-        counts = losers_data[col].value_counts().head(top_n)
-        for val, cnt in counts.items():
-            loss_entries.append({'Category': f"{col}: {val}", 'Losses': cnt})
-    if loss_entries:
-        loss_df = pd.DataFrame(loss_entries).sort_values('Losses', ascending=False).head(top_n)
-        fig_losses = px.bar(loss_df, x='Losses', y='Category', orientation='h', title=f"Top {top_n} Categorical Values by Loss Count")
-        st.plotly_chart(fig_losses, use_container_width=True)
-    else:
-        st.write("No categorical loser data to display.")
+data['OutcomeLabel'] = data.apply(outcome_label, axis=1)
+
+# Build a single long-form DataFrame for all categorical columns
+rows_list = []
+for col in categorical_cols:
+    # Group by category value and outcome, count
+    grouped = data.groupby([col, 'OutcomeLabel']).size().reset_index(name='Count')
+    grouped.rename(columns={col: 'Value'}, inplace=True)
+    grouped['Category'] = col
+    rows_list.append(grouped)
+
+if rows_list:
+    long_df = pd.concat(rows_list, ignore_index=True)
+    # Create a "Category: Value" label for y-axis
+    long_df['Label'] = long_df['Category'] + ': ' + long_df['Value'].astype(str)
+    # For each category type, find top 20 most frequent values (by total count)
+    top_per_category = long_df.groupby(['Category','Label'])['Count'].sum().groupby(level='Category').nlargest(15).reset_index(level=0, drop=True).index
+    long_df = long_df[long_df['Label'].isin(top_per_category)]
+
+    # Stacked bar chart
+    fig_cat = px.bar(long_df, x='Count', y='Label', color='OutcomeLabel', orientation='h',
+                     title="Outcome Distribution per Top Categorical Values",
+                     color_discrete_map={'Win':'green','Loss':'red','No Contest':'purple','Draw':'gray',
+                                         'Win by DQ':'limegreen','Loss by DQ':'darkred','Upcoming':'blue'})
+    fig_cat.update_layout(barmode='stack', height=800)
+    st.plotly_chart(fig_cat, use_container_width=True)
 else:
-    st.write("No losers or categorical columns found.")
+    st.write("No categorical columns found.")
 
 # ---------- 2. Feature Importance (numerical features only) ----------
 st.subheader("Feature Importance Ranking (Numerical Only)")
 
-# Build global features as before, but we'll filter to numerical later
-global_features_data = data.copy()  # use filtered data
+# Build feature set (same as before, but we'll filter to numerical later)
+global_features_data = data.copy()
 
 core = [
     'Age', 'Height', 'Reach',
@@ -743,12 +753,12 @@ core = [
 career_avg = [col for col in global_features_data.columns if col.startswith('CareerAvg_')]
 global_features = [c for c in core + career_avg if c in global_features_data.columns and global_features_data[c].nunique(dropna=True) >= 2]
 
-# Previous outcome binary features (needed for MI but we'll exclude them later)
-outcome_cols = {
+# Binary outcome columns (needed for completeness, but we'll exclude them later)
+outcome_cols_dict = {
     'Prev1': prev1_col, 'Prev2': prev2_col, 'Prev3': prev3_col,
     'OppPrev1': 'Opponent_Prev1_Outcome_raw', 'OppPrev2': 'Opponent_Prev2_Outcome_raw', 'OppPrev3': 'Opponent_Prev3_Outcome_raw'
 }
-for prefix, col in outcome_cols.items():
+for prefix, col in outcome_cols_dict.items():
     if col not in global_features_data.columns: continue
     global_features_data[f'{prefix}_is_Win']   = global_features_data[col].str.startswith('Win').astype(int)
     global_features_data[f'{prefix}_is_Loss']  = global_features_data[col].str.startswith('Loss').astype(int)
@@ -772,7 +782,7 @@ for col in binary_cols:
         global_features_data[clean_col] = global_features_data[col].astype(str).str.strip().str.lower().map({'yes': 1}).fillna(0).astype(int)
         global_features.append(clean_col)
 
-# Categorical encodings (we'll exclude them later anyway)
+# Categorical encodings (will be excluded)
 for cat_col, enc_name in [('ScheduledRounds','SchedRounds_enc'), ('WC','WC_enc'), ('EventCountry','EventCountry_enc')]:
     if cat_col in global_features_data.columns:
         global_features_data[enc_name] = pd.factorize(global_features_data[cat_col].fillna(''))[0]
@@ -780,28 +790,24 @@ for cat_col, enc_name in [('ScheduledRounds','SchedRounds_enc'), ('WC','WC_enc')
 
 global_features = sorted(list(set(global_features)))
 
-# Now filter to numerical features only:
-# Exclude any binary flags (suffixes: _is_Win, _is_Loss, etc.), binary _clean columns, _enc columns
+# Define numerical features (exclude binary flags, clean columns, encodings)
 def is_numerical(feat):
-    # Keep if not ending with these patterns
     exclude_suffixes = ('_is_Win','_is_Loss','_is_Draw','_is_NC',
                         '_method_KO','_method_Sub','_method_Dec','_method_DQ',
                         '_clean','_enc')
     for suf in exclude_suffixes:
         if feat.endswith(suf):
             return False
-    # Also exclude if it's a binary outcome column name directly
-    if feat in outcome_cols.values():
+    if feat in outcome_cols_dict.values():
         return False
     return True
 
 numerical_features = [f for f in global_features if is_numerical(f) and f in global_features_data.columns and global_features_data[f].nunique(dropna=True) >= 2]
 
-# Compute MI using all features but then filter mi_df to numerical only
+# Mutual information
 analysis_data = data[data['Win?'].isin(['Yes','No'])].copy()
 analysis_data['Target'] = (analysis_data['Win?'] == 'Yes').astype(int)
-
-features = [f for f in global_features if f in analysis_data.columns]  # all features for MI
+features = [f for f in global_features if f in analysis_data.columns]
 X = analysis_data[features]
 y = analysis_data['Target']
 from sklearn.impute import SimpleImputer
@@ -809,7 +815,6 @@ X_imp = SimpleImputer(strategy='median').fit_transform(X)
 mi_scores = mutual_info_classif(X_imp, y, discrete_features=False)
 mi_df = pd.DataFrame({'Feature': features, 'Mutual Information': mi_scores}).sort_values('Mutual Information', ascending=False)
 
-# Show only numerical features
 mi_numerical = mi_df[mi_df['Feature'].isin(numerical_features)].head(20)
 if not mi_numerical.empty:
     fig_imp = px.bar(mi_numerical, x='Mutual Information', y='Feature', orientation='h',
@@ -821,7 +826,6 @@ else:
 # ---------- 3. PCA Visualization ----------
 st.subheader("PCA Dimensionality Reduction")
 if len(numerical_features) >= 2:
-    # Use data with known outcomes for PCA fit, but include upcoming as overlay
     hist_data = data[data['Win?'].isin(['Yes','No'])]
     upcoming_data = data[data['Win?'].isna() | (data['Win?'] == '')]
 
@@ -837,7 +841,7 @@ if len(numerical_features) >= 2:
             pca_df['Win?'] = hist_data.loc[X_hist.index, 'Win?'].values
             pca_df['Fighter'] = hist_data.loc[X_hist.index, 'Fighter'].values
             pca_df['Opponent'] = hist_data.loc[X_hist.index, 'Opponent'].values
-            pca_df['Result'] = pca_df['Win?'].apply(lambda x: 'Win' if x == 'Yes' else 'Loss')
+            pca_df['Result'] = pca_df['Win?'].apply(lambda x: 'Win' if x == 'Yes' else ('Loss' if x == 'No' else x))
 
             # Add upcoming if any
             if not upcoming_data.empty:
@@ -851,6 +855,11 @@ if len(numerical_features) >= 2:
                     up_df['Opponent'] = upcoming_data.loc[X_up.index, 'Opponent'].values
                     up_df['Result'] = 'Upcoming'
                     pca_df = pd.concat([pca_df, up_df], ignore_index=True)
+
+            # Display explained variance
+            var_pc1 = pca.explained_variance_ratio_[0]*100
+            var_pc2 = pca.explained_variance_ratio_[1]*100
+            st.caption(f"Explained variance: PC1 = {var_pc1:.1f}%, PC2 = {var_pc2:.1f}%")
 
             fig_pca = px.scatter(
                 pca_df, x='PC1', y='PC2', color='Result',
@@ -866,26 +875,22 @@ if len(numerical_features) >= 2:
 else:
     st.write("Need at least 2 numerical features for PCA.")
 
-# ---------- 4. KNN Similarity Lookup ----------
+# ---------- 4. KNN Similarity Lookup (using ALL upcoming fights for selection) ----------
 st.subheader("KNN Similarity – Find Nearest Historical Fights")
-# Filter upcoming fights that passed filters
-upcoming_filtered = data[data['Win?'].isna() | (data['Win?'] == '')]
+# Use unfiltered upcoming data for the selection dropdown
+all_upcoming = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
 historical_filtered = data[data['Win?'].isin(['Yes','No'])]
 
-if not upcoming_filtered.empty and not historical_filtered.empty and len(numerical_features) >= 2:
-    # Let user pick an upcoming fight from the filtered set
-    up_ids = upcoming_filtered['FightID'].unique()
-    selected_up_fight = st.selectbox("Select upcoming fight for KNN lookup", sorted(up_ids), key="knn_select")
+if not all_upcoming.empty and not historical_filtered.empty and len(numerical_features) >= 2:
+    up_ids = all_upcoming['FightID'].unique()
+    selected_up_fight = st.selectbox("Select upcoming fight", sorted(up_ids), key="knn_select")
 
     if selected_up_fight:
-        up_row = upcoming_filtered[upcoming_filtered['FightID'] == selected_up_fight].iloc[0]
+        up_row = all_upcoming[all_upcoming['FightID'] == selected_up_fight].iloc[0]
         st.write(f"**Selected:** {up_row['Fighter']} vs {up_row['Opponent']}")
 
-        # Prepare historical numerical features
         X_hist = historical_filtered[numerical_features].dropna()
-        # Need the same features for upcoming row
         up_feat = up_row[numerical_features].dropna()
-        # Align columns
         common_cols = X_hist.columns.intersection(up_feat.index)
         if len(common_cols) < 2:
             st.warning("Not enough common numerical features for KNN.")
@@ -902,7 +907,6 @@ if not upcoming_filtered.empty and not historical_filtered.empty and len(numeric
             nn.fit(X_hist_scaled)
             distances, indices = nn.kneighbors(up_scaled)
 
-            # Get the historical rows
             neighbors = historical_filtered.iloc[X_hist.index[indices[0]]]
             neighbors = neighbors.copy()
             neighbors['Distance'] = distances[0]
@@ -910,4 +914,4 @@ if not upcoming_filtered.empty and not historical_filtered.empty and len(numeric
             st.write("**Nearest Historical Fights:**")
             st.dataframe(neighbors.sort_values('Distance'))
 else:
-    st.write("Need both historical and upcoming fights in the filtered data for KNN lookup.")
+    st.write("Need at least one upcoming fight and some historical data in the current filter to compute KNN.")
