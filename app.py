@@ -735,10 +735,44 @@ else:
 # =========================================================================
 st.header("Advanced Analysis")
 
-# ---------- 1. Top Winners / Losers Across All Categories ----------
-st.subheader("Top 20 Categorical Values – Most Wins & Most Losses")
+# ---------- 1. Feature Importance (Numerical Only) ----------
+st.subheader("Feature Importance – Numerical Features")
+# Use historical data (exclude upcoming) to compute mutual information
+hist_data = data[data['Win?'].isin(['Yes','No'])].copy()
+hist_data['Target'] = (hist_data['Win?'] == 'Yes').astype(int)
 
-# Collect all potential categorical columns, then keep only those with >1 unique value
+# Build numerical feature list (same as before)
+core = [
+    'Age', 'Height', 'Reach',
+    'Age_opp', 'Height_opp', 'Reach_opp',
+    'AgeDiff', 'HeightDiff', 'ReachDiff',
+    'DaysSincePrev', 'Avg3DaysGap',
+    'FightNumber', 'Opponent_FightNumber',
+    'FighterOddsNum', 'PrevFighterOddsNum',
+    'CareerWinPct'
+]
+career_avg = [col for col in hist_data.columns if col.startswith('CareerAvg_')]
+numerical_features = [c for c in core + career_avg if c in hist_data.columns and hist_data[c].nunique(dropna=True) >= 2]
+
+if numerical_features:
+    X = hist_data[numerical_features].dropna()
+    y = hist_data.loc[X.index, 'Target']
+    if len(X) > 10:
+        from sklearn.impute import SimpleImputer
+        X_imp = SimpleImputer(strategy='median').fit_transform(X)
+        mi_scores = mutual_info_classif(X_imp, y, discrete_features=False)
+        mi_df = pd.DataFrame({'Feature': numerical_features, 'Mutual Information': mi_scores}).sort_values('Mutual Information', ascending=False).head(20)
+
+        fig_mi = px.bar(mi_df, x='Mutual Information', y='Feature', orientation='h',
+                        title="Top 20 Numerical Features by Mutual Information with Win/Loss")
+        st.plotly_chart(fig_mi, use_container_width=True)
+    else:
+        st.warning("Not enough historical data for feature importance.")
+else:
+    st.warning("No numerical features available.")
+
+# ---------- 2. Top Winners / Losers Across All Categories ----------
+st.subheader("Top 20 Categorical Values – Most Wins & Most Losses")
 potential_cat_cols = ['WC','Stance','Country','EventCountry','Title','ScheduledRounds','HometownFighter','Opponent_Hometown']
 categorical_cols = []
 for col in potential_cat_cols:
@@ -750,7 +784,6 @@ if not categorical_cols:
 else:
     win_pairs = []
     loss_pairs = []
-
     for col in categorical_cols:
         win_counts = data[data['Win?'] == 'Yes'][col].value_counts()
         loss_counts = data[data['Win?'] == 'No'][col].value_counts()
@@ -767,89 +800,82 @@ else:
                        title="Top 20 Category Values by Win Count",
                        color_discrete_sequence=['green'])
         st.plotly_chart(fig_w, use_container_width=True)
-
     if not loss_df.empty:
         fig_l = px.bar(loss_df, x='Losses', y='Category', orientation='h',
                        title="Top 20 Category Values by Loss Count",
                        color_discrete_sequence=['red'])
         st.plotly_chart(fig_l, use_container_width=True)
 
-# ---------- 2. Spider Chart (optional – you can keep or remove) ----------
-st.subheader("Spider Chart – Fighter Comparison")
+# ---------- 3. Combined Spider Chart + Similarity Scorer ----------
+st.subheader("Fight Similarity & Comparison")
 all_upcoming = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
-if not all_upcoming.empty:
-    up_ids = all_upcoming['FightID'].unique()
-    selected_fight_spider = st.selectbox("Select upcoming fight", sorted(up_ids), key="spider_select")
 
-    spider_feats = [c for c in numerical_features if c in all_upcoming.columns]
-    if spider_feats:
-        selected_vars = st.multiselect("Choose up to 8 numerical variables", spider_feats,
-                                       default=spider_feats[:5], max_selections=8)
+if all_upcoming.empty:
+    st.write("No upcoming fights in dataset.")
+else:
+    # Shared feature selection
+    available_num = [c for c in numerical_features if c in all_upcoming.columns]
+    if available_num:
+        selected_vars = st.multiselect("Select up to 8 numerical variables", available_num,
+                                       default=available_num[:5], max_selections=8,
+                                       key="shared_metrics")
     else:
         selected_vars = []
 
-    if selected_fight_spider and selected_vars:
-        fight_rows = all_upcoming[all_upcoming['FightID'] == selected_fight_spider]
-        if len(fight_rows) == 2:
-            f1 = fight_rows.iloc[0]
-            f2 = fight_rows.iloc[1]
+    # Spider chart
+    if selected_vars:
+        up_ids = all_upcoming['FightID'].unique()
+        selected_fight_spider = st.selectbox("Choose an upcoming fight", sorted(up_ids), key="spider_select")
 
-            categories = selected_vars
-            fig_radar = go.Figure()
-            fig_radar.add_trace(go.Scatterpolar(
-                r=[f1[var] for var in categories],
-                theta=categories,
-                fill='toself',
-                name=f1['Fighter']
-            ))
-            fig_radar.add_trace(go.Scatterpolar(
-                r=[f2[var] for var in categories],
-                theta=categories,
-                fill='toself',
-                name=f2['Fighter']
-            ))
-            fig_radar.update_layout(
-                polar=dict(radialaxis=dict(visible=True)),
-                title=f"{f1['Fighter']} vs {f2['Fighter']}"
-            )
-            st.plotly_chart(fig_radar, use_container_width=True)
-        else:
-            st.error("Could not load both fighters.")
-else:
-    st.write("No upcoming fights available.")
+        if selected_fight_spider:
+            fight_rows = all_upcoming[all_upcoming['FightID'] == selected_fight_spider]
+            if len(fight_rows) == 2:
+                f1 = fight_rows.iloc[0]
+                f2 = fight_rows.iloc[1]
 
-# ---------- 3. Similarity Scorer (optional) ----------
-st.subheader("Similarity Scorer – Most Similar Historical Fights")
-if not all_upcoming.empty and not data[data['Win?'].isin(['Yes','No'])].empty and len(numerical_features) >= 2:
-    up_ids_sim = all_upcoming['FightID'].unique()
-    selected_sim_fight = st.selectbox("Select upcoming fight for similarity", sorted(up_ids_sim), key="sim_select")
+                fig_radar = go.Figure()
+                fig_radar.add_trace(go.Scatterpolar(
+                    r=[f1[var] for var in selected_vars],
+                    theta=selected_vars,
+                    fill='toself',
+                    name=f1['Fighter']
+                ))
+                fig_radar.add_trace(go.Scatterpolar(
+                    r=[f2[var] for var in selected_vars],
+                    theta=selected_vars,
+                    fill='toself',
+                    name=f2['Fighter']
+                ))
+                fig_radar.update_layout(
+                    polar=dict(radialaxis=dict(visible=True)),
+                    title=f"{f1['Fighter']} vs {f2['Fighter']}"
+                )
+                st.plotly_chart(fig_radar, use_container_width=True)
 
-    sim_feats = st.multiselect("Features to compare", numerical_features,
-                               default=numerical_features[:5], max_selections=8)
+                # Similarity scorer (use the same fight and metrics)
+                hist_filtered = data[data['Win?'].isin(['Yes','No'])].dropna(subset=selected_vars)
+                if not hist_filtered.empty:
+                    up_row = f1  # compare first fighter's features to historical fighters
+                    X_hist = hist_filtered[selected_vars].values
+                    scaler = StandardScaler()
+                    X_hist_scaled = scaler.fit_transform(X_hist)
+                    up_vec = up_row[selected_vars].values.reshape(1, -1)
+                    up_scaled = scaler.transform(up_vec)
 
-    if selected_sim_fight and sim_feats:
-        up_row = all_upcoming[all_upcoming['FightID'] == selected_sim_fight].iloc[0]
-        hist_data = data[data['Win?'].isin(['Yes','No'])].dropna(subset=sim_feats)
-        if hist_data.empty:
-            st.warning("No historical fights have the selected features.")
-        else:
-            X_hist = hist_data[sim_feats].values
-            scaler = StandardScaler()
-            X_hist_scaled = scaler.fit_transform(X_hist)
+                    from scipy.spatial.distance import cdist
+                    dists = cdist(up_scaled, X_hist_scaled, metric='euclidean').flatten()
+                    max_dist = dists.max() if dists.max() > 0 else 1
+                    similarity = 100 * (1 - dists / max_dist)
 
-            up_vec = up_row[sim_feats].values.reshape(1, -1)
-            up_scaled = scaler.transform(up_vec)
+                    res_df = hist_filtered[['FightDate','Fighter','Opponent','WC','Win?','Method']].copy()
+                    res_df['Similarity'] = similarity.round(1)
+                    res_df = res_df.sort_values('Similarity', ascending=False).head(20)
 
-            from scipy.spatial.distance import cdist
-            dists = cdist(up_scaled, X_hist_scaled, metric='euclidean').flatten()
-            max_dist = dists.max() if dists.max() > 0 else 1
-            similarity = 100 * (1 - dists / max_dist)
-
-            res_df = hist_data[['FightDate','Fighter','Opponent','WC','Win?','Method']].copy()
-            res_df['Similarity'] = similarity.round(1)
-            res_df = res_df.sort_values('Similarity', ascending=False).head(20)
-
-            st.write(f"**Most similar historical fights to {up_row['Fighter']} vs {up_row['Opponent']}**")
-            st.dataframe(res_df, use_container_width=True)
-else:
-    st.write("Need both upcoming and historical fights to compute similarity.")
+                    st.write(f"**Most similar historical fights to {up_row['Fighter']}**")
+                    st.dataframe(res_df, use_container_width=True)
+                else:
+                    st.warning("No historical fights have the selected features.")
+            else:
+                st.error("Could not load both fighters.")
+    else:
+        st.info("Select at least one numerical variable to enable comparison.")
