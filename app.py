@@ -738,7 +738,10 @@ core = [
 career_avg = [col for col in data.columns if col.startswith('CareerAvg_') and not col.startswith('Opponent_CareerAvg_')]
 opp_career_avg = [col for col in data.columns if col.startswith('Opponent_CareerAvg_')]
 diff_cols = [col for col in data.columns if col.endswith('_Diff')]
-numerical_features = [c for c in core + career_avg + opp_career_avg + diff_cols if c in data.columns and data[c].nunique(dropna=True) >= 2]
+numerical_features = list(dict.fromkeys(
+    c for c in core + career_avg + opp_career_avg + diff_cols
+    if c in data.columns and data[c].nunique(dropna=True) >= 2
+))
 
 available_reg = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
 if len(available_reg) >= 2:
