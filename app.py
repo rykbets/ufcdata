@@ -1040,8 +1040,8 @@ else:
 # =========================================================================
 st.header("Fight Similarity & Comparison (All Upcoming Fights)")
 
-# Use the UNFILTERED full upcoming dataset
-all_upcoming = all_fights_display[~all_fights_display['Win?'].isin(['Yes', 'No'])]
+# Use the UNFILTERED full upcoming dataset – only truly upcoming rows
+all_upcoming = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
 
 if all_upcoming.empty:
     st.write("No upcoming fights in the dataset.")
