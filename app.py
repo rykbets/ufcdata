@@ -940,9 +940,9 @@ if not cat_mi_df.empty:
 else:
     st.write("No categorical columns with meaningful variation or no historical data to compute MI.")
 
-# ---------- Best Variable Combinations for Win/Loss (AUC) ----------
+# ---------- Best Variable Combinations for Win/Loss (AUC) – Speed-Optimised ----------
 st.subheader("Best Variable Combinations for Win/Loss")
-st.markdown("Find which pairs / triples of numerical features best separate wins from losses (AUC).")
+st.markdown("Limit the search to the top‑N most important numerical features to speed things up.")
 
 # Fingerprint of current filtered data to detect real filter changes
 import hashlib
@@ -958,13 +958,25 @@ if st.session_state.last_data_hash != data_fingerprint:
     st.session_state.auc_results = None
     st.session_state.last_data_hash = data_fingerprint
 
-candidates = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
+# Re‑use the feature importance list (or compute it on the fly)
+# importance_features is already defined earlier and contains only fighter-side numerical stats.
+# We'll take the top N features by mutual information.
+if 'importance_features' in dir() and importance_features:
+    mi_df_all = numerical_importance(data, importance_features)
+    top_features = mi_df_all['Feature'].tolist()
+else:
+    # Fallback – use all numerical features (already computed earlier)
+    top_features = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
+
+# Let the user choose how many top features to test
+num_top = st.slider("Number of top features to test", min_value=5, max_value=min(30, len(top_features)), value=10)
+candidates = top_features[:num_top]
 
 if len(candidates) >= 2:
-    compute_clicked = st.button("Compute best AUC combinations for Win/Loss", key="compute_auc")
+    compute_clicked = st.button("Compute best AUC combinations (fast)", key="compute_auc_fast")
 
     if compute_clicked or st.session_state.auc_results is None:
-        with st.spinner("Computing AUC combinations... (may take a moment)"):
+        with st.spinner(f"Computing AUC combinations among top {num_top} features… (should be fast)"):
             hist = data[data['Win?'].isin(['Yes','No'])].copy()
             hist['WinNum'] = (hist['Win?'] == 'Yes').astype(int)
 
@@ -992,8 +1004,8 @@ if len(candidates) >= 2:
             df_auc2 = pd.DataFrame(auc_two).sort_values('AUC', ascending=False).head(20)
 
             # --- Three variables ---
-            auc_three = []
             import itertools
+            auc_three = []
             for combo in itertools.combinations(candidates, 3):
                 sub = hist[list(combo) + ['WinNum']].dropna()
                 if len(sub) < 10 or sub['WinNum'].nunique() < 2:
