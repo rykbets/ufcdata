@@ -10,6 +10,7 @@ from sklearn.feature_selection import mutual_info_classif
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import mutual_info_score
+from sklearn.linear_model import LinearRegression, LogisticRegression
 from scipy.spatial.distance import cdist
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
@@ -713,6 +714,7 @@ def detailed_result(row):
     return 'Upcoming'
 
 data['DetailedResult'] = data.apply(detailed_result, axis=1)
+data['Fight'] = data['Fighter'].astype(str) + ' vs ' + data['Opponent'].astype(str)
 
 color_map = {
     'Win': 'green',
@@ -747,7 +749,7 @@ if len(available_reg) >= 2:
         reg_y = st.selectbox("Y variable", available_reg, key="reg_y")
 
     if reg_x and reg_y:
-        reg_data = data[[reg_x, reg_y, 'DetailedResult']].dropna()
+        reg_data = data[[reg_x, reg_y, 'DetailedResult', 'Fight']].dropna()
         if len(reg_data) < 10:
             st.warning("Not enough data for regression.")
         else:
@@ -762,7 +764,7 @@ if len(available_reg) >= 2:
             fig_reg = px.scatter(
                 reg_data, x=reg_x, y=reg_y, color='DetailedResult',
                 color_discrete_map=color_map,
-                hover_data=['Fighter', 'Opponent'] if 'Fighter' in reg_data.columns else None,
+                hover_data=['Fight'],
                 title=f"{reg_y} vs {reg_x} (R² = {r2:.3f})"
             )
             fig_reg.add_trace(go.Scatter(
@@ -770,6 +772,40 @@ if len(available_reg) >= 2:
                 name='Regression', line=dict(color='white')
             ))
             st.plotly_chart(fig_reg, use_container_width=True)
+
+            # ---------- Win Probability Estimate (Logistic Regression) ----------
+            st.subheader("Win Probability Estimate")
+            all_upcoming_reg = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
+            if not all_upcoming_reg.empty:
+                up_ids = all_upcoming_reg['FightID'].unique()
+                chosen_up = st.selectbox("Select upcoming fight to predict", sorted(up_ids), key="prob_up")
+                if chosen_up:
+                    up_rows = all_upcoming_reg[all_upcoming_reg['FightID'] == chosen_up]
+                    if len(up_rows) == 2:
+                        fighter_row = up_rows.iloc[0]
+                        if pd.notna(fighter_row[reg_x]):
+                            hist = data[data['Win?'].isin(['Yes','No'])].copy()
+                            hist = hist[[reg_x, 'Win?']].dropna()
+                            hist['target'] = (hist['Win?'] == 'Yes').astype(int)
+                            X_hist = hist[[reg_x]].values
+                            y_hist = hist['target'].values
+                            if len(np.unique(y_hist)) >= 2:
+                                logreg = LogisticRegression()
+                                logreg.fit(X_hist, y_hist)
+                                up_val = np.array([[fighter_row[reg_x]]])
+                                prob = logreg.predict_proba(up_val)[0, 1]
+                                st.metric(
+                                    label=f"Win probability for {fighter_row['Fighter']} (based on {reg_x})",
+                                    value=f"{prob:.1%}"
+                                )
+                            else:
+                                st.warning("Not enough win/loss variation for logistic regression.")
+                        else:
+                            st.warning("Selected fighter does not have a value for this variable.")
+                else:
+                    st.info("Choose an upcoming fight to see win probability.")
+            else:
+                st.write("No upcoming fights available.")
 else:
     st.warning("Not enough numerical features for regression.")
 
@@ -781,7 +817,6 @@ st.header("Advanced Analysis")
 # ---------- 1. Numerical Feature Importance (fighter stats only) ----------
 st.subheader("Feature Importance – Fighter Numerical Stats")
 
-# Build a dedicated list of fighter-only numerical features (no opponent, no diffs)
 importance_features = [c for c in numerical_features
                        if not c.startswith('Opponent_')
                        and not c.endswith('_Diff')
@@ -789,14 +824,11 @@ importance_features = [c for c in numerical_features
 
 @st.cache_data
 def numerical_importance(_data, features):
-    """Return MI scores for the given features on the filtered dataset."""
     hist = _data[_data['Win?'].isin(['Yes','No'])].copy()
     hist['Target'] = (hist['Win?'] == 'Yes').astype(int)
     X = hist[features].dropna()
     y = hist.loc[X.index, 'Target']
     if len(X) > 10:
-        from sklearn.impute import SimpleImputer
-        from sklearn.feature_selection import mutual_info_classif
         X_imp = SimpleImputer(strategy='median').fit_transform(X)
         mi = mutual_info_classif(X_imp, y, discrete_features=False)
         return pd.DataFrame({'Feature': features, 'Mutual Information': mi}).sort_values('Mutual Information', ascending=False).head(20)
@@ -827,7 +859,6 @@ def categorical_importance(_data, cat_cols):
         if sub[col].nunique() < 2:
             continue
         codes, _ = pd.factorize(sub[col])
-        from sklearn.metrics import mutual_info_score
         scores[col] = mutual_info_score(codes, sub['Target'])
     if scores:
         return pd.DataFrame({'Feature': list(scores.keys()), 'Mutual Information': list(scores.values())}).sort_values('Mutual Information', ascending=False).head(20)
@@ -950,5 +981,16 @@ else:
 
                     st.write(f"**Most similar historical fights to {up_row['Fighter']}**")
                     st.dataframe(res_df, use_container_width=True)
+
+                    # Win % among highly similar fights
+                    high_sim = res_df[res_df['Similarity'] >= 90]
+                    if not high_sim.empty:
+                        win_rate_90 = (high_sim['Win?'] == 'Yes').mean() * 100
+                        st.metric(
+                            label=f"Win rate in ≥90% similar fights ({len(high_sim)} matches)",
+                            value=f"{win_rate_90:.1f}%"
+                        )
+                    else:
+                        st.caption("No historical fight with ≥90% similarity.")
                 else:
                     st.warning("No complete historical fights for similarity.")
