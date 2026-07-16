@@ -645,7 +645,9 @@ if 'CareerAvg_Ctrl' in data.columns: display_cols.append('CareerAvg_Ctrl')
 display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
 
-# ---------- Regression Plot ----------
+# =========================================================================
+# REGRESSION PLOT
+# =========================================================================
 st.header("Regression Analysis")
 st.markdown("Select two variables to explore relationships. Points are colored by detailed outcome.")
 
@@ -679,101 +681,113 @@ color_map = {
     'Draw': 'gray'
 }
 
+# Build features for regression (use the same numerical_features set)
+# We'll define numerical_features here so it's available for everything below
+core = [
+    'Age', 'Height', 'Reach',
+    'Age_opp', 'Height_opp', 'Reach_opp',
+    'AgeDiff', 'HeightDiff', 'ReachDiff',
+    'DaysSincePrev', 'Avg3DaysGap',
+    'FightNumber', 'Opponent_FightNumber',
+    'FighterOddsNum', 'PrevFighterOddsNum',
+    'CareerWinPct'
+]
+career_avg = [col for col in data.columns if col.startswith('CareerAvg_')]
+numerical_features = [c for c in core + career_avg if c in data.columns and data[c].nunique(dropna=True) >= 2]
+
+available_reg = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
+if len(available_reg) >= 2:
+    col1, col2 = st.columns(2)
+    with col1:
+        reg_x = st.selectbox("X variable", available_reg, key="reg_x")
+    with col2:
+        reg_y = st.selectbox("Y variable", available_reg, key="reg_y")
+
+    if reg_x and reg_y:
+        reg_data = data[[reg_x, reg_y, 'DetailedResult']].dropna()
+        if len(reg_data) < 10:
+            st.warning("Not enough data for regression.")
+        else:
+            from sklearn.linear_model import LinearRegression
+            X_reg = reg_data[[reg_x]].values
+            y_reg = reg_data[reg_y].values
+            lr = LinearRegression().fit(X_reg, y_reg)
+            r2 = lr.score(X_reg, y_reg)
+            reg_line_x = np.linspace(X_reg.min(), X_reg.max(), 100).reshape(-1, 1)
+            reg_line_y = lr.predict(reg_line_x)
+
+            fig_reg = px.scatter(
+                reg_data, x=reg_x, y=reg_y, color='DetailedResult',
+                color_discrete_map=color_map,
+                hover_data=['Fighter', 'Opponent'] if 'Fighter' in reg_data.columns else None,
+                title=f"{reg_y} vs {reg_x} (R² = {r2:.3f})"
+            )
+            fig_reg.add_trace(go.Scatter(
+                x=reg_line_x.flatten(), y=reg_line_y, mode='lines',
+                name='Regression', line=dict(color='white')
+            ))
+            st.plotly_chart(fig_reg, use_container_width=True)
+else:
+    st.warning("Not enough numerical features for regression.")
+
 # =========================================================================
 # ADVANCED ANALYSIS
 # =========================================================================
 st.header("Advanced Analysis")
 
-# ---------- 1. Categorical Outcome Breakdown ----------
-st.subheader("Top Categorical Values by Outcome Count")
+# ---------- 1. Top Winners / Losers by Category ----------
+st.subheader("Top Categorical Metrics – Most Wins & Most Losses")
 categorical_cols = [col for col in ['WC','Stance','Country','EventCountry','Title','ScheduledRounds','HometownFighter','Opponent_Hometown']
                     if col in data.columns]
 
-# Classify each row into a simplified outcome for counting
-def simple_outcome(row):
-    w = row.get('Win?')
-    if w is None or pd.isna(w) or str(w).strip().lower() in ('', 'none', 'nan'):
-        return 'Upcoming'
-    win_val = str(w).strip()
-    method = str(row.get('Method', '')).strip().lower()
-    if 'dq' in method or 'disqualif' in method:
-        return 'Win by DQ' if win_val == 'Yes' else 'Loss by DQ'
-    if win_val in ('No Contest', 'NC'):
-        return 'No Contest'
-    if win_val == 'Draw':
-        return 'Draw'
-    if win_val == 'Yes':
-        return 'Win'
-    if win_val == 'No':
-        return 'Loss'
-    return 'Upcoming'
-
-data['SimpleOutcome'] = data.apply(simple_outcome, axis=1)
-
 for col in categorical_cols:
-    # Count outcomes per category value
-    counts = data.groupby([col, 'SimpleOutcome']).size().reset_index(name='Count')
-    # Get top 10 values by total count
-    total_by_val = data.groupby(col).size().nlargest(10).index
-    counts = counts[counts[col].isin(total_by_val)]
+    # Count wins (Win? == 'Yes') and losses (Win? == 'No')
+    win_counts = data[data['Win?'] == 'Yes'][col].value_counts().head(10)
+    loss_counts = data[data['Win?'] == 'No'][col].value_counts().head(10)
 
-    if counts.empty:
-        continue
+    if not win_counts.empty:
+        fig_w = px.bar(x=win_counts.index, y=win_counts.values,
+                       labels={'x': col, 'y': 'Number of Wins'},
+                       title=f"Top {col} by Wins",
+                       color_discrete_sequence=['green'])
+        st.plotly_chart(fig_w, use_container_width=True)
 
-    # Pivot for display: rows = category values, columns = outcomes
-    pivot = counts.pivot(index=col, columns='SimpleOutcome', values='Count').fillna(0)
-    # Sort by total count
-    pivot['Total'] = pivot.sum(axis=1)
-    pivot = pivot.sort_values('Total', ascending=False).drop(columns='Total')
+    if not loss_counts.empty:
+        fig_l = px.bar(x=loss_counts.index, y=loss_counts.values,
+                       labels={'x': col, 'y': 'Number of Losses'},
+                       title=f"Top {col} by Losses",
+                       color_discrete_sequence=['red'])
+        st.plotly_chart(fig_l, use_container_width=True)
 
-    # Build bar chart
-    fig = px.bar(pivot, x=pivot.index, y=pivot.columns,
-                 title=f"Outcome Distribution by {col}",
-                 labels={'x': col, 'value': 'Number of Fights'},
-                 color_discrete_map={
-                     'Win': 'green', 'Loss': 'red', 'No Contest': 'purple',
-                     'Draw': 'gray', 'Win by DQ': 'limegreen', 'Loss by DQ': 'darkred',
-                     'Upcoming': 'blue'
-                 })
-    fig.update_layout(barmode='stack', xaxis_tickangle=-45)
-    st.plotly_chart(fig, use_container_width=True)
-
-# ---------- 2. Spider (Radar) Chart for Upcoming Fight ----------
+# ---------- 2. Spider (Radar) Chart ----------
 st.subheader("Spider Chart – Fighter Comparison")
-# Use unfiltered upcoming data for fighter selection
 all_upcoming = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
 if not all_upcoming.empty:
-    # Let the user pick any upcoming fight
     up_ids = all_upcoming['FightID'].unique()
-    selected_fight_spider = st.selectbox("Select upcoming fight for radar chart", sorted(up_ids), key="spider_select")
+    selected_fight_spider = st.selectbox("Select upcoming fight", sorted(up_ids), key="spider_select")
 
-    # Pick numerical features to include (up to 8)
+    # Use numerical_features defined earlier
     spider_feats = [c for c in numerical_features if c in all_upcoming.columns]
-    if len(spider_feats) > 0:
+    if spider_feats:
         selected_vars = st.multiselect("Choose up to 8 numerical variables", spider_feats,
                                        default=spider_feats[:5], max_selections=8)
     else:
         selected_vars = []
 
     if selected_fight_spider and selected_vars:
-        # Get the two fighters
         fight_rows = all_upcoming[all_upcoming['FightID'] == selected_fight_spider]
         if len(fight_rows) == 2:
             f1 = fight_rows.iloc[0]
             f2 = fight_rows.iloc[1]
 
-            # Build radar chart data
             categories = selected_vars
             fig_radar = go.Figure()
-
-            # Fighter 1 trace
             fig_radar.add_trace(go.Scatterpolar(
                 r=[f1[var] for var in categories],
                 theta=categories,
                 fill='toself',
                 name=f1['Fighter']
             ))
-            # Fighter 2 trace
             fig_radar.add_trace(go.Scatterpolar(
                 r=[f2[var] for var in categories],
                 theta=categories,
@@ -786,53 +800,42 @@ if not all_upcoming.empty:
             )
             st.plotly_chart(fig_radar, use_container_width=True)
         else:
-            st.error("Could not load both fighters for this fight.")
+            st.error("Could not load both fighters.")
 else:
     st.write("No upcoming fights available.")
 
-# ---------- 3. Closest Past Fights Similarity Score ----------
+# ---------- 3. Similarity Scorer ----------
 st.subheader("Similarity Scorer – Most Similar Historical Fights")
-# Again use all upcoming for selection
-if not all_upcoming.empty and not historical_filtered.empty and len(numerical_features) >= 2:
+if not all_upcoming.empty and not data[data['Win?'].isin(['Yes','No'])].empty and len(numerical_features) >= 2:
     up_ids_sim = all_upcoming['FightID'].unique()
-    selected_sim_fight = st.selectbox("Select upcoming fight for similarity search", sorted(up_ids_sim), key="sim_select")
+    selected_sim_fight = st.selectbox("Select upcoming fight for similarity", sorted(up_ids_sim), key="sim_select")
 
-    # Let user choose features for similarity (up to 8)
     sim_feats = st.multiselect("Features to compare", numerical_features,
                                default=numerical_features[:5], max_selections=8)
 
     if selected_sim_fight and sim_feats:
         up_row = all_upcoming[all_upcoming['FightID'] == selected_sim_fight].iloc[0]
-
-        # Prepare historical data: only rows with these features present
-        hist_subset = historical_filtered.dropna(subset=sim_feats)
-        if hist_subset.empty:
+        hist_data = data[data['Win?'].isin(['Yes','No'])].dropna(subset=sim_feats)
+        if hist_data.empty:
             st.warning("No historical fights have the selected features.")
         else:
-            # Normalize features (z-score) using historical data
-            X_hist = hist_subset[sim_feats].values
+            X_hist = hist_data[sim_feats].values
             scaler = StandardScaler()
             X_hist_scaled = scaler.fit_transform(X_hist)
 
-            # Upcoming fighter's features (only one row, but we compare both fighters individually? 
-            # We'll compare the selected fighter's row)
             up_vec = up_row[sim_feats].values.reshape(1, -1)
             up_scaled = scaler.transform(up_vec)
 
-            # Compute Euclidean distances
             from scipy.spatial.distance import cdist
             dists = cdist(up_scaled, X_hist_scaled, metric='euclidean').flatten()
-
-            # Convert to similarity score (0–100 %)
             max_dist = dists.max() if dists.max() > 0 else 1
             similarity = 100 * (1 - dists / max_dist)
 
-            # Build results dataframe
-            res_df = hist_subset[['FightDate','Fighter','Opponent','WC','Win?','Method']].copy()
+            res_df = hist_data[['FightDate','Fighter','Opponent','WC','Win?','Method']].copy()
             res_df['Similarity'] = similarity.round(1)
             res_df = res_df.sort_values('Similarity', ascending=False).head(20)
 
             st.write(f"**Most similar historical fights to {up_row['Fighter']} vs {up_row['Opponent']}**")
             st.dataframe(res_df, use_container_width=True)
 else:
-    st.write("Need both upcoming and historical fights in the dataset to compute similarity.")
+    st.write("Need both upcoming and historical fights to compute similarity.")
