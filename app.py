@@ -9,6 +9,7 @@ import gdown
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
+from sklearn.metrics import mutual_info_score
 from scipy.spatial.distance import cdist
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
@@ -269,7 +270,6 @@ def load_full_data():
             if pd.notna(r[f'Prev{shift}_Method']) else None, axis=1
         )
 
-    # Skip NC outcomes (unchanged)
     def get_skip_nc_outcomes(group):
         results = {1: [], 2: [], 3: []}
         methods = group['Method'].tolist()
@@ -724,23 +724,18 @@ color_map = {
     'Draw': 'gray'
 }
 
-# Numerical features (including opponent career averages and differentials)
-core = [
-    'Age', 'Height', 'Reach',
-    'Age_opp', 'Height_opp', 'Reach_opp',
-    'AgeDiff', 'HeightDiff', 'ReachDiff',
-    'DaysSincePrev', 'Avg3DaysGap',
-    'FightNumber', 'Opponent_FightNumber',
-    'FighterOddsNum', 'PrevFighterOddsNum',
-    'CareerWinPct', 'Opponent_CareerWinPct',
-    'DaysSincePrev_Diff', 'Avg3DaysGap_Diff', 'CareerWinPct_Diff'
-]
-career_avg = [col for col in data.columns if col.startswith('CareerAvg_') and not col.startswith('Opponent_CareerAvg_')]
-opp_career_avg = [col for col in data.columns if col.startswith('Opponent_CareerAvg_')]
-diff_cols = [col for col in data.columns if col.endswith('_Diff')]
+# Build clean numerical feature list (no Prev, no Opponent_Prev)
+core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
+        'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev', 'Avg3DaysGap',
+        'FightNumber', 'Opponent_FightNumber', 'FighterOddsNum', 'PrevFighterOddsNum',
+        'CareerWinPct', 'Opponent_CareerWinPct']
+career_avg = [c for c in data.columns if c.startswith('CareerAvg_') and not c.startswith('Opponent_CareerAvg_')]
+opp_career_avg = [c for c in data.columns if c.startswith('Opponent_CareerAvg_')]
+diff_cols = [c for c in data.columns if c.endswith('_Diff')]
 numerical_features = list(dict.fromkeys(
     c for c in core + career_avg + opp_career_avg + diff_cols
-    if c in data.columns and data[c].nunique(dropna=True) >= 2
+    if c in data.columns and not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')
+    and data[c].nunique(dropna=True) >= 2
 ))
 
 available_reg = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
@@ -783,61 +778,67 @@ else:
 # =========================================================================
 st.header("Advanced Analysis")
 
-# ---------- 1. Feature Importance (Numerical Only) ----------
-st.subheader("Feature Importance – Numerical Features")
+# ---------- 1. Numerical Feature Importance (fighter stats only) ----------
+st.subheader("Feature Importance – Fighter Numerical Stats")
+
+# Filter to only fighter's own stats (no opponent, no diffs, no Prev shifts)
+importance_features = [c for c in numerical_features
+                       if not c.startswith('Opponent_')
+                       and not c.endswith('_Diff')
+                       and not re.match(r'Prev\d+_', c)]
+
 hist_data = data[data['Win?'].isin(['Yes','No'])].copy()
 hist_data['Target'] = (hist_data['Win?'] == 'Yes').astype(int)
 
-if numerical_features:
-    X = hist_data[numerical_features].dropna()
+if importance_features:
+    X = hist_data[importance_features].dropna()
     y = hist_data.loc[X.index, 'Target']
     if len(X) > 10:
         X_imp = SimpleImputer(strategy='median').fit_transform(X)
         mi_scores = mutual_info_classif(X_imp, y, discrete_features=False)
-        mi_df = pd.DataFrame({'Feature': numerical_features, 'Mutual Information': mi_scores}).sort_values('Mutual Information', ascending=False).head(20)
+        mi_df = pd.DataFrame({'Feature': importance_features, 'Mutual Information': mi_scores}).sort_values('Mutual Information', ascending=False).head(20)
 
         fig_mi = px.bar(mi_df, x='Mutual Information', y='Feature', orientation='h',
-                        title="Top 20 Numerical Features by Mutual Information with Win/Loss")
+                        title="Top 20 Fighter Stats by Mutual Information with Win/Loss")
         st.plotly_chart(fig_mi, use_container_width=True)
     else:
         st.warning("Not enough historical data for feature importance.")
 else:
     st.warning("No numerical features available.")
 
-# ---------- 2. Top Winners / Losers Across All Categories ----------
-st.subheader("Top 20 Categorical Values – Most Wins & Most Losses")
+# ---------- 2. Categorical Feature Importance (Mutual Information) ----------
+st.subheader("Categorical Feature Importance with Win/Loss")
+
 potential_cat_cols = ['WC','Stance','Country','EventCountry','Title','ScheduledRounds','HometownFighter','Opponent_Hometown']
-categorical_cols = []
-for col in potential_cat_cols:
-    if col in data.columns and data[col].nunique(dropna=True) > 1:
-        categorical_cols.append(col)
+categorical_cols = [c for c in potential_cat_cols if c in data.columns and data[c].nunique(dropna=True) > 1]
 
 if not categorical_cols:
     st.write("No categorical columns with meaningful variation remain after filtering.")
 else:
-    win_pairs = []
-    loss_pairs = []
+    valid = data[data['Win?'].isin(['Yes','No'])].copy()
+    valid['Target'] = (valid['Win?'] == 'Yes').astype(int)
+
+    mi_scores = {}
     for col in categorical_cols:
-        win_counts = data[data['Win?'] == 'Yes'][col].value_counts()
-        loss_counts = data[data['Win?'] == 'No'][col].value_counts()
-        for val, cnt in win_counts.items():
-            win_pairs.append((f"{col}: {val}", cnt))
-        for val, cnt in loss_counts.items():
-            loss_pairs.append((f"{col}: {val}", cnt))
+        sub = valid[[col, 'Target']].dropna()
+        if sub[col].nunique() < 2:
+            continue
+        codes, _ = pd.factorize(sub[col])
+        mi = mutual_info_score(codes, sub['Target'])
+        mi_scores[col] = mi
 
-    win_df = pd.DataFrame(win_pairs, columns=['Category', 'Wins']).sort_values('Wins', ascending=False).head(20)
-    loss_df = pd.DataFrame(loss_pairs, columns=['Category', 'Losses']).sort_values('Losses', ascending=False).head(20)
+    if mi_scores:
+        mi_cat = pd.DataFrame({'Feature': list(mi_scores.keys()),
+                               'Mutual Information': list(mi_scores.values())})
+        mi_cat = mi_cat.sort_values('Mutual Information', ascending=False).head(20)
 
-    if not win_df.empty:
-        fig_w = px.bar(win_df, x='Wins', y='Category', orientation='h',
-                       title="Top 20 Category Values by Win Count",
-                       color_discrete_sequence=['green'])
-        st.plotly_chart(fig_w, use_container_width=True)
-    if not loss_df.empty:
-        fig_l = px.bar(loss_df, x='Losses', y='Category', orientation='h',
-                       title="Top 20 Category Values by Loss Count",
-                       color_discrete_sequence=['red'])
-        st.plotly_chart(fig_l, use_container_width=True)
+        fig_cat = px.bar(mi_cat, x='Mutual Information', y='Feature', orientation='h',
+                         title="Top Categorical Features by Mutual Information with Win/Loss",
+                         color_discrete_sequence=['#636efa'])
+        st.plotly_chart(fig_cat, use_container_width=True)
+    else:
+        st.write("Could not compute mutual information for any categorical column.")
+
 # =========================================================================
 # SPIDER CHART (DIFFERENTIALS) + SIMILARITY (INDEPENDENT OF FILTERS)
 # =========================================================================
@@ -848,27 +849,24 @@ all_upcoming = all_fights_display[all_fights_display['Win?'].isna() | (all_fight
 if all_upcoming.empty:
     st.write("No upcoming fights in dataset.")
 else:
-    # ----- Collect numeric columns, EXCLUDING shift‑based historical diffs -----
+    # Collect numeric columns, EXCLUDING shift‑based historical diffs
     numeric_cols = [c for c in all_upcoming.columns if pd.api.types.is_numeric_dtype(all_upcoming[c])]
 
     clean_cols = []
     for col in numeric_cols:
-        # Skip any column that starts with "Prev" followed by a digit (e.g. Prev1_AgeDiff)
         if re.match(r'Prev\d+_', col):
             continue
-        # Also skip opponent previous‑shift columns (Opponent_Prev1_…)
         if col.startswith('Opponent_Prev'):
             continue
         clean_cols.append(col)
 
-    # Keep only the stats we care about (current fight, career averages, differentials)
     wanted_keys = [
         'Age', 'Height', 'Reach',
         'DaysSincePrev', 'Avg3DaysGap',
         'FightNumber', 'Opponent_FightNumber',
         'FighterOddsNum', 'PrevFighterOddsNum',
         'CareerWinPct', 'CareerAvg_', 'Opponent_CareerAvg_',
-        '_Diff'                # this catches AgeDiff, CareerAvg_SS_Diff, etc.
+        '_Diff'
     ]
     spider_vars = sorted([
         c for c in clean_cols
@@ -902,10 +900,8 @@ else:
                 f1 = fight_rows.iloc[0]
                 f2 = fight_rows.iloc[1]
 
-                # ----- Build the radar values -----
                 radar_values = []
                 for var in selected_vars:
-                    # If the variable is already a differential, use it directly
                     if var.endswith('_Diff') or var in {'AgeDiff', 'HeightDiff', 'ReachDiff'}:
                         val = f1[var] if pd.notna(f1[var]) else 0
                     else:
@@ -914,7 +910,6 @@ else:
                         val = v1 - v2
                     radar_values.append(val)
 
-                # ----- Radar chart -----
                 fig_radar = go.Figure()
                 fig_radar.add_trace(go.Scatterpolar(
                     r=radar_values,
@@ -928,7 +923,7 @@ else:
                 )
                 st.plotly_chart(fig_radar, use_container_width=True)
 
-                # ----- Similarity scorer (unchanged) -----
+                # Similarity scorer
                 hist_full = all_fights_display[
                     all_fights_display['Win?'].isin(['Yes', 'No'])
                 ].dropna(subset=selected_vars)
