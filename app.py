@@ -846,27 +846,43 @@ else:
         up_ids = all_upcoming['FightID'].unique()
         selected_fight_spider = st.selectbox("Choose an upcoming fight", sorted(up_ids), key="spider_select")
 
-        if selected_fight_spider:
-            fight_rows = all_upcoming[all_upcoming['FightID'] == selected_fight_spider]
-            if len(fight_rows) != 2:
-                st.error("Could not load both fighters.")
-            else:
-                f1 = fight_rows.iloc[0]
-                f2 = fight_rows.iloc[1]
+                if selected_fight_spider:
+                    fight_rows = all_upcoming[all_upcoming['FightID'] == selected_fight_spider]
+                    if len(fight_rows) != 2:
+                        st.error("Could not load both fighters.")
+                    else:
+                        f1 = fight_rows.iloc[0]
+                        f2 = fight_rows.iloc[1]
 
-                f1_vals = [f1[var] if pd.notna(f1[var]) else 0 for var in selected_vars]
-                f2_vals = [f2[var] if pd.notna(f2[var]) else 0 for var in selected_vars]
+                        # Compute differentials for each selected metric
+                        diffs = []
+                        diff_labels = []
+                        missing_vars = []
+                        for var in selected_vars:
+                            v1 = f1[var] if pd.notna(f1[var]) else 0
+                            v2 = f2[var] if pd.notna(f2[var]) else 0
+                            diff = v1 - v2
+                            diffs.append(diff)
+                            diff_labels.append(f"{var} Diff")
+                            if pd.isna(f1[var]) or pd.isna(f2[var]):
+                                missing_vars.append(var)
 
-                missing = [var for var in selected_vars if pd.isna(f1[var]) or pd.isna(f2[var])]
-                if missing:
-                    st.caption(f"⚠️ Missing data (shown as 0): {', '.join(missing)}")
+                        if missing_vars:
+                            st.caption(f"⚠️ Missing data (diff shown as 0): {', '.join(missing_vars)}")
 
-                fig_radar = go.Figure()
-                fig_radar.add_trace(go.Scatterpolar(r=f1_vals, theta=selected_vars, fill='toself', name=f1['Fighter']))
-                fig_radar.add_trace(go.Scatterpolar(r=f2_vals, theta=selected_vars, fill='toself', name=f2['Fighter']))
-                fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True)),
-                                        title=f"{f1['Fighter']} vs {f2['Fighter']}")
-                st.plotly_chart(fig_radar, use_container_width=True)
+                        # Radar chart with differentials (single trace)
+                        fig_radar = go.Figure()
+                        fig_radar.add_trace(go.Scatterpolar(
+                            r=diffs,
+                            theta=diff_labels,
+                            fill='toself',
+                            name=f"{f1['Fighter']} advantage"
+                        ))
+                        fig_radar.update_layout(
+                            polar=dict(radialaxis=dict(visible=True)),
+                            title=f"Advantage: {f1['Fighter']} vs {f2['Fighter']}"
+                        )
+                        st.plotly_chart(fig_radar, use_container_width=True)
 
                 # Similarity scorer – uses ALL historical fights (ignore filters)
                 hist_full = all_fights_display[all_fights_display['Win?'].isin(['Yes','No'])].dropna(subset=selected_vars)
