@@ -1041,19 +1041,17 @@ else:
     st.write("No categorical columns with meaningful variation or no historical data to compute MI.")
 
 # =========================================================================
-# SPIDER CHART (DIFFERENTIALS) + SIMILARITY (FILTERED DATA – only fights with both fighters present)
+# SPIDER CHART (DIFFERENTIALS) + SIMILARITY (FILTERED DATA)
 # =========================================================================
 st.header("Fight Similarity & Comparison (Filtered)")
 
-# Use filtered data for upcoming fights, but only keep fights where both fighters are present
+# ---- UPCOMING MASK – exactly what worked before ----
 upcoming_filtered = data[data['Win?'].isna() | (data['Win?'] == '')]
-# Group by FightID and keep only those with exactly 2 rows (both fighters)
-valid_upcoming_ids = upcoming_filtered.groupby('FightID').filter(lambda x: len(x) == 2)['FightID'].unique()
-upcoming_filtered = upcoming_filtered[upcoming_filtered['FightID'].isin(valid_upcoming_ids)]
 
 if upcoming_filtered.empty:
-    st.write("No upcoming fights in the filtered dataset (or both fighters missing).")
+    st.write("No upcoming fights in the filtered dataset.")
 else:
+    # ---- NUMERIC VARIABLE LIST (same as before) ----
     numeric_cols = [c for c in upcoming_filtered.columns if pd.api.types.is_numeric_dtype(upcoming_filtered[c])]
 
     clean_cols = []
@@ -1098,62 +1096,65 @@ else:
 
         if chosen_fight:
             fight_rows = upcoming_filtered[upcoming_filtered['FightID'] == chosen_fight]
-            # This should always be 2 because we filtered to only complete fights
-            f1 = fight_rows.iloc[0]
-            f2 = fight_rows.iloc[1]
-
-            radar_values = []
-            for var in selected_vars:
-                if var.endswith('_Diff') or var in {'AgeDiff', 'HeightDiff', 'ReachDiff'}:
-                    val = f1[var] if pd.notna(f1[var]) else 0
-                else:
-                    v1 = f1[var] if pd.notna(f1[var]) else 0
-                    v2 = f2[var] if pd.notna(f2[var]) else 0
-                    val = v1 - v2
-                radar_values.append(val)
-
-            fig_radar = go.Figure()
-            fig_radar.add_trace(go.Scatterpolar(
-                r=radar_values,
-                theta=selected_vars,
-                fill='toself',
-                name=f"{f1['Fighter']} advantage"
-            ))
-            fig_radar.update_layout(
-                polar=dict(radialaxis=dict(visible=True)),
-                title=f"Advantage: {f1['Fighter']} vs {f2['Fighter']}"
-            )
-            st.plotly_chart(fig_radar, use_container_width=True)
-
-            # Similarity scorer uses filtered historical data
-            hist_filtered = data[data['Win?'].isin(['Yes', 'No'])].dropna(subset=selected_vars)
-            if not hist_filtered.empty:
-                up_row = f1
-                X_hist = hist_filtered[selected_vars].values
-                scaler = StandardScaler()
-                X_hist_scaled = scaler.fit_transform(X_hist)
-                up_vec = up_row[selected_vars].values.reshape(1, -1)
-                up_scaled = scaler.transform(up_vec)
-
-                dists = cdist(up_scaled, X_hist_scaled, metric='euclidean').flatten()
-                max_dist = dists.max() if dists.max() > 0 else 1
-                similarity = 100 * (1 - dists / max_dist)
-
-                res_df = hist_filtered[['FightDate', 'Fighter', 'Opponent', 'WC', 'Win?', 'Method']].copy()
-                res_df['Similarity'] = similarity.round(1)
-                res_df = res_df.sort_values('Similarity', ascending=False).head(20)
-
-                st.write(f"**Most similar historical fights to {up_row['Fighter']}**")
-                st.dataframe(res_df, use_container_width=True)
-
-                high_sim = res_df[res_df['Similarity'] >= 90]
-                if not high_sim.empty:
-                    win_rate_90 = (high_sim['Win?'] == 'Yes').mean() * 100
-                    st.metric(
-                        label=f"Win rate in ≥90% similar fights ({len(high_sim)} matches)",
-                        value=f"{win_rate_90:.1f}%"
-                    )
-                else:
-                    st.caption("No historical fight with ≥90% similarity.")
+            if len(fight_rows) != 2:
+                st.error("Could not load both fighters – one may have been removed by your filters.")
             else:
-                st.warning("No complete historical fights for similarity in the filtered data.")
+                f1 = fight_rows.iloc[0]
+                f2 = fight_rows.iloc[1]
+
+                # ---- DIFFERENTIALS ----
+                radar_values = []
+                for var in selected_vars:
+                    if var.endswith('_Diff') or var in {'AgeDiff', 'HeightDiff', 'ReachDiff'}:
+                        val = f1[var] if pd.notna(f1[var]) else 0
+                    else:
+                        v1 = f1[var] if pd.notna(f1[var]) else 0
+                        v2 = f2[var] if pd.notna(f2[var]) else 0
+                        val = v1 - v2
+                    radar_values.append(val)
+
+                fig_radar = go.Figure()
+                fig_radar.add_trace(go.Scatterpolar(
+                    r=radar_values,
+                    theta=selected_vars,
+                    fill='toself',
+                    name=f"{f1['Fighter']} advantage"
+                ))
+                fig_radar.update_layout(
+                    polar=dict(radialaxis=dict(visible=True)),
+                    title=f"Advantage: {f1['Fighter']} vs {f2['Fighter']}"
+                )
+                st.plotly_chart(fig_radar, use_container_width=True)
+
+                # ---- SIMILARITY SCORER (filtered historical data) ----
+                hist_filtered = data[data['Win?'].isin(['Yes', 'No'])].dropna(subset=selected_vars)
+                if not hist_filtered.empty:
+                    up_row = f1
+                    X_hist = hist_filtered[selected_vars].values
+                    scaler = StandardScaler()
+                    X_hist_scaled = scaler.fit_transform(X_hist)
+                    up_vec = up_row[selected_vars].values.reshape(1, -1)
+                    up_scaled = scaler.transform(up_vec)
+
+                    dists = cdist(up_scaled, X_hist_scaled, metric='euclidean').flatten()
+                    max_dist = dists.max() if dists.max() > 0 else 1
+                    similarity = 100 * (1 - dists / max_dist)
+
+                    res_df = hist_filtered[['FightDate', 'Fighter', 'Opponent', 'WC', 'Win?', 'Method']].copy()
+                    res_df['Similarity'] = similarity.round(1)
+                    res_df = res_df.sort_values('Similarity', ascending=False).head(20)
+
+                    st.write(f"**Most similar historical fights to {up_row['Fighter']}**")
+                    st.dataframe(res_df, use_container_width=True)
+
+                    high_sim = res_df[res_df['Similarity'] >= 90]
+                    if not high_sim.empty:
+                        win_rate_90 = (high_sim['Win?'] == 'Yes').mean() * 100
+                        st.metric(
+                            label=f"Win rate in ≥90% similar fights ({len(high_sim)} matches)",
+                            value=f"{win_rate_90:.1f}%"
+                        )
+                    else:
+                        st.caption("No historical fight with ≥90% similarity.")
+                else:
+                    st.warning("No complete historical fights for similarity in the filtered data.")
