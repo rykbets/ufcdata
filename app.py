@@ -828,8 +828,7 @@ else:
     # Collect numeric columns directly from the upcoming dataframe
     numeric_cols = [c for c in all_upcoming.columns if pd.api.types.is_numeric_dtype(all_upcoming[c])]
 
-    # Define the variables we want to offer for the spider chart
-    # Include basic stats, career averages, and opponent career averages
+    # Build the list of available variables (make sure Opponent_CareerAvg_* are included)
     preferred = ['Age','Height','Reach','Age_opp','Height_opp','Reach_opp',
                  'AgeDiff','HeightDiff','ReachDiff',
                  'DaysSincePrev','Avg3DaysGap',
@@ -840,18 +839,18 @@ else:
     opp_career_cols = [c for c in numeric_cols if c.startswith('Opponent_CareerAvg_')]
     spider_vars = [c for c in preferred + career_avg_cols + opp_career_cols if c in numeric_cols]
 
-    # Debug: show available variables (remove after confirming)
-    with st.expander("Debug: Available spider variables", expanded=False):
-        st.write(spider_vars)
+    # Debug: print the actual list so you can see what’s available
+    st.write("**Available variables for spider chart:**", spider_vars)
 
     if not spider_vars:
-        st.warning("No numeric variables available for spider chart.")
+        st.warning("No numeric variables found – check your data loading.")
         selected_vars = []
     else:
         selected_vars = st.multiselect("Select up to 8 numerical variables", spider_vars,
                                        default=spider_vars[:5], max_selections=8,
                                        key="spider_vars")
 
+    # Show the chart even if only one variable selected
     if selected_vars:
         up_ids = all_upcoming['FightID'].unique()
         selected_fight_spider = st.selectbox("Choose an upcoming fight", sorted(up_ids), key="spider_select")
@@ -880,19 +879,22 @@ else:
                 if missing_vars:
                     st.caption(f"⚠️ Missing data (diff shown as 0): {', '.join(missing_vars)}")
 
-                # Radar chart with differentials (single trace)
-                fig_radar = go.Figure()
-                fig_radar.add_trace(go.Scatterpolar(
-                    r=diffs,
-                    theta=diff_labels,
-                    fill='toself',
-                    name=f"{f1['Fighter']} advantage"
-                ))
-                fig_radar.update_layout(
-                    polar=dict(radialaxis=dict(visible=True)),
-                    title=f"Advantage: {f1['Fighter']} vs {f2['Fighter']}"
-                )
-                st.plotly_chart(fig_radar, use_container_width=True)
+                # Build radar chart (with try/except to catch rendering errors)
+                try:
+                    fig_radar = go.Figure()
+                    fig_radar.add_trace(go.Scatterpolar(
+                        r=diffs,
+                        theta=diff_labels,
+                        fill='toself',
+                        name=f"{f1['Fighter']} advantage"
+                    ))
+                    fig_radar.update_layout(
+                        polar=dict(radialaxis=dict(visible=True)),
+                        title=f"Advantage: {f1['Fighter']} vs {f2['Fighter']}"
+                    )
+                    st.plotly_chart(fig_radar, use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error creating spider chart: {e}")
 
                 # ---------- Similarity scorer (uses the same selected_vars) ----------
                 hist_full = all_fights_display[all_fights_display['Win?'].isin(['Yes','No'])].dropna(subset=selected_vars)
