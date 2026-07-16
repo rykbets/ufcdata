@@ -1161,7 +1161,7 @@ with col_sp2:
     spider_skip_nc = st.checkbox("Skip NC outcomes", key="spider_skip_nc")
     spider_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
 
-# Previous outcome columns (spider version, based on spider_skip_nc)
+# Previous outcome columns (fighter only, based on spider_skip_nc)
 if spider_skip_nc:
     spider_prev1_col = 'Prev1_Outcome_skipNC'; spider_prev2_col = 'Prev2_Outcome_skipNC'; spider_prev3_col = 'Prev3_Outcome_skipNC'
     spider_career1_col = 'Career1_Outcome_skipNC'; spider_career2_col = 'Career2_Outcome_skipNC'; spider_career3_col = 'Career3_Outcome_skipNC'
@@ -1183,7 +1183,7 @@ with st.expander("Previous Outcomes (Spider)"):
 # ---- Apply spider filters to a copy of all_fights_display ----
 spider_data = all_fights_display.copy()
 
-# Apply fighter‑side filters only
+# Fighter‑side filters only
 if spider_wc: spider_data = spider_data[spider_data['WC'].isin(spider_wc)]
 if spider_stance: spider_data = spider_data[spider_data['Stance'].isin(spider_stance)]
 if spider_country: spider_data = spider_data[spider_data['Country'].isin(spider_country)]
@@ -1195,7 +1195,7 @@ if spider_new_wc: spider_data = spider_data[spider_data['IsNewWeightClass'] == T
 if spider_prev_title != "All":
     spider_data = spider_data[spider_data['Prev1_Title'] == spider_prev_title]
 
-# Previous outcomes (fighter only)
+# Fighter‑side previous outcomes
 if spider_prev1: spider_data = spider_data[spider_data[spider_prev1_col].isin(spider_prev1)]
 if spider_prev2: spider_data = spider_data[spider_data[spider_prev2_col].isin(spider_prev2)]
 if spider_prev3: spider_data = spider_data[spider_data[spider_prev3_col].isin(spider_prev3)]
@@ -1301,7 +1301,7 @@ else:
                     prob_lr_f1 = lr_spider.predict_proba(up_vec)[0, 1]
                     prob_knn_f1 = knn_spider.predict_proba(up_vec)[0, 1]
 
-                    # Dataset‑wide win rates (based on ALL spider_hist_full, not just clean)
+                    # Dataset‑wide win rates (based on ALL spider_hist_full)
                     overall_wr_spider = (spider_hist_full['Win?'] == 'Yes').mean() * 100 if len(spider_hist_full) > 0 else 0.0
                     recent_spider = spider_hist_full.tail(recent_window)
                     recent_wr_spider = (recent_spider['Win?'] == 'Yes').mean() * 100 if len(recent_spider) > 0 else 0.0
