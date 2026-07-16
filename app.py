@@ -822,63 +822,70 @@ else:
     else:
         selected_vars = []
 
-    # Spider chart
+    # ---------- Spider chart + Similarity (shared metrics) ----------
     if selected_vars:
         up_ids = all_upcoming['FightID'].unique()
         selected_fight_spider = st.selectbox("Choose an upcoming fight", sorted(up_ids), key="spider_select")
 
         if selected_fight_spider:
             fight_rows = all_upcoming[all_upcoming['FightID'] == selected_fight_spider]
-            if len(fight_rows) == 2:
-                f1 = fight_rows.iloc[0]   # fighter 1
-                f2 = fight_rows.iloc[1]   # fighter 2 (opponent)
+            if len(fight_rows) != 2:
+                st.error("Could not load both fighters for this fight.")
+            else:
+                f1 = fight_rows.iloc[0]
+                f2 = fight_rows.iloc[1]
 
-                # Build values for both fighters, filling NaN with 0
-                f1_vals = [f1[var] if pd.notna(f1[var]) else 0 for var in selected_vars]
-                f2_vals = [f2[var] if pd.notna(f2[var]) else 0 for var in selected_vars]
+                # Keep only metrics where BOTH fighters have non-NaN data
+                valid_vars = []
+                for var in selected_vars:
+                    if pd.notna(f1[var]) and pd.notna(f2[var]):
+                        valid_vars.append(var)
 
-                fig_radar = go.Figure()
-                fig_radar.add_trace(go.Scatterpolar(
-                    r=f1_vals,
-                    theta=selected_vars,
-                    fill='toself',
-                    name=f1['Fighter']
-                ))
-                fig_radar.add_trace(go.Scatterpolar(
-                    r=f2_vals,
-                    theta=selected_vars,
-                    fill='toself',
-                    name=f2['Fighter']
-                ))
-                fig_radar.update_layout(
-                    polar=dict(radialaxis=dict(visible=True)),
-                    title=f"{f1['Fighter']} vs {f2['Fighter']}"
-                )
-                st.plotly_chart(fig_radar, use_container_width=True)
-
-                # Similarity scorer (use the same fight and metrics)
-                hist_filtered = data[data['Win?'].isin(['Yes','No'])].dropna(subset=selected_vars)
-                if not hist_filtered.empty:
-                    up_row = f1  # compare first fighter's features to historical fighters
-                    X_hist = hist_filtered[selected_vars].values
-                    scaler = StandardScaler()
-                    X_hist_scaled = scaler.fit_transform(X_hist)
-                    up_vec = up_row[selected_vars].values.reshape(1, -1)
-                    up_scaled = scaler.transform(up_vec)
-
-                    from scipy.spatial.distance import cdist
-                    dists = cdist(up_scaled, X_hist_scaled, metric='euclidean').flatten()
-                    max_dist = dists.max() if dists.max() > 0 else 1
-                    similarity = 100 * (1 - dists / max_dist)
-
-                    res_df = hist_filtered[['FightDate','Fighter','Opponent','WC','Win?','Method']].copy()
-                    res_df['Similarity'] = similarity.round(1)
-                    res_df = res_df.sort_values('Similarity', ascending=False).head(20)
-
-                    st.write(f"**Most similar historical fights to {up_row['Fighter']}**")
-                    st.dataframe(res_df, use_container_width=True)
+                if not valid_vars:
+                    st.warning("No common numerical data available for both fighters in the selected metrics.")
                 else:
-                    st.warning("No historical fights have the selected features.")
+                    fig_radar = go.Figure()
+                    fig_radar.add_trace(go.Scatterpolar(
+                        r=[f1[var] for var in valid_vars],
+                        theta=valid_vars,
+                        fill='toself',
+                        name=f1['Fighter']
+                    ))
+                    fig_radar.add_trace(go.Scatterpolar(
+                        r=[f2[var] for var in valid_vars],
+                        theta=valid_vars,
+                        fill='toself',
+                        name=f2['Fighter']
+                    ))
+                    fig_radar.update_layout(
+                        polar=dict(radialaxis=dict(visible=True)),
+                        title=f"{f1['Fighter']} vs {f2['Fighter']}"
+                    )
+                    st.plotly_chart(fig_radar, use_container_width=True)
+
+                    # Similarity scorer (uses the same valid_vars)
+                    hist_filtered = data[data['Win?'].isin(['Yes','No'])].dropna(subset=valid_vars)
+                    if not hist_filtered.empty:
+                        up_row = f1
+                        X_hist = hist_filtered[valid_vars].values
+                        scaler = StandardScaler()
+                        X_hist_scaled = scaler.fit_transform(X_hist)
+                        up_vec = up_row[valid_vars].values.reshape(1, -1)
+                        up_scaled = scaler.transform(up_vec)
+
+                        from scipy.spatial.distance import cdist
+                        dists = cdist(up_scaled, X_hist_scaled, metric='euclidean').flatten()
+                        max_dist = dists.max() if dists.max() > 0 else 1
+                        similarity = 100 * (1 - dists / max_dist)
+
+                        res_df = hist_filtered[['FightDate','Fighter','Opponent','WC','Win?','Method']].copy()
+                        res_df['Similarity'] = similarity.round(1)
+                        res_df = res_df.sort_values('Similarity', ascending=False).head(20)
+
+                        st.write(f"**Most similar historical fights to {up_row['Fighter']}**")
+                        st.dataframe(res_df, use_container_width=True)
+                    else:
+                        st.warning("No historical fights with the selected metrics.")
             else:
                 st.error("Could not load both fighters.")
     else:
