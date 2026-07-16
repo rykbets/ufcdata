@@ -757,7 +757,7 @@ def compute_win_rates(fighter_name, hist_df, recent_window=5):
 prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight_global")
 recent_window = st.sidebar.slider("Recent fights window", 1, 100, 5, key="recent_win_global")
 
-# ---------- 2D Win/Loss Prediction (Logistic Regression + KNN) ----------
+# ---------- 2D Win/Loss Prediction (Logistic Regression + Weighted KNN) ----------
 st.header("2D Win/Loss Prediction")
 st.markdown("Select two predictor variables. Logistic Regression and KNN models are fitted. Log‑loss, Brier score, win probability, and dataset‑wide win rates are shown.")
 
@@ -774,7 +774,6 @@ if len(available_pred) >= 2:
         if pred_x == pred_y:
             st.warning("Please select two different variables for the plot.")
         else:
-            # Historical data for model training
             hist = data[data['Win?'].isin(['Yes','No'])].copy()
             hist = hist[[pred_x, pred_y, 'Win?']].dropna()
             if len(hist) < 10 or hist['Win?'].nunique() < 2:
@@ -784,22 +783,24 @@ if len(available_pred) >= 2:
                 X_hist = hist[[pred_x, pred_y]].values
                 y_hist = hist['target'].values
 
-                # Logistic Regression
+                # Logistic Regression (unchanged)
                 logreg = LogisticRegression(max_iter=1000)
                 logreg.fit(X_hist, y_hist)
                 y_prob_lr = logreg.predict_proba(X_hist)[:, 1]
                 ll_lr = log_loss(y_hist, y_prob_lr)
                 bs_lr = brier_score_loss(y_hist, y_prob_lr)
 
-                # KNN
+                # KNN (weighted, scaled)
                 k = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_2d")
+                scaler_knn = StandardScaler()
+                X_hist_scaled = scaler_knn.fit_transform(X_hist)
                 knn = KNeighborsClassifier(n_neighbors=k, weights='distance')
-                knn.fit(X_hist, y_hist)
-                y_prob_knn = knn.predict_proba(X_hist)[:, 1]
+                knn.fit(X_hist_scaled, y_hist)
+                y_prob_knn = knn.predict_proba(X_hist_scaled)[:, 1]
                 ll_knn = log_loss(y_hist, y_prob_knn)
                 bs_knn = brier_score_loss(y_hist, y_prob_knn)
 
-                # Scatter plot
+                # Scatter plot with decision boundary
                 plot_data = data[[pred_x, pred_y, 'DetailedResult', 'Fight', 'Win?']].copy()
                 fig = px.scatter(
                     plot_data, x=pred_x, y=pred_y,
@@ -817,7 +818,6 @@ if len(available_pred) >= 2:
                         xx, yy = np.meshgrid(np.linspace(x_min, x_max, 100),
                                              np.linspace(y_min, y_max, 100))
                         grid_points = np.c_[xx.ravel(), yy.ravel()]
-                        # Ensure grid has two columns
                         if grid_points.shape[1] == 2:
                             Z = logreg.predict_proba(grid_points)[:, 1].reshape(xx.shape)
                             fig.add_trace(go.Contour(
@@ -829,7 +829,7 @@ if len(available_pred) >= 2:
                                 showscale=False,
                                 name='LR decision boundary'
                             ))
-                except Exception as e:
+                except Exception:
                     st.caption("Could not draw decision boundary (non‑critical).")
 
                 st.plotly_chart(fig, use_container_width=True)
@@ -851,13 +851,14 @@ if len(available_pred) >= 2:
                         up_rows = all_upcoming_reg[all_upcoming_reg['FightID'] == chosen_up]
                         if len(up_rows) == 2:
                             fighter_row = up_rows.iloc[0]
-                            fighter_name = fighter_row['Fighter']
                             if all(pd.notna(fighter_row[f]) for f in [pred_x, pred_y]):
                                 up_val = np.array([[fighter_row[pred_x], fighter_row[pred_y]]])
                                 prob_lr = logreg.predict_proba(up_val)[0, 1]
-                                prob_knn = knn.predict_proba(up_val)[0, 1]
+                                # Scale the upcoming point with the same scaler
+                                up_val_scaled = scaler_knn.transform(up_val)
+                                prob_knn = knn.predict_proba(up_val_scaled)[0, 1]
 
-                                # Dataset‑wide win rates (based on ALL filtered historical fights)
+                                # Dataset‑wide win rates
                                 full_hist = data[data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
                                 if len(full_hist) > 0:
                                     overall_wr = (full_hist['Win?'] == 'Yes').mean() * 100
@@ -886,7 +887,7 @@ if len(available_pred) >= 2:
 else:
     st.warning("Not enough numerical features for win/loss prediction.")
 
-# ---------- 3D Win/Loss Prediction ----------
+# ---------- 3D Win/Loss Prediction (Logistic Regression + Weighted KNN) ----------
 st.header("3D Win/Loss Prediction")
 st.markdown("Select three numerical variables. Logistic Regression and KNN models are fitted. Log‑loss, Brier score, win probability, and dataset‑wide win rates are shown.")
 
@@ -910,16 +911,20 @@ if len(three_d_features) >= 3:
             X_hist3d = hist3d[[x3d, y3d, z3d]].values
             y_hist3d = hist3d['target'].values
 
+            # Logistic Regression
             logreg3d = LogisticRegression(max_iter=1000)
             logreg3d.fit(X_hist3d, y_hist3d)
             y_prob_lr3d = logreg3d.predict_proba(X_hist3d)[:, 1]
             ll_lr3d = log_loss(y_hist3d, y_prob_lr3d)
             bs_lr3d = brier_score_loss(y_hist3d, y_prob_lr3d)
 
+            # KNN (weighted, scaled)
             k3d = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_3d")
+            scaler_knn3d = StandardScaler()
+            X_hist_scaled3d = scaler_knn3d.fit_transform(X_hist3d)
             knn3d = KNeighborsClassifier(n_neighbors=k3d, weights='distance')
-            knn3d.fit(X_hist3d, y_hist3d)
-            y_prob_knn3d = knn3d.predict_proba(X_hist3d)[:, 1]
+            knn3d.fit(X_hist_scaled3d, y_hist3d)
+            y_prob_knn3d = knn3d.predict_proba(X_hist_scaled3d)[:, 1]
             ll_knn3d = log_loss(y_hist3d, y_prob_knn3d)
             bs_knn3d = brier_score_loss(y_hist3d, y_prob_knn3d)
 
@@ -951,14 +956,13 @@ if len(three_d_features) >= 3:
                     up_rows_3d = all_upcoming_3d[all_upcoming_3d['FightID'] == chosen_up_3d]
                     if len(up_rows_3d) == 2:
                         fighter_row = up_rows_3d.iloc[0]
-                        fighter_name = fighter_row['Fighter']
                         feats = [x3d, y3d, z3d]
                         if all(pd.notna(fighter_row[f]) for f in feats):
                             up_val3d = np.array([fighter_row[feats].values])
                             prob_lr = logreg3d.predict_proba(up_val3d)[0, 1]
-                            prob_knn = knn3d.predict_proba(up_val3d)[0, 1]
+                            up_val_scaled3d = scaler_knn3d.transform(up_val3d)
+                            prob_knn = knn3d.predict_proba(up_val_scaled3d)[0, 1]
 
-                            # Dataset‑wide win rates
                             full_hist = data[data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
                             if len(full_hist) > 0:
                                 overall_wr = (full_hist['Win?'] == 'Yes').mean() * 100
@@ -1138,7 +1142,7 @@ else:
     st.write("No categorical columns with meaningful variation.")
 
 # =========================================================================
-# SPIDER CHART – FIGHTER‑SIDE FILTERS (WIN RATE ON FILTERED ROWS) + LR/KNN + SIMILARITY + BAYESIAN WIN RATES
+# SPIDER CHART – FIGHTER‑SIDE FILTERS + LR + WEIGHTED KNN + SIMILARITY + BAYESIAN WIN RATES
 # =========================================================================
 st.header("Fight Similarity & Comparison (Independent Filters)")
 
@@ -1217,7 +1221,7 @@ spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] 
 if spider_upcoming.empty:
     st.write("No upcoming fights after spider filters.")
 else:
-    # Keep only complete fights (both fighters present) – should always be true now
+    # Keep only complete fights (both fighters present)
     fight_counts = spider_upcoming.groupby('FightID').size()
     complete_ids = fight_counts[fight_counts == 2].index
     spider_upcoming = spider_upcoming[spider_upcoming['FightID'].isin(complete_ids)]
@@ -1228,7 +1232,7 @@ else:
         # Full historical data (all rows for these FightIDs)
         spider_hist_full = spider_data[spider_data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
 
-        # For overall win rate, use only the rows that actually passed the mask (the fighters that met criteria)
+        # For overall win rate, use only the rows that actually passed the mask
         spider_hist_filtered = spider_data.loc[mask & spider_data['Win?'].isin(['Yes','No'])]
 
         # Variable selector
@@ -1266,11 +1270,13 @@ else:
                 ll_lr_spider = log_loss(y_spider, y_prob_lr)
                 bs_lr_spider = brier_score_loss(y_spider, y_prob_lr)
 
-                # KNN
+                # KNN (weighted, scaled)
                 k_spider = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_spider")
+                scaler_knn_spider = StandardScaler()
+                X_spider_scaled_knn = scaler_knn_spider.fit_transform(X_spider)
                 knn_spider = KNeighborsClassifier(n_neighbors=k_spider, weights='distance')
-                knn_spider.fit(X_spider, y_spider)
-                y_prob_knn_spider = knn_spider.predict_proba(X_spider)[:, 1]
+                knn_spider.fit(X_spider_scaled_knn, y_spider)
+                y_prob_knn_spider = knn_spider.predict_proba(X_spider_scaled_knn)[:, 1]
                 ll_knn_spider = log_loss(y_spider, y_prob_knn_spider)
                 bs_knn_spider = brier_score_loss(y_spider, y_prob_knn_spider)
 
@@ -1311,11 +1317,11 @@ else:
                     # Win probabilities
                     up_vec = f1[selected_vars].values.reshape(1, -1)
                     prob_lr_f1 = lr_spider.predict_proba(up_vec)[0, 1]
-                    prob_knn_f1 = knn_spider.predict_proba(up_vec)[0, 1]
+                    up_vec_scaled = scaler_knn_spider.transform(up_vec)
+                    prob_knn_f1 = knn_spider.predict_proba(up_vec_scaled)[0, 1]
 
                     # Dataset‑wide win rates (based ONLY on rows that passed the mask)
                     overall_wr_spider = (spider_hist_filtered['Win?'] == 'Yes').mean() * 100 if len(spider_hist_filtered) > 0 else 0.0
-                    # Recent win rate also from filtered rows
                     recent_spider = spider_hist_filtered.tail(recent_window)
                     recent_wr_spider = (recent_spider['Win?'] == 'Yes').mean() * 100 if len(recent_spider) > 0 else 0.0
                     shrunk_lr_spider = (prior_weight * (overall_wr_spider / 100) + prob_lr_f1) / (prior_weight + 1)
