@@ -753,7 +753,6 @@ if len(available_reg) >= 2:
         if len(reg_data) < 10:
             st.warning("Not enough data for regression.")
         else:
-            from sklearn.linear_model import LinearRegression
             X_reg = reg_data[[reg_x]].values
             y_reg = reg_data[reg_y].values
             lr = LinearRegression().fit(X_reg, y_reg)
@@ -775,6 +774,19 @@ if len(available_reg) >= 2:
 
             # ---------- Win Probability Estimate (Logistic Regression) ----------
             st.subheader("Win Probability Estimate")
+            prob_features = st.radio(
+                "Predictor(s) for win probability:",
+                ["X only", "Y only", "X and Y"],
+                index=0,
+                key="prob_feature_choice"
+            )
+            if prob_features == "X only":
+                feats = [reg_x]
+            elif prob_features == "Y only":
+                feats = [reg_y]
+            else:
+                feats = [reg_x, reg_y]
+
             all_upcoming_reg = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
             if not all_upcoming_reg.empty:
                 up_ids = all_upcoming_reg['FightID'].unique()
@@ -783,31 +795,65 @@ if len(available_reg) >= 2:
                     up_rows = all_upcoming_reg[all_upcoming_reg['FightID'] == chosen_up]
                     if len(up_rows) == 2:
                         fighter_row = up_rows.iloc[0]
-                        if pd.notna(fighter_row[reg_x]):
+                        if all(pd.notna(fighter_row[f]) for f in feats):
                             hist = data[data['Win?'].isin(['Yes','No'])].copy()
-                            hist = hist[[reg_x, 'Win?']].dropna()
-                            hist['target'] = (hist['Win?'] == 'Yes').astype(int)
-                            X_hist = hist[[reg_x]].values
-                            y_hist = hist['target'].values
-                            if len(np.unique(y_hist)) >= 2:
-                                logreg = LogisticRegression()
-                                logreg.fit(X_hist, y_hist)
-                                up_val = np.array([[fighter_row[reg_x]]])
-                                prob = logreg.predict_proba(up_val)[0, 1]
-                                st.metric(
-                                    label=f"Win probability for {fighter_row['Fighter']} (based on {reg_x})",
-                                    value=f"{prob:.1%}"
-                                )
+                            hist = hist[feats + ['Win?']].dropna()
+                            if len(hist) < 10:
+                                st.warning("Not enough historical data for logistic regression.")
                             else:
-                                st.warning("Not enough win/loss variation for logistic regression.")
+                                hist['target'] = (hist['Win?'] == 'Yes').astype(int)
+                                X_hist = hist[feats].values
+                                y_hist = hist['target'].values
+                                if len(np.unique(y_hist)) >= 2:
+                                    logreg = LogisticRegression()
+                                    logreg.fit(X_hist, y_hist)
+                                    up_val = np.array([fighter_row[feats].values])
+                                    prob = logreg.predict_proba(up_val)[0, 1]
+                                    st.metric(
+                                        label=f"Win probability for {fighter_row['Fighter']} (using {', '.join(feats)})",
+                                        value=f"{prob:.1%}"
+                                    )
+                                else:
+                                    st.warning("Target variable has no variation.")
                         else:
-                            st.warning("Selected fighter does not have a value for this variable.")
+                            st.warning("Selected fighter does not have all required predictor values.")
                 else:
                     st.info("Choose an upcoming fight to see win probability.")
             else:
                 st.write("No upcoming fights available.")
 else:
     st.warning("Not enough numerical features for regression.")
+
+# ---------- 3D Scatterplot ----------
+st.header("3D Variable Relationships")
+st.markdown("Select three numerical variables to explore their interaction with win/loss.")
+
+three_d_features = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
+if len(three_d_features) >= 3:
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        x3d = st.selectbox("X", three_d_features, key="x3d")
+    with col2:
+        y3d = st.selectbox("Y", three_d_features, key="y3d")
+    with col3:
+        z3d = st.selectbox("Z", three_d_features, key="z3d")
+
+    if x3d and y3d and z3d:
+        plot_data = data[[x3d, y3d, z3d, 'DetailedResult', 'Fight']].dropna()
+        if len(plot_data) < 10:
+            st.warning("Not enough data for 3D plot.")
+        else:
+            fig3d = px.scatter_3d(
+                plot_data,
+                x=x3d, y=y3d, z=z3d,
+                color='DetailedResult',
+                color_discrete_map=color_map,
+                hover_data=['Fight'],
+                title=f"3D Scatter: {x3d} vs {y3d} vs {z3d}"
+            )
+            st.plotly_chart(fig3d, use_container_width=True)
+else:
+    st.warning("Not enough numerical features for a 3D plot (need at least 3).")
 
 # =========================================================================
 # ADVANCED ANALYSIS (filtered data) – cached importance
@@ -875,17 +921,16 @@ else:
     st.write("No categorical columns with meaningful variation or no historical data to compute MI.")
 
 # =========================================================================
-# SPIDER CHART (DIFFERENTIALS) + SIMILARITY (INDEPENDENT OF FILTERS)
+# SPIDER CHART (DIFFERENTIALS) + SIMILARITY (FILTERED DATA)
 # =========================================================================
-st.header("Fight Similarity & Comparison (All Data)")
+st.header("Fight Similarity & Comparison (Filtered)")
 
-all_upcoming = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
+upcoming_filtered = data[data['Win?'].isna() | (data['Win?'] == '')]
 
-if all_upcoming.empty:
-    st.write("No upcoming fights in dataset.")
+if upcoming_filtered.empty:
+    st.write("No upcoming fights in the filtered dataset.")
 else:
-    # Collect numeric columns, EXCLUDING shift‑based historical diffs
-    numeric_cols = [c for c in all_upcoming.columns if pd.api.types.is_numeric_dtype(all_upcoming[c])]
+    numeric_cols = [c for c in upcoming_filtered.columns if pd.api.types.is_numeric_dtype(upcoming_filtered[c])]
 
     clean_cols = []
     for col in numeric_cols:
@@ -909,7 +954,7 @@ else:
     ])
 
     if not spider_vars:
-        st.warning("No numeric variables found in upcoming data.")
+        st.warning("No numeric variables found in upcoming data after filtering.")
     else:
         selected_vars = st.multiselect(
             "Select up to 8 variables",
@@ -920,7 +965,7 @@ else:
         )
 
     if selected_vars:
-        up_ids = all_upcoming['FightID'].unique()
+        up_ids = upcoming_filtered['FightID'].unique()
         chosen_fight = st.selectbox(
             "Choose an upcoming fight",
             sorted(up_ids),
@@ -928,7 +973,7 @@ else:
         )
 
         if chosen_fight:
-            fight_rows = all_upcoming[all_upcoming['FightID'] == chosen_fight]
+            fight_rows = upcoming_filtered[upcoming_filtered['FightID'] == chosen_fight]
             if len(fight_rows) != 2:
                 st.error("Could not load both fighters.")
             else:
@@ -958,14 +1003,11 @@ else:
                 )
                 st.plotly_chart(fig_radar, use_container_width=True)
 
-                # Similarity scorer
-                hist_full = all_fights_display[
-                    all_fights_display['Win?'].isin(['Yes', 'No'])
-                ].dropna(subset=selected_vars)
-
-                if not hist_full.empty:
+                # Similarity scorer (uses filtered historical data)
+                hist_filtered = data[data['Win?'].isin(['Yes', 'No'])].dropna(subset=selected_vars)
+                if not hist_filtered.empty:
                     up_row = f1
-                    X_hist = hist_full[selected_vars].values
+                    X_hist = hist_filtered[selected_vars].values
                     scaler = StandardScaler()
                     X_hist_scaled = scaler.fit_transform(X_hist)
                     up_vec = up_row[selected_vars].values.reshape(1, -1)
@@ -975,7 +1017,7 @@ else:
                     max_dist = dists.max() if dists.max() > 0 else 1
                     similarity = 100 * (1 - dists / max_dist)
 
-                    res_df = hist_full[['FightDate', 'Fighter', 'Opponent', 'WC', 'Win?', 'Method']].copy()
+                    res_df = hist_filtered[['FightDate', 'Fighter', 'Opponent', 'WC', 'Win?', 'Method']].copy()
                     res_df['Similarity'] = similarity.round(1)
                     res_df = res_df.sort_values('Similarity', ascending=False).head(20)
 
@@ -993,4 +1035,4 @@ else:
                     else:
                         st.caption("No historical fight with ≥90% similarity.")
                 else:
-                    st.warning("No complete historical fights for similarity.")
+                    st.warning("No complete historical fights for similarity in the filtered data.")
