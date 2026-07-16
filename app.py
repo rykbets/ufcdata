@@ -735,38 +735,47 @@ else:
 # =========================================================================
 st.header("Advanced Analysis")
 
-# ---------- 1. Top Winners / Losers by Category ----------
-st.subheader("Top Categorical Metrics – Most Wins & Most Losses")
+# ---------- 1. Top Winners / Losers Across All Categories ----------
+st.subheader("Top 20 Categorical Values – Most Wins & Most Losses")
+
 categorical_cols = [col for col in ['WC','Stance','Country','EventCountry','Title','ScheduledRounds','HometownFighter','Opponent_Hometown']
                     if col in data.columns]
 
+# Build a list of (Category: Value, Win count) and (Category: Value, Loss count) pairs
+win_pairs = []
+loss_pairs = []
+
 for col in categorical_cols:
-    # Count wins (Win? == 'Yes') and losses (Win? == 'No')
-    win_counts = data[data['Win?'] == 'Yes'][col].value_counts().head(10)
-    loss_counts = data[data['Win?'] == 'No'][col].value_counts().head(10)
+    win_counts = data[data['Win?'] == 'Yes'][col].value_counts()
+    loss_counts = data[data['Win?'] == 'No'][col].value_counts()
+    for val, cnt in win_counts.items():
+        win_pairs.append((f"{col}: {val}", cnt))
+    for val, cnt in loss_counts.items():
+        loss_pairs.append((f"{col}: {val}", cnt))
 
-    if not win_counts.empty:
-        fig_w = px.bar(x=win_counts.index, y=win_counts.values,
-                       labels={'x': col, 'y': 'Number of Wins'},
-                       title=f"Top {col} by Wins",
-                       color_discrete_sequence=['green'])
-        st.plotly_chart(fig_w, use_container_width=True)
+# Convert to DataFrames and take top 20
+win_df = pd.DataFrame(win_pairs, columns=['Category', 'Wins']).sort_values('Wins', ascending=False).head(20)
+loss_df = pd.DataFrame(loss_pairs, columns=['Category', 'Losses']).sort_values('Losses', ascending=False).head(20)
 
-    if not loss_counts.empty:
-        fig_l = px.bar(x=loss_counts.index, y=loss_counts.values,
-                       labels={'x': col, 'y': 'Number of Losses'},
-                       title=f"Top {col} by Losses",
-                       color_discrete_sequence=['red'])
-        st.plotly_chart(fig_l, use_container_width=True)
+if not win_df.empty:
+    fig_w = px.bar(win_df, x='Wins', y='Category', orientation='h',
+                   title="Top 20 Category Values by Win Count",
+                   color_discrete_sequence=['green'])
+    st.plotly_chart(fig_w, use_container_width=True)
 
-# ---------- 2. Spider (Radar) Chart ----------
+if not loss_df.empty:
+    fig_l = px.bar(loss_df, x='Losses', y='Category', orientation='h',
+                   title="Top 20 Category Values by Loss Count",
+                   color_discrete_sequence=['red'])
+    st.plotly_chart(fig_l, use_container_width=True)
+
+# ---------- 2. Spider Chart (optional – you can keep or remove) ----------
 st.subheader("Spider Chart – Fighter Comparison")
 all_upcoming = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
 if not all_upcoming.empty:
     up_ids = all_upcoming['FightID'].unique()
     selected_fight_spider = st.selectbox("Select upcoming fight", sorted(up_ids), key="spider_select")
 
-    # Use numerical_features defined earlier
     spider_feats = [c for c in numerical_features if c in all_upcoming.columns]
     if spider_feats:
         selected_vars = st.multiselect("Choose up to 8 numerical variables", spider_feats,
@@ -804,7 +813,7 @@ if not all_upcoming.empty:
 else:
     st.write("No upcoming fights available.")
 
-# ---------- 3. Similarity Scorer ----------
+# ---------- 3. Similarity Scorer (optional) ----------
 st.subheader("Similarity Scorer – Most Similar Historical Fights")
 if not all_upcoming.empty and not data[data['Win?'].isin(['Yes','No'])].empty and len(numerical_features) >= 2:
     up_ids_sim = all_upcoming['FightID'].unique()
