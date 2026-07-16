@@ -6,12 +6,10 @@ import plotly.graph_objects as go
 import re
 import os
 import gdown
-import itertools
-import hashlib
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import mutual_info_score, roc_auc_score
+from sklearn.metrics import mutual_info_score
 from sklearn.linear_model import LinearRegression, LogisticRegression
 from scipy.spatial.distance import cdist
 
@@ -693,22 +691,9 @@ if 'CareerAvg_Ctrl' in data.columns: display_cols.append('CareerAvg_Ctrl')
 display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
 
-# =========================================================================
-# MISSING DEFINITIONS (MUST COME BEFORE PLOTS)
-# =========================================================================
-# Build clean numerical feature list (no Prev, no Opponent_Prev)
-core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
-        'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev', 'Avg3DaysGap',
-        'FightNumber', 'Opponent_FightNumber', 'FighterOddsNum', 'PrevFighterOddsNum',
-        'CareerWinPct', 'Opponent_CareerWinPct']
-career_avg = [c for c in data.columns if c.startswith('CareerAvg_') and not c.startswith('Opponent_CareerAvg_')]
-opp_career_avg = [c for c in data.columns if c.startswith('Opponent_CareerAvg_')]
-diff_cols = [c for c in data.columns if c.endswith('_Diff')]
-numerical_features = list(dict.fromkeys(
-    c for c in core + career_avg + opp_career_avg + diff_cols
-    if c in data.columns and not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')
-    and data[c].nunique(dropna=True) >= 2
-))
+# ---------- Regression Plot ----------
+st.header("Regression Analysis")
+st.markdown("Select two variables to explore relationships. Points are colored by detailed outcome.")
 
 def detailed_result(row):
     win_raw = row.get('Win?')
@@ -741,70 +726,53 @@ color_map = {
     'Draw': 'gray'
 }
 
-# ---------- Win/Loss Prediction (AUC) ----------
-st.header("Win/Loss Prediction")
-st.markdown("Select two predictor variables. A logistic regression is fitted to separate wins from losses (AUC shown).")
+# Build clean numerical feature list (no Prev, no Opponent_Prev)
+core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
+        'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev', 'Avg3DaysGap',
+        'FightNumber', 'Opponent_FightNumber', 'FighterOddsNum', 'PrevFighterOddsNum',
+        'CareerWinPct', 'Opponent_CareerWinPct']
+career_avg = [c for c in data.columns if c.startswith('CareerAvg_') and not c.startswith('Opponent_CareerAvg_')]
+opp_career_avg = [c for c in data.columns if c.startswith('Opponent_CareerAvg_')]
+diff_cols = [c for c in data.columns if c.endswith('_Diff')]
+numerical_features = list(dict.fromkeys(
+    c for c in core + career_avg + opp_career_avg + diff_cols
+    if c in data.columns and not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')
+    and data[c].nunique(dropna=True) >= 2
+))
 
-available_pred = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
-
-if len(available_pred) >= 2:
+available_reg = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
+if len(available_reg) >= 2:
     col1, col2 = st.columns(2)
     with col1:
-        pred_x = st.selectbox("Predictor X", available_pred, key="pred_x")
+        reg_x = st.selectbox("X variable", available_reg, key="reg_x")
     with col2:
-        pred_y = st.selectbox("Predictor Y", available_pred, key="pred_y")
+        reg_y = st.selectbox("Y variable", available_reg, key="reg_y")
 
-    if pred_x and pred_y:
-        # Build the plot dataset (filtered fights + upcoming)
-        plot_data = data[[pred_x, pred_y, 'DetailedResult', 'Fight', 'Win?']].copy()
-
-        # Historical data for model fitting
-        hist = data[data['Win?'].isin(['Yes','No'])].copy()
-        hist = hist[[pred_x, pred_y, 'Win?']].dropna()
-        if len(hist) < 10 or hist['Win?'].nunique() < 2:
-            st.warning("Not enough historical data for logistic regression.")
+    if reg_x and reg_y:
+        reg_data = data[[reg_x, reg_y, 'DetailedResult', 'Fight']].dropna()
+        if len(reg_data) < 10:
+            st.warning("Not enough data for regression.")
         else:
-            hist['target'] = (hist['Win?'] == 'Yes').astype(int)
-            X_hist = hist[[pred_x, pred_y]].values
-            y_hist = hist['target'].values
+            X_reg = reg_data[[reg_x]].values
+            y_reg = reg_data[reg_y].values
+            lr = LinearRegression().fit(X_reg, y_reg)
+            r2 = lr.score(X_reg, y_reg)
+            reg_line_x = np.linspace(X_reg.min(), X_reg.max(), 100).reshape(-1, 1)
+            reg_line_y = lr.predict(reg_line_x)
 
-            logreg = LogisticRegression(max_iter=1000)
-            logreg.fit(X_hist, y_hist)
-
-            # AUC
-            y_prob = logreg.predict_proba(X_hist)[:, 1]
-            auc = roc_auc_score(y_hist, y_prob)
-
-            # Decision boundary grid – uses exactly the two features the model was trained on
-            x_min, x_max = X_hist[:, 0].min() - 0.5, X_hist[:, 0].max() + 0.5
-            y_min, y_max = X_hist[:, 1].min() - 0.5, X_hist[:, 1].max() + 0.5
-            xx, yy = np.meshgrid(np.linspace(x_min, x_max, 100),
-                                 np.linspace(y_min, y_max, 100))
-            # predict_proba expects the same two columns in the same order as training
-            grid_points = np.c_[xx.ravel(), yy.ravel()]
-            Z = logreg.predict_proba(grid_points)[:, 1].reshape(xx.shape)
-
-            # Scatter plot with decision contour
-            fig = px.scatter(
-                plot_data, x=pred_x, y=pred_y,
-                color='DetailedResult',
+            fig_reg = px.scatter(
+                reg_data, x=reg_x, y=reg_y, color='DetailedResult',
                 color_discrete_map=color_map,
                 hover_data=['Fight'],
-                title=f"Logistic Regression: {pred_x} & {pred_y} (AUC = {auc:.3f})"
+                title=f"{reg_y} vs {reg_x} (R² = {r2:.3f})"
             )
-            fig.add_trace(go.Contour(
-                x=np.linspace(x_min, x_max, 100),
-                y=np.linspace(y_min, y_max, 100),
-                z=Z,
-                contours_coloring='lines',
-                line_width=1,
-                showscale=False,
-                name='Decision boundary'
+            fig_reg.add_trace(go.Scatter(
+                x=reg_line_x.flatten(), y=reg_line_y, mode='lines',
+                name='Regression', line=dict(color='white')
             ))
-            st.plotly_chart(fig, use_container_width=True)
-            st.caption(f"Logistic regression AUC: {auc:.3f}  (predicting Win from {pred_x} and {pred_y})")
+            st.plotly_chart(fig_reg, use_container_width=True)
 
-            # Win Probability Estimate
+            # ---------- Win Probability Estimate (Logistic Regression using X and Y) ----------
             st.subheader("Win Probability Estimate")
             all_upcoming_reg = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
             if not all_upcoming_reg.empty:
@@ -814,21 +782,38 @@ if len(available_pred) >= 2:
                     up_rows = all_upcoming_reg[all_upcoming_reg['FightID'] == chosen_up]
                     if len(up_rows) == 2:
                         fighter_row = up_rows.iloc[0]
-                        if all(pd.notna(fighter_row[f]) for f in [pred_x, pred_y]):
-                            up_val = np.array([[fighter_row[pred_x], fighter_row[pred_y]]])
-                            prob = logreg.predict_proba(up_val)[0, 1]
-                            st.metric(label=f"Win probability for {fighter_row['Fighter']}", value=f"{prob:.1%}")
+                        if all(pd.notna(fighter_row[f]) for f in [reg_x, reg_y]):
+                            hist = data[data['Win?'].isin(['Yes','No'])].copy()
+                            hist = hist[[reg_x, reg_y, 'Win?']].dropna()
+                            if len(hist) < 10:
+                                st.warning("Not enough historical data for logistic regression.")
+                            else:
+                                hist['target'] = (hist['Win?'] == 'Yes').astype(int)
+                                X_hist = hist[[reg_x, reg_y]].values
+                                y_hist = hist['target'].values
+                                if len(np.unique(y_hist)) >= 2:
+                                    logreg = LogisticRegression()
+                                    logreg.fit(X_hist, y_hist)
+                                    up_val = np.array([[fighter_row[reg_x], fighter_row[reg_y]]])
+                                    prob = logreg.predict_proba(up_val)[0, 1]
+                                    st.metric(
+                                        label=f"Win probability for {fighter_row['Fighter']} (using X and Y)",
+                                        value=f"{prob:.1%}"
+                                    )
+                                else:
+                                    st.warning("Target variable has no variation.")
                         else:
-                            st.warning("Selected fighter does not have both predictor values.")
+                            st.warning("Selected fighter does not have both X and Y values.")
                 else:
                     st.info("Choose an upcoming fight to see win probability.")
             else:
                 st.write("No upcoming fights available.")
 else:
-    st.warning("Not enough numerical features for win/loss prediction.")
-# ---------- 3D Scatterplot (No R² plane) ----------
+    st.warning("Not enough numerical features for regression.")
+
+# ---------- 3D Scatterplot with Regression Plane and Win Probability ----------
 st.header("3D Variable Relationships")
-st.markdown("Select three numerical variables to view their relationship with win/loss.")
+st.markdown("Select three numerical variables. A regression plane is fitted to predict Z from X and Y (R² shown). Also estimate win probability using all three variables.")
 
 three_d_features = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
 if len(three_d_features) >= 3:
@@ -845,17 +830,42 @@ if len(three_d_features) >= 3:
         if len(plot_data) < 10:
             st.warning("Not enough data for 3D plot.")
         else:
+            # Fit plane: Z ~ X + Y
+            from sklearn.linear_model import LinearRegression
+            X_plane = plot_data[[x3d, y3d]].values
+            Z_plane = plot_data[z3d].values
+            plane_model = LinearRegression()
+            plane_model.fit(X_plane, Z_plane)
+            r2_plane = plane_model.score(X_plane, Z_plane)
+
+            # Create a grid for the plane surface
+            x_range = np.linspace(X_plane[:, 0].min(), X_plane[:, 0].max(), 20)
+            y_range = np.linspace(X_plane[:, 1].min(), X_plane[:, 1].max(), 20)
+            X_grid, Y_grid = np.meshgrid(x_range, y_range)
+            Z_grid = plane_model.predict(np.c_[X_grid.ravel(), Y_grid.ravel()]).reshape(X_grid.shape)
+
             fig3d = px.scatter_3d(
                 plot_data,
                 x=x3d, y=y3d, z=z3d,
                 color='DetailedResult',
                 color_discrete_map=color_map,
                 hover_data=['Fight'],
-                title=f"3D Scatter: {x3d} vs {y3d} vs {z3d}"
+                title=f"3D Scatter: {x3d} vs {y3d} vs {z3d} (Plane R² = {r2_plane:.3f})"
             )
-            st.plotly_chart(fig3d, use_container_width=True)
 
-            # Win probability + AUC using all three variables (X,Y,Z)
+            # Add the regression plane as a surface trace
+            fig3d.add_trace(go.Surface(
+                x=x_range, y=y_range, z=Z_grid,
+                opacity=0.5,
+                colorscale='Greys',
+                showscale=False,
+                name='Regression plane'
+            ))
+
+            st.plotly_chart(fig3d, use_container_width=True)
+            st.caption(f"Multiple linear regression: {z3d} ~ {x3d} + {y3d}   |   R² = {r2_plane:.3f}")
+
+            # Win probability using all three variables (X,Y,Z) via logistic regression
             st.subheader("Win Probability using X, Y, Z")
             all_upcoming_3d = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
             if not all_upcoming_3d.empty:
@@ -878,17 +888,12 @@ if len(three_d_features) >= 3:
                                 if len(np.unique(y_hist3d)) >= 2:
                                     logreg3d = LogisticRegression()
                                     logreg3d.fit(X_hist3d, y_hist3d)
-                                    # Compute AUC on the training data
-                                    y_prob3d = logreg3d.predict_proba(X_hist3d)[:, 1]
-                                    auc3d = roc_auc_score(y_hist3d, y_prob3d)
-
                                     up_val3d = np.array([fighter_row[feats_3d].values])
                                     prob3d = logreg3d.predict_proba(up_val3d)[0, 1]
-                                    col_a, col_b = st.columns(2)
-                                    with col_a:
-                                        st.metric(label=f"Win probability for {fighter_row['Fighter']}", value=f"{prob3d:.1%}")
-                                    with col_b:
-                                        st.metric(label="Model AUC (historical)", value=f"{auc3d:.3f}")
+                                    st.metric(
+                                        label=f"Win probability for {fighter_row['Fighter']} (using X,Y,Z)",
+                                        value=f"{prob3d:.1%}"
+                                    )
                                 else:
                                     st.warning("Target variable has no variation.")
                         else:
@@ -932,92 +937,7 @@ if not mi_df.empty:
 else:
     st.warning("Not enough historical data for feature importance.")
 
-# ---------- Best Variable Combinations for Win/Loss (AUC) ----------
-st.subheader("Best Variable Combinations for Win/Loss")
-st.markdown("Limit the search to the top‑N most important numerical features.")
-
-# Lightweight data fingerprint (avoids slow pd.util.hash_pandas_object)
-data_fingerprint = hash(str(data.shape))  
-
-if "auc_results" not in st.session_state:
-    st.session_state.auc_results = None
-if "last_data_hash" not in st.session_state:
-    st.session_state.last_data_hash = data_fingerprint
-
-if st.session_state.last_data_hash != data_fingerprint:
-    st.session_state.auc_results = None
-    st.session_state.last_data_hash = data_fingerprint
-
-# Use top features from importance ranking (already computed)
-if not mi_df.empty:
-    top_features = mi_df['Feature'].tolist()
-else:
-    top_features = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
-
-num_top = st.slider("Number of top features to test", min_value=5, max_value=min(30, len(top_features)), value=10)
-candidates = top_features[:num_top]
-
-if len(candidates) >= 2:
-    compute_clicked = st.button("Compute best AUC combinations (fast)", key="compute_auc_fast")
-
-    if compute_clicked or st.session_state.auc_results is None:
-        with st.spinner(f"Testing combinations among top {num_top} features…"):
-            hist = data[data['Win?'].isin(['Yes','No'])].copy()
-            hist['WinNum'] = (hist['Win?'] == 'Yes').astype(int)
-
-            # --- Two variables ---
-            auc_two = []
-            for x_col in candidates:
-                for y_col in candidates:
-                    if x_col == y_col:
-                        continue
-                    sub = hist[[x_col, y_col, 'WinNum']].dropna()
-                    if len(sub) < 10 or sub['WinNum'].nunique() < 2:
-                        continue
-                    X = sub[[x_col, y_col]].values
-                    y = sub['WinNum'].values
-                    try:
-                        model = LogisticRegression(max_iter=1000).fit(X, y)
-                        y_prob = model.predict_proba(X)[:, 1]
-                        auc = roc_auc_score(y, y_prob)
-                        auc_two.append({'Variables': f"{x_col}, {y_col}", 'AUC': auc})
-                    except:
-                        pass
-            df_auc2 = pd.DataFrame(auc_two).sort_values('AUC', ascending=False).head(20)
-
-            # --- Three variables ---
-            auc_three = []
-            for combo in itertools.combinations(candidates, 3):
-                sub = hist[list(combo) + ['WinNum']].dropna()
-                if len(sub) < 10 or sub['WinNum'].nunique() < 2:
-                    continue
-                X = sub[list(combo)].values
-                y = sub['WinNum'].values
-                try:
-                    model = LogisticRegression(max_iter=1000).fit(X, y)
-                    y_prob = model.predict_proba(X)[:, 1]
-                    auc = roc_auc_score(y, y_prob)
-                    auc_three.append({'Variables': ', '.join(combo), 'AUC': auc})
-                except:
-                    pass
-            df_auc3 = pd.DataFrame(auc_three).sort_values('AUC', ascending=False).head(20)
-
-            st.session_state.auc_results = {
-                'two_vars': df_auc2,
-                'three_vars': df_auc3
-            }
-
-    if st.session_state.auc_results is not None:
-        st.write("**Top 20 Two‑Variable Win/Loss Predictors (AUC)**")
-        st.dataframe(st.session_state.auc_results['two_vars'], use_container_width=True)
-        st.write("**Top 20 Three‑Variable Win/Loss Predictors (AUC)**")
-        st.dataframe(st.session_state.auc_results['three_vars'], use_container_width=True)
-    else:
-        st.info("Click the button above to compute the best variable combinations.")
-else:
-    st.warning("Not enough features to test.")
-
-# ---------- 3. Categorical Feature Importance (Mutual Information) ----------
+# ---------- 2. Categorical Feature Importance (Mutual Information) ----------
 st.subheader("Categorical Feature Importance with Win/Loss")
 
 potential_cat_cols = ['WC','Stance','Country','EventCountry','Title','ScheduledRounds','HometownFighter','Opponent_Hometown']
@@ -1049,64 +969,62 @@ else:
     st.write("No categorical columns with meaningful variation or no historical data to compute MI.")
 
 # =========================================================================
-# SPIDER CHART (DIFFERENTIALS) + SIMILARITY (FILTERED – complete fights only)
+# SPIDER CHART (DIFFERENTIALS) + SIMILARITY (FILTERED DATA)
 # =========================================================================
 st.header("Fight Similarity & Comparison (Filtered)")
 
-# Upcoming mask – exactly as in the old working script
-upcoming_all = data[data['Win?'].isna() | (data['Win?'] == '')]
+upcoming_filtered = data[data['Win?'].isna() | (data['Win?'] == '')]
 
-if upcoming_all.empty:
+if upcoming_filtered.empty:
     st.write("No upcoming fights in the filtered dataset.")
 else:
-    # Keep only FightIDs that have exactly 2 rows (both fighters present)
-    fight_counts = upcoming_all.groupby('FightID').size()
-    complete_ids = fight_counts[fight_counts == 2].index
-    upcoming_complete = upcoming_all[upcoming_all['FightID'].isin(complete_ids)]
+    numeric_cols = [c for c in upcoming_filtered.columns if pd.api.types.is_numeric_dtype(upcoming_filtered[c])]
 
-    if upcoming_complete.empty:
-        st.warning("No upcoming fight has both fighters after your current filters. Adjust your filters to see comparisons.")
+    clean_cols = []
+    for col in numeric_cols:
+        if re.match(r'Prev\d+_', col):
+            continue
+        if col.startswith('Opponent_Prev'):
+            continue
+        clean_cols.append(col)
+
+    wanted_keys = [
+        'Age', 'Height', 'Reach',
+        'DaysSincePrev', 'Avg3DaysGap',
+        'FightNumber', 'Opponent_FightNumber',
+        'FighterOddsNum', 'PrevFighterOddsNum',
+        'CareerWinPct', 'CareerAvg_', 'Opponent_CareerAvg_',
+        '_Diff'
+    ]
+    spider_vars = sorted([
+        c for c in clean_cols
+        if any(c.startswith(k) or k in c for k in wanted_keys)
+    ])
+
+    if not spider_vars:
+        st.warning("No numeric variables found in upcoming data after filtering.")
     else:
-        numeric_cols = [c for c in upcoming_complete.columns if pd.api.types.is_numeric_dtype(upcoming_complete[c])]
-        clean_cols = []
-        for col in numeric_cols:
-            if re.match(r'Prev\d+_', col):
-                continue
-            if col.startswith('Opponent_Prev'):
-                continue
-            clean_cols.append(col)
+        selected_vars = st.multiselect(
+            "Select up to 8 variables",
+            spider_vars,
+            default=spider_vars[:5],
+            max_selections=8,
+            key="spider_select_vars"
+        )
 
-        wanted_keys = [
-            'Age', 'Height', 'Reach',
-            'DaysSincePrev', 'Avg3DaysGap',
-            'FightNumber', 'Opponent_FightNumber',
-            'FighterOddsNum', 'PrevFighterOddsNum',
-            'CareerWinPct', 'CareerAvg_', 'Opponent_CareerAvg_',
-            '_Diff'
-        ]
-        spider_vars = sorted([
-            c for c in clean_cols
-            if any(c.startswith(k) or k in c for k in wanted_keys)
-        ])
+    if selected_vars:
+        up_ids = upcoming_filtered['FightID'].unique()
+        chosen_fight = st.selectbox(
+            "Choose an upcoming fight",
+            sorted(up_ids),
+            key="spider_fight"
+        )
 
-        if not spider_vars:
-            st.warning("No numeric variables found in upcoming data after filtering.")
-        else:
-            selected_vars = st.multiselect(
-                "Select up to 8 variables",
-                spider_vars,
-                default=spider_vars[:5],
-                max_selections=8,
-                key="spider_select_vars"
-            )
-
-        if selected_vars:
-            up_ids = sorted(upcoming_complete['FightID'].unique())
-            chosen_fight = st.selectbox("Choose an upcoming fight", up_ids, key="spider_fight")
-
-            if chosen_fight:
-                fight_rows = upcoming_complete[upcoming_complete['FightID'] == chosen_fight]
-                # Guaranteed 2 rows because we filtered complete fights
+        if chosen_fight:
+            fight_rows = upcoming_filtered[upcoming_filtered['FightID'] == chosen_fight]
+            if len(fight_rows) != 2:
+                st.error("Could not load both fighters.")
+            else:
                 f1 = fight_rows.iloc[0]
                 f2 = fight_rows.iloc[1]
 
@@ -1154,6 +1072,7 @@ else:
                     st.write(f"**Most similar historical fights to {up_row['Fighter']}**")
                     st.dataframe(res_df, use_container_width=True)
 
+                    # Win % among highly similar fights
                     high_sim = res_df[res_df['Similarity'] >= 90]
                     if not high_sim.empty:
                         win_rate_90 = (high_sim['Win?'] == 'Yes').mean() * 100
