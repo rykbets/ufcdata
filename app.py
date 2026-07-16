@@ -1138,11 +1138,11 @@ else:
     st.write("No categorical columns with meaningful variation.")
 
 # =========================================================================
-# SPIDER CHART – CATEGORICAL FILTERS ONLY + LR/KNN + SIMILARITY (recent‑only similarity) + BAYESIAN WIN RATES
+# SPIDER CHART – INDEPENDENT CATEGORICAL FILTERS + LR/KNN + SIMILARITY + BAYESIAN WIN RATES
 # =========================================================================
 st.header("Fight Similarity & Comparison (Independent Filters)")
 
-# ---- Spider‑specific categorical filters (same as before) ----
+# ---- Spider‑specific categorical filters (fighter‑side only) ----
 st.subheader("Spider Chart Filters (applied only here)")
 
 col_sp1, col_sp2 = st.columns(2)
@@ -1163,7 +1163,7 @@ with col_sp2:
     spider_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
     spider_opp_prev_title = st.selectbox("Opp Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_opp_prev_title")
 
-# Previous outcome columns (spider version)
+# Previous outcome columns (spider version, depends on spider_skip_nc)
 if spider_skip_nc:
     spider_prev1_col = 'Prev1_Outcome_skipNC'; spider_prev2_col = 'Prev2_Outcome_skipNC'; spider_prev3_col = 'Prev3_Outcome_skipNC'
     spider_career1_col = 'Career1_Outcome_skipNC'; spider_career2_col = 'Career2_Outcome_skipNC'; spider_career3_col = 'Career3_Outcome_skipNC'
@@ -1190,10 +1190,10 @@ with st.expander("Previous Outcomes (Spider)"):
     spider_opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career_spider, key="spider_opp_career2")
     spider_opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career_spider, key="spider_opp_career3")
 
-# ---- Apply spider filters to all_fights_display copy ----
+# ---- Apply spider filters to a copy of all_fights_display ----
 spider_data = all_fights_display.copy()
 
-# Categorical filters
+# Categorical filters (all fighter‑side, safe)
 if spider_wc: spider_data = spider_data[spider_data['WC'].isin(spider_wc)]
 if spider_stance: spider_data = spider_data[spider_data['Stance'].isin(spider_stance)]
 if spider_country: spider_data = spider_data[spider_data['Country'].isin(spider_country)]
@@ -1237,9 +1237,9 @@ else:
     spider_upcoming = spider_upcoming[spider_upcoming['FightID'].isin(complete_ids)]
 
     if spider_upcoming.empty:
-        st.warning("No upcoming fight has both fighters after spider filters.")
+        st.warning("No upcoming fight has both fighters after spider filters. Adjust your spider filters to see comparisons.")
     else:
-        # Full historical data (all fights) for win rate calculations
+        # Full historical data (all fights passing spider filters)
         spider_hist_full = spider_data[spider_data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
 
         # Variable selector
@@ -1262,7 +1262,6 @@ else:
                                            default=spider_vars[:5], max_selections=8, key="spider_vars")
 
         if selected_vars:
-            # Training data (only rows with complete selected variables)
             spider_hist_clean = spider_hist_full.dropna(subset=selected_vars)
             if len(spider_hist_clean) < 10 or spider_hist_clean['Win?'].nunique() < 2:
                 st.warning("Not enough historical data to train models.")
@@ -1325,11 +1324,10 @@ else:
                     prob_lr_f1 = lr_spider.predict_proba(up_vec)[0, 1]
                     prob_knn_f1 = knn_spider.predict_proba(up_vec)[0, 1]
 
-                    # Dataset‑wide win rates (full spider_hist_full)
+                    # Dataset‑wide win rates (based on ALL spider_hist_full, not just clean)
                     overall_wr_spider = (spider_hist_full['Win?'] == 'Yes').mean() * 100 if len(spider_hist_full) > 0 else 0.0
                     recent_spider = spider_hist_full.tail(recent_window)
                     recent_wr_spider = (recent_spider['Win?'] == 'Yes').mean() * 100 if len(recent_spider) > 0 else 0.0
-                    # Bayesian shrinkage
                     shrunk_lr_spider = (prior_weight * (overall_wr_spider / 100) + prob_lr_f1) / (prior_weight + 1)
                     shrunk_knn_spider = (prior_weight * (overall_wr_spider / 100) + prob_knn_f1) / (prior_weight + 1)
 
@@ -1341,27 +1339,22 @@ else:
                         st.metric("KNN win prob", f"{prob_knn_f1:.1%}")
                         st.metric("KNN shrunken", f"{shrunk_knn_spider:.1%}")
                     with col_sp3:
-                        st.metric("Overall Win% (full dataset)", f"{overall_wr_spider:.1f}%")
+                        st.metric("Overall Win% (spider)", f"{overall_wr_spider:.1f}%")
                         st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr_spider:.1f}%")
 
                     # ---- Similarity Score (restricted to the most recent N fights) ----
                     st.subheader(f"Most Similar Historical Fights (from last {recent_window} fights)")
-                    # Compute similarity for all clean historical rows
                     scaler = StandardScaler()
                     X_spider_scaled = scaler.fit_transform(X_spider)
                     up_scaled = scaler.transform(up_vec)
                     dists = cdist(up_scaled, X_spider_scaled, 'euclidean').flatten()
                     sim_scores = 100 * (1 - dists / (dists.max() or 1))
 
-                    # Build a DataFrame with all historical rows and similarity
                     sim_df = spider_hist_clean[['FightDate', 'Fighter', 'Opponent', 'Win?']].copy()
                     sim_df['Similarity'] = sim_scores.round(1)
 
-                    # Keep only the most recent N fights (by FightDate)
-                    recent_cutoff = spider_hist_clean['FightDate'].max() - pd.Timedelta(days=365*10)  # just to not lose anything
-                    # Instead, take the last N rows by date
+                    # Keep only the most recent N fights, then top 20 by similarity
                     sim_df = sim_df.sort_values('FightDate', ascending=False).head(recent_window)
-
-                    # Now take top 20 by similarity from that recent subset
                     top_sim = sim_df.sort_values('Similarity', ascending=False).head(20)
+
                     st.dataframe(top_sim, use_container_width=True)
