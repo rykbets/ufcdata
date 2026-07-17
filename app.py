@@ -8,9 +8,9 @@ import os
 import gdown
 import itertools
 from sklearn.feature_selection import mutual_info_classif
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import log_loss, brier_score_loss
+from sklearn.metrics import log_loss, brier_score_loss, mutual_info_score
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.calibration import CalibratedClassifierCV
@@ -109,6 +109,31 @@ def load_full_data():
     )
     fight_totals = fight_totals.merge(opp_info, on=['FightID','Opponent'], how='left')
 
+    # ---------- ADD DEFENSIVE & ADVANCED STATS ----------
+    # Self-join to get opponent's offensive stats in the same fight (defensive for fighter)
+    opp_fight_stats = fight_totals[['FightID','Fighter','SS','SSA','TS','TSA','TD','TDA',
+                                    'Subs','Reversals','KD','DSL','DSA','CSL','CSA','GSL','GSA','Ctrl']].copy()
+    opp_fight_stats.rename(columns={'Fighter':'Opponent'}, inplace=True)
+    for col in ['SS','SSA','TS','TSA','TD','TDA','Subs','Reversals','KD','DSL','DSA',
+                'CSL','CSA','GSL','GSA','Ctrl']:
+        opp_fight_stats.rename(columns={col: f'Def_{col}'}, inplace=True)
+
+    fight_totals = fight_totals.merge(opp_fight_stats, on=['FightID','Opponent'], how='left')
+
+    # Compute advanced offensive and defensive stats
+    fight_totals['TS_Acc'] = (fight_totals['TS'] / fight_totals['TSA'].replace(0, np.nan)) * 100
+    fight_totals['TD_Acc'] = (fight_totals['TD'] / fight_totals['TDA'].replace(0, np.nan)) * 100
+    fight_totals['DS_Acc'] = (fight_totals['DSL'] / fight_totals['DSA'].replace(0, np.nan)) * 100
+    fight_totals['DSL_per_KD'] = fight_totals['DSL'] / fight_totals['KD'].replace(0, np.nan)
+    fight_totals['Ctrl_per_TD'] = fight_totals['Ctrl'] / fight_totals['TD'].replace(0, np.nan)
+
+    fight_totals['Def_TS_Acc'] = (fight_totals['Def_TS'] / fight_totals['Def_TSA'].replace(0, np.nan)) * 100
+    fight_totals['Def_TD_Acc'] = (fight_totals['Def_TD'] / fight_totals['Def_TDA'].replace(0, np.nan)) * 100
+    fight_totals['Def_DS_Acc'] = (fight_totals['Def_DSL'] / fight_totals['Def_DSA'].replace(0, np.nan)) * 100
+    fight_totals['Def_DSL_per_KD'] = fight_totals['Def_DSL'] / fight_totals['Def_KD'].replace(0, np.nan)
+    fight_totals['Def_Ctrl_per_TD'] = fight_totals['Def_Ctrl'] / fight_totals['Def_TD'].replace(0, np.nan)
+
+    # Odds parsing (same as before)
     def parse_american_odds(odds_val):
         if pd.isna(odds_val):
             return np.nan
@@ -152,6 +177,12 @@ def load_full_data():
     career_stat_cols = ['SS','SSA','TS','TSA','TD','TDA','Subs','Reversals','KD','DSL']
     if 'Ctrl' in fight_totals.columns:
         career_stat_cols.append('Ctrl')
+    # Add new advanced stats to career averages
+    extra_career = ['TS_Acc','TD_Acc','DS_Acc','DSL_per_KD','Ctrl_per_TD',
+                    'Def_TS_Acc','Def_TD_Acc','Def_DS_Acc','Def_DSL_per_KD','Def_Ctrl_per_TD']
+    for c in extra_career:
+        if c in fight_totals.columns:
+            career_stat_cols.append(c)
 
     has_stats = fight_totals['SS'].notna()
     stats_df = fight_totals[has_stats].copy()
@@ -183,18 +214,18 @@ def load_full_data():
             fight_totals.drop(columns=col, inplace=True)
     fight_totals = fight_totals.merge(stats_df[merge_cols], on=['FightID','Fighter'], how='left')
 
-    # Forward‑fill career averages (so upcoming rows have the latest pre‑fight values)
+    # Forward‑fill career averages
     avg_cols = [f'CareerAvg_{c}' for c in career_stat_cols] + ['CareerWinPct']
     for col in avg_cols:
         if col in fight_totals.columns:
             fight_totals[col] = fight_totals.groupby('Fighter')[col].ffill().bfill()
 
-    # ---------- Opponent career averages ----------
+    # Opponent career averages
     opp_career = fight_totals[['FightID','Fighter'] + avg_cols].copy()
     opp_career.rename(columns={'Fighter':'Opponent', **{c: f'Opponent_{c}' for c in avg_cols}}, inplace=True)
     fight_totals = fight_totals.merge(opp_career, on=['FightID','Opponent'], how='left')
 
-    # ---------- Opponent days & gaps ----------
+    # Opponent days & gaps
     opp_days = fight_totals[['FightID','Fighter','DaysSincePrev','Avg3DaysGap']].copy()
     opp_days.rename(columns={
         'Fighter':'Opponent',
@@ -203,7 +234,7 @@ def load_full_data():
     }, inplace=True)
     fight_totals = fight_totals.merge(opp_days, on=['FightID','Opponent'], how='left')
 
-    # ---------- CREATE DIFFERENTIAL COLUMNS (Fighter − Opponent) ----------
+    # CREATE DIFFERENTIAL COLUMNS (Fighter − Opponent)
     diff_pairs = [
         ('CareerAvg_SS', 'Opponent_CareerAvg_SS'),
         ('CareerAvg_SSA', 'Opponent_CareerAvg_SSA'),
@@ -219,12 +250,23 @@ def load_full_data():
         ('CareerWinPct', 'Opponent_CareerWinPct'),
         ('DaysSincePrev', 'Opponent_DaysSincePrev'),
         ('Avg3DaysGap', 'Opponent_Avg3DaysGap'),
+        # New advanced diffs
+        ('CareerAvg_TS_Acc', 'Opponent_CareerAvg_TS_Acc'),
+        ('CareerAvg_TD_Acc', 'Opponent_CareerAvg_TD_Acc'),
+        ('CareerAvg_DS_Acc', 'Opponent_CareerAvg_DS_Acc'),
+        ('CareerAvg_DSL_per_KD', 'Opponent_CareerAvg_DSL_per_KD'),
+        ('CareerAvg_Ctrl_per_TD', 'Opponent_CareerAvg_Ctrl_per_TD'),
+        ('CareerAvg_Def_TS_Acc', 'Opponent_CareerAvg_Def_TS_Acc'),
+        ('CareerAvg_Def_TD_Acc', 'Opponent_CareerAvg_Def_TD_Acc'),
+        ('CareerAvg_Def_DS_Acc', 'Opponent_CareerAvg_Def_DS_Acc'),
+        ('CareerAvg_Def_DSL_per_KD', 'Opponent_CareerAvg_Def_DSL_per_KD'),
+        ('CareerAvg_Def_Ctrl_per_TD', 'Opponent_CareerAvg_Def_Ctrl_per_TD'),
     ]
     for f_col, o_col in diff_pairs:
         if f_col in fight_totals.columns and o_col in fight_totals.columns:
             fight_totals[f'{f_col}_Diff'] = fight_totals[f_col] - fight_totals[o_col]
 
-    # Accuracy
+    # Accuracy (striking)
     if 'CareerAvg_SS' in fight_totals.columns and 'CareerAvg_SSA' in fight_totals.columns:
         fight_totals['CareerAvg_SS_Acc'] = (
             (fight_totals['CareerAvg_SS'] / fight_totals['CareerAvg_SSA'].replace(0, np.nan)) * 100
@@ -339,13 +381,9 @@ def load_full_data():
 
     for shift in [1,2,3]:
         col = f'Prev{shift}_Outcome_raw'
-        title_col = f'Prev{shift}_Title'
         opp_df = fight_totals[['FightID','Fighter',col]].dropna(subset=[col])
         opp_df = opp_df.rename(columns={'Fighter':'Opponent', col:f'Opponent_Prev{shift}_Outcome_raw'})
         fight_totals = fight_totals.merge(opp_df, on=['FightID','Opponent'], how='left')
-        opp_title_df = fight_totals[['FightID','Fighter',title_col]].dropna(subset=[title_col])
-        opp_title_df = opp_title_df.rename(columns={'Fighter':'Opponent', title_col:f'Opponent_Prev{shift}_Title'})
-        fight_totals = fight_totals.merge(opp_title_df, on=['FightID','Opponent'], how='left')
 
     opp_career_raw = pd.DataFrame.from_dict({fighter: {'Opponent_Career1_Outcome_raw': career_raw[fighter]['Career1_Outcome_raw'],
                                                        'Opponent_Career2_Outcome_raw': career_raw[fighter]['Career2_Outcome_raw'],
@@ -375,7 +413,7 @@ def load_full_data():
 all_fights = load_full_data()
 all_fights_display = all_fights[all_fights['FightDate'] >= '2015-01-01'].copy()
 
-# ---------- Clean categorical columns ----------
+# Clean categorical columns
 for col in ['EventCountry', 'Country', 'Stance', 'WC', 'Title', 'ScheduledRounds']:
     if col in all_fights_display.columns:
         all_fights_display[col] = all_fights_display[col].fillna('').astype(str)
@@ -414,7 +452,6 @@ with st.sidebar.expander("Opponent Physical Attributes", expanded=False):
         age_opp = st.slider("Opponent Age", age_opp_min, age_opp_max, (age_opp_min, age_opp_max))
     else:
         age_opp = (0, 0)
-        st.write("Opponent age data unavailable.")
     if 'Height_opp' in all_fights_display.columns:
         h_opp_min = int(all_fights_display['Height_opp'].min()) if not all_fights_display['Height_opp'].isna().all() else 0
         h_opp_max = int(all_fights_display['Height_opp'].max()) if not all_fights_display['Height_opp'].isna().all() else 0
@@ -443,14 +480,12 @@ with st.sidebar.expander("Odds", expanded=False):
     if cur_min != cur_max:
         cur_odds = st.slider("Fighter Odds", cur_min, cur_max, (cur_min, cur_max), step=10)
     else:
-        st.write("No odds data")
         cur_odds = (0, 0)
     prev_min = int(all_fights_display['PrevFighterOddsNum'].min()) if not all_fights_display['PrevFighterOddsNum'].isna().all() else 0
     prev_max = int(all_fights_display['PrevFighterOddsNum'].max()) if not all_fights_display['PrevFighterOddsNum'].isna().all() else 0
     if prev_min != prev_max:
         prev_odds = st.slider("Prev Fight Odds", prev_min, prev_max, (prev_min, prev_max), step=10)
     else:
-        st.write("No previous odds data")
         prev_odds = (0, 0)
 
 new_wc = st.sidebar.checkbox("New Weight Class")
@@ -579,7 +614,8 @@ for result, col in zip(['Yes', 'No'], [col1, col2]):
         avg_rev = subset['CareerAvg_Reversals'].mean() if 'CareerAvg_Reversals' in subset else 0
         avg_kd = subset['CareerAvg_KD'].mean() if 'CareerAvg_KD' in subset else 0
         avg_dsl = subset['CareerAvg_DSL'].mean() if 'CareerAvg_DSL' in subset else 0
-        kdsl = (avg_kd / avg_dsl) if avg_dsl and avg_dsl > 0 else 0
+        # DSL/KD instead of K/DSL
+        dsl_kd = (avg_dsl / avg_kd) if avg_kd and avg_kd > 0 else 0
         avg_ctrl = subset['CareerAvg_Ctrl'].mean() if 'CareerAvg_Ctrl' in subset else 0
         ctrtd = (avg_ctrl / avg_td) if avg_td and avg_td > 0 else 0
         age_diff_mean = subset['AgeDiff'].mean()
@@ -591,7 +627,7 @@ for result, col in zip(['Yes', 'No'], [col1, col2]):
         st.write(f"**Career Avg SS:** {avg_ss:.1f} / {avg_ssa:.1f} (Acc: {avg_ss_acc:.1f}%)")
         st.write(f"**Career Avg TD:** {avg_td:.1f} / {avg_tda:.1f}")
         st.write(f"**Career Avg Subs:** {avg_subs:.1f} | Rev: {avg_rev:.1f}")
-        st.write(f"**Career Avg KD:** {avg_kd:.1f} | K/DSL: {kdsl:.3f}")
+        st.write(f"**Career Avg KD:** {avg_kd:.1f} | DSL/KD: {dsl_kd:.3f}")
         if 'CareerAvg_Ctrl' in subset.columns:
             st.write(f"**Career Avg Ctrl Time:** {avg_ctrl:.0f}s | CTR/TD: {ctrtd:.1f}s")
         st.write(f"**Avg Age Diff:** {age_diff_mean:.1f} | **Avg Height Diff:** {height_diff_mean:.1f} in | **Avg Reach Diff:** {reach_diff_mean:.1f} in")
@@ -625,7 +661,24 @@ if not upcoming_data_unfiltered.empty:
                     if col_name in row:
                         val = row[col_name]
                         avg_items.append(f"{col_name.replace('CareerAvg_','')}: {val:.1f}" if pd.notna(val) else f"{col_name.replace('CareerAvg_','')}: --")
+                # Add advanced stats
+                if 'CareerAvg_TS_Acc' in row and pd.notna(row['CareerAvg_TS_Acc']):
+                    avg_items.append(f"TS Acc: {row['CareerAvg_TS_Acc']:.1f}%")
+                if 'CareerAvg_TD_Acc' in row and pd.notna(row['CareerAvg_TD_Acc']):
+                    avg_items.append(f"TD Acc: {row['CareerAvg_TD_Acc']:.1f}%")
+                if 'CareerAvg_DSL_per_KD' in row and pd.notna(row['CareerAvg_DSL_per_KD']):
+                    avg_items.append(f"DSL/KD: {row['CareerAvg_DSL_per_KD']:.2f}")
+                if 'CareerAvg_Ctrl_per_TD' in row and pd.notna(row['CareerAvg_Ctrl_per_TD']):
+                    avg_items.append(f"Ctrl/TD: {row['CareerAvg_Ctrl_per_TD']:.1f}s")
                 st.write(" · ".join(avg_items) if avg_items else "No career data")
+
+                st.write("**Defensive Averages (opponents' stats against):**")
+                def_items = []
+                for col_name in ['CareerAvg_Def_TS_Acc','CareerAvg_Def_TD_Acc','CareerAvg_Def_DS_Acc',
+                                 'CareerAvg_Def_DSL_per_KD','CareerAvg_Def_Ctrl_per_TD']:
+                    if col_name in row and pd.notna(row[col_name]):
+                        def_items.append(f"{col_name.replace('CareerAvg_Def_','')}: {row[col_name]:.1f}")
+                st.write(" · ".join(def_items) if def_items else "No defensive data")
 
                 st.write("**Current Bout Differences:**")
                 diff_items = []
@@ -779,7 +832,6 @@ if len(three_d_features) >= 3:
             st.plotly_chart(fig, use_container_width=True)
 
         # ----- Fit LR model & compute overall/recent win rates -----
-        # Build a clean historical dataset with unique columns
         hist_base = data[data['Win?'].isin(['Yes','No'])].copy()
         hist_base = hist_base.loc[:, ~hist_base.columns.duplicated()]
         hist_lr = hist_base[[x_lr, y_lr, z_lr, 'Win?']].dropna()
@@ -797,7 +849,6 @@ if len(three_d_features) >= 3:
             ll_lr = log_loss(y_lr_target, y_prob_lr_in)
             bs_lr = brier_score_loss(y_lr_target, y_prob_lr_in)
 
-            # Overall win rate (all filtered historical fights)
             full_hist = data[data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
             if len(full_hist) > 0:
                 overall_wr = (full_hist['Win?'] == 'Yes').mean() * 100
@@ -808,7 +859,6 @@ if len(three_d_features) >= 3:
                 overall_wr = recent_wr = 0.0
                 recent_count = 0
 
-            # ---- CORE METRICS (always visible) ----
             col_m1, col_m2, col_m3 = st.columns(3)
             with col_m1:
                 st.metric("LR Log‑loss", f"{ll_lr:.3f}")
@@ -818,15 +868,13 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # ----- Prepare imputation values (means from the CLEAN historical data) -----
             train_means = {}
             for col in (x_lr, y_lr, z_lr):
                 if col in hist_base.columns:
                     train_means[col] = hist_base[col].mean()
                 else:
-                    train_means[col] = 0   # fallback, should never happen
+                    train_means[col] = 0
 
-            # ----- Upcoming fight prediction (missing values filled with mean) -----
             st.subheader("LR Win Probability Estimate")
             all_upcoming = all_fights_display[
                 all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')
@@ -853,7 +901,6 @@ if len(three_d_features) >= 3:
                         up_val = np.array([[v1, v2, v3]])
                         prob_lr = lr_model.predict_proba(up_val)[0, 1]
 
-                        # Empirical Bayes shrinkage of recent win rate
                         if recent_count > 0:
                             shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
                         else:
@@ -872,31 +919,28 @@ if len(three_d_features) >= 3:
     st.subheader("LR 3‑Variable Combinations (Brier)")
     combo_candidates = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
 
-    # Ensure mi_df exists (compute if missing)
-    if 'mi_df' not in dir():
-        importance_features = [c for c in numerical_features
-                               if not c.startswith('Opponent_')
-                               and not c.endswith('_Diff')
-                               and not re.match(r'Prev\d+_', c)]
-        @st.cache_data
-        def numerical_importance(_data, features):
-            hist = _data[_data['Win?'].isin(['Yes','No'])].copy()
-            hist['Target'] = (hist['Win?'] == 'Yes').astype(int)
-            X = hist[features].dropna()
-            y = hist.loc[X.index, 'Target']
-            if len(X) > 10:
-                X_imp = SimpleImputer(strategy='median').fit_transform(X)
-                mi = mutual_info_classif(X_imp, y, discrete_features=False)
-                return pd.DataFrame({'Feature': features, 'Mutual Information': mi}).sort_values('Mutual Information', ascending=False).head(20)
-            return pd.DataFrame()
-        mi_df = numerical_importance(data, importance_features)
+    importance_features = [c for c in numerical_features
+                           if not c.startswith('Opponent_')
+                           and not c.endswith('_Diff')
+                           and not re.match(r'Prev\d+_', c)]
+    @st.cache_data
+    def numerical_importance(_data, features):
+        hist = _data[_data['Win?'].isin(['Yes','No'])].copy()
+        hist['Target'] = (hist['Win?'] == 'Yes').astype(int)
+        X = hist[features].dropna()
+        y = hist.loc[X.index, 'Target']
+        if len(X) > 10:
+            X_imp = SimpleImputer(strategy='median').fit_transform(X)
+            mi = mutual_info_classif(X_imp, y, discrete_features=False)
+            return pd.DataFrame({'Feature': features, 'Mutual Information': mi}).sort_values('Mutual Information', ascending=False).head(20)
+        return pd.DataFrame()
+    mi_df = numerical_importance(data, importance_features)
 
     top_feats = mi_df['Feature'].tolist() if not mi_df.empty else combo_candidates
     num_top = st.slider("Top features to test", 5, min(30, len(top_feats)), 10, key="lr_combo_top")
     candidates = top_feats[:num_top]
     candidates = [c for c in candidates if c != 'FighterOddsNum']
 
-    # Persist results across variable changes
     data_fp = hash(str(data.shape))
     if "lr_combo_results" not in st.session_state:
         st.session_state.lr_combo_results = None
@@ -939,7 +983,7 @@ else:
     st.warning("Not enough numerical features for a 3D plot (need at least 3).")
 
 # =========================================================================
-# 3D KNN WIN/LOSS PREDICTION (WEIGHTED + PLATT SCALING) + COMBO BUILDER
+# 3D KNN WIN/LOSS PREDICTION (WEIGHTED + PLATT) + COMBO BUILDER
 # =========================================================================
 st.header("3D Weighted KNN Win/Loss Prediction (Platt‑scaled) & Best KNN Combinations")
 
@@ -953,7 +997,6 @@ if len(three_d_features) >= 3:
         z_knn = st.selectbox("Z", three_d_features, key="knn_z")
 
     if x_knn and y_knn and z_knn:
-        # ---------- 3D scatter ----------
         plot_data_knn = data[[x_knn, y_knn, z_knn, 'DetailedResult', 'Fight']].copy()
         plot_data_knn = plot_data_knn.loc[:, ~plot_data_knn.columns.duplicated()].dropna()
         if len(plot_data_knn) < 10:
@@ -969,9 +1012,10 @@ if len(three_d_features) >= 3:
             )
             st.plotly_chart(fig_knn, use_container_width=True)
 
-        # ---------- Build training data (exactly 3 numeric columns) ----------
-        hist = data[data['Win?'].isin(['Yes', 'No'])].copy()
-
+        # Training data – 3 selected features
+        hist_knn = data[data['Win?'].isin(['Yes','No'])].copy()
+        hist_knn = hist_knn.loc[:, ~hist_knn.columns.duplicated()]
+        # Manual extraction to avoid duplicate columns
         def get_first_col(df, col_name):
             if col_name not in df.columns:
                 return np.full(len(df), np.nan)
@@ -980,56 +1024,42 @@ if len(three_d_features) >= 3:
                 return sub.iloc[:, 0].to_numpy(dtype=np.float64, na_value=np.nan)
             return pd.to_numeric(sub, errors='coerce').to_numpy(dtype=np.float64)
 
-        c1 = get_first_col(hist, x_knn)
-        c2 = get_first_col(hist, y_knn)
-        c3 = get_first_col(hist, z_knn)
-
-        win_col = hist['Win?']
+        c1 = get_first_col(hist_knn, x_knn)
+        c2 = get_first_col(hist_knn, y_knn)
+        c3 = get_first_col(hist_knn, z_knn)
+        win_col = hist_knn['Win?']
         if isinstance(win_col, pd.DataFrame):
             win_vals = win_col.iloc[:, 0].values
         else:
             win_vals = win_col.values
 
-        train_df = pd.DataFrame({
-            'f1': c1,
-            'f2': c2,
-            'f3': c3,
-            'Win?': win_vals
-        }).dropna()
-
+        train_df = pd.DataFrame({'f1': c1, 'f2': c2, 'f3': c3, 'Win?': win_vals}).dropna()
         if len(train_df) < 10 or train_df['Win?'].nunique() < 2:
             st.warning("Not enough training data for KNN model.")
         else:
-            X_train = train_df[['f1', 'f2', 'f3']].values.astype(np.float64)
+            X_train = train_df[['f1','f2','f3']].values.astype(np.float64)
             y_train = (train_df['Win?'] == 'Yes').astype(int).values
 
-            st.caption(f"Training matrix shape: {X_train.shape}")
-
-            # ----- KNN hyperparameter -----
             k_knn = st.slider("KNN neighbors (model)", 1, 20, 5, key="knn_model_k")
-
-            # ----- Fit scaler and model -----
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X_train)
 
             base_knn = KNeighborsClassifier(n_neighbors=k_knn, weights='distance')
-            model = CalibratedClassifierCV(base_knn, method='sigmoid', cv=5)
-            model.fit(X_scaled, y_train)
+            calibrated_knn = CalibratedClassifierCV(base_knn, method='sigmoid', cv=5)
+            calibrated_knn.fit(X_scaled, y_train)
 
-            # In‑sample probabilities for metrics (matches combo builder)
-            y_prob_in = model.predict_proba(X_scaled)[:, 1]
+            # In‑sample metrics (to match LR)
+            y_prob_in = calibrated_knn.predict_proba(X_scaled)[:, 1]
             y_prob_in = np.clip(y_prob_in, 0.1, 0.9)
             ll_knn = log_loss(y_train, y_prob_in)
             bs_knn = brier_score_loss(y_train, y_prob_in)
 
-            # Overall & recent win rates
-            full_hist = data[data['Win?'].isin(['Yes', 'No'])].sort_values('FightDate')
+            full_hist = data[data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
             overall_wr = (full_hist['Win?'] == 'Yes').mean() * 100 if len(full_hist) > 0 else 0.0
             recent = full_hist.tail(recent_window)
             recent_wr = (recent['Win?'] == 'Yes').mean() * 100 if len(recent) > 0 else 0.0
             recent_count = len(recent)
 
-            # Core metrics
             col_m1, col_m2, col_m3 = st.columns(3)
             with col_m1:
                 st.metric("KNN Log‑loss", f"{ll_knn:.3f}")
@@ -1039,33 +1069,27 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # ---------- Upcoming fight prediction ----------
             st.subheader("KNN Win Probability Estimate")
-            upcoming = all_fights_display[
-                all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')
-            ]
-            if not upcoming.empty:
-                up_id = st.selectbox("Select upcoming fight", sorted(upcoming['FightID'].unique()), key="knn_up")
-                if up_id:
-                    rows = upcoming[upcoming['FightID'] == up_id]
-                    if len(rows) == 2:
-                        fighter = rows.iloc[0]
-
+            all_upcoming = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
+            if not all_upcoming.empty:
+                up_ids = all_upcoming['FightID'].unique()
+                chosen_id = st.selectbox("Select upcoming fight", sorted(up_ids), key="knn_up")
+                if chosen_id:
+                    up_rows = all_upcoming[all_upcoming['FightID'] == chosen_id]
+                    if len(up_rows) == 2:
+                        fighter_row = up_rows.iloc[0]
                         means = X_train.mean(axis=0)
                         vals = []
                         for i, col_name in enumerate([x_knn, y_knn, z_knn]):
-                            raw = get_first_col(pd.DataFrame(fighter).T, col_name)[0]
+                            raw = get_first_col(pd.DataFrame(fighter_row).T, col_name)[0]
                             try:
-                                v = float(raw)
-                                if np.isnan(v):
-                                    v = means[i]
+                                v = float(raw) if pd.notna(raw) else means[i]
                             except (ValueError, TypeError):
                                 v = means[i]
                             vals.append(v)
-
                         up_arr = np.array([vals], dtype=np.float64)
                         up_scaled = scaler.transform(up_arr)
-                        prob_knn = model.predict_proba(up_scaled)[0, 1]
+                        prob_knn = calibrated_knn.predict_proba(up_scaled)[0, 1]
                         prob_knn = np.clip(prob_knn, 0.1, 0.9)
 
                         if recent_count > 0:
@@ -1082,14 +1106,9 @@ if len(three_d_features) >= 3:
             else:
                 st.write("No upcoming fights available.")
 
-    # --- KNN 3‑Variable Combination Builder (IN‑SAMPLE Brier, Platt‑scaled) ---
+    # --- KNN 3‑Variable Combination Builder (IN‑SAMPLE) ---
     st.subheader("KNN 3‑Variable Combinations (Brier, In‑Sample)")
-
-    combo_candidates_knn = [c for c in numerical_features
-                            if c != 'FighterOddsNum'
-                            and c in data.columns
-                            and data[c].nunique(dropna=True) >= 2]
-
+    combo_candidates_knn = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
     if not mi_df.empty:
         top_features_knn = mi_df['Feature'].tolist()
     else:
@@ -1098,7 +1117,6 @@ if len(three_d_features) >= 3:
     num_top_knn = st.slider("Top features to test", 5, min(30, len(top_features_knn)), 10, key="knn_combo_top")
     candidates_knn = top_features_knn[:num_top_knn]
     candidates_knn = [c for c in candidates_knn if c != 'FighterOddsNum']
-
     k_combo = st.slider("KNN neighbors (combo builder)", 1, 20, 5, key="knn_combo_k")
 
     data_fp_knn = hash(str(data.shape))
@@ -1117,41 +1135,32 @@ if len(three_d_features) >= 3:
                 hist_combo['WinNum'] = (hist_combo['Win?'] == 'Yes').astype(int)
 
                 results = []
-                # Re‑use the safe column extractor from above (get_first_col)
                 for combo in itertools.combinations(candidates_knn, 3):
                     c1 = get_first_col(hist_combo, combo[0])
                     c2 = get_first_col(hist_combo, combo[1])
                     c3 = get_first_col(hist_combo, combo[2])
                     y = hist_combo['WinNum'].values
-
                     mask = ~(np.isnan(c1) | np.isnan(c2) | np.isnan(c3))
                     if mask.sum() < 10 or np.unique(y[mask]).size < 2:
                         continue
-
                     X = np.column_stack([c1[mask], c2[mask], c3[mask]])
                     y_clean = y[mask]
-
                     try:
                         scaler_combo = StandardScaler()
                         X_scaled = scaler_combo.fit_transform(X)
-
                         base_knn_cv = KNeighborsClassifier(n_neighbors=k_combo, weights='distance')
                         calibrated = CalibratedClassifierCV(base_knn_cv, method='sigmoid', cv=5)
                         calibrated.fit(X_scaled, y_clean)
-
                         y_prob = calibrated.predict_proba(X_scaled)[:, 1]
                         y_prob = np.clip(y_prob, 0.1, 0.9)
-
                         bs = brier_score_loss(y_clean, y_prob)
                         results.append({'Variables': ', '.join(combo), 'Brier (In‑Sample)': bs})
-                    except Exception:
+                    except:
                         pass
-
                 if results:
                     st.session_state.knn_combo_results = pd.DataFrame(results).sort_values('Brier (In‑Sample)').head(20)
                 else:
                     st.warning("Could not evaluate any combination.")
-
         if st.session_state.knn_combo_results is not None:
             st.write("**Top 20 3‑Variable Combinations (Brier, In‑Sample)**")
             st.dataframe(st.session_state.knn_combo_results, use_container_width=True)
@@ -1159,28 +1168,23 @@ if len(three_d_features) >= 3:
         st.warning("Not enough features to test (need at least 3).")
 else:
     st.warning("Not enough numerical features for a 3D plot (need at least 3).")
+
 # =========================================================================
-# FEATURE IMPORTANCE CHARTS (Numerical & Categorical) – APPLIED TO FILTERS
+# FEATURE IMPORTANCE CHARTS (Numerical & Categorical)
 # =========================================================================
 st.header("Top 20 Feature Importance (Current Filter Set)")
-
-# Only historical fights from the already filtered data
 hist_imp = data[data['Win?'].isin(['Yes', 'No'])].copy()
-
 if len(hist_imp) < 10:
     st.warning("Too few historical fights after filtering to compute importance.")
 else:
     hist_imp['Target'] = (hist_imp['Win?'] == 'Yes').astype(int)
 
-    # -------- 1. Numerical Feature Importance (fighter stats only) --------
-    st.subheader("Feature Importance – Fighter Numerical Stats")
-
+    # Numerical
     importance_features = [c for c in numerical_features
                            if not c.startswith('Opponent_')
                            and not c.endswith('_Diff')
                            and not re.match(r'Prev\d+_', c)
                            and c in hist_imp.columns]
-
     if importance_features:
         X_num = hist_imp[importance_features].dropna()
         if len(X_num) > 10 and X_num.shape[1] > 0:
@@ -1188,11 +1192,7 @@ else:
             X_imp = imputer.fit_transform(X_num)
             y_num = hist_imp.loc[X_num.index, 'Target']
             mi = mutual_info_classif(X_imp, y_num, discrete_features=False)
-            mi_df_num = pd.DataFrame({
-                'Feature': importance_features,
-                'Mutual Information': mi
-            }).sort_values('Mutual Information', ascending=False).head(20)
-
+            mi_df_num = pd.DataFrame({'Feature': importance_features, 'Mutual Information': mi}).sort_values('Mutual Information', ascending=False).head(20)
             fig_num = px.bar(mi_df_num, x='Mutual Information', y='Feature', orientation='h',
                              title="Top 20 Fighter Stats by Mutual Information with Win/Loss")
             st.plotly_chart(fig_num, use_container_width=True)
@@ -1201,21 +1201,10 @@ else:
     else:
         st.warning("No numerical features available after filtering.")
 
-    # -------- 2. Categorical Feature Importance (fixed, outcome‑free list) --------
+    # Categorical – fixed list
     st.subheader("Categorical Feature Importance with Win/Loss")
-
-    # Import the missing function – no changes needed at the top of your script
-    from sklearn.metrics import mutual_info_score
-
-    potential_cat_cols = [
-        'WC', 'Stance', 'Country', 'EventCountry', 'Title',
-        'ScheduledRounds', 'HometownFighter', 'Opponent_Hometown'
-    ]
-    categorical_cols = [
-        c for c in potential_cat_cols
-        if c in hist_imp.columns and hist_imp[c].nunique(dropna=True) > 1
-    ]
-
+    potential_cat_cols = ['WC','Stance','Country','EventCountry','Title','ScheduledRounds','HometownFighter','Opponent_Hometown']
+    categorical_cols = [c for c in potential_cat_cols if c in hist_imp.columns and hist_imp[c].nunique(dropna=True) > 1]
     if categorical_cols:
         scores = {}
         for col in categorical_cols:
@@ -1224,13 +1213,8 @@ else:
                 continue
             codes, _ = pd.factorize(sub[col])
             scores[col] = mutual_info_score(codes, sub['Target'])
-
         if scores:
-            cat_mi_df = pd.DataFrame({
-                'Feature': list(scores.keys()),
-                'Mutual Information': list(scores.values())
-            }).sort_values('Mutual Information', ascending=False).head(20)
-
+            cat_mi_df = pd.DataFrame({'Feature': list(scores.keys()), 'Mutual Information': list(scores.values())}).sort_values('Mutual Information', ascending=False).head(20)
             fig_cat = px.bar(cat_mi_df, x='Mutual Information', y='Feature', orientation='h',
                              title="Top Categorical Features by Mutual Information with Win/Loss",
                              color_discrete_sequence=['#636efa'])
@@ -1239,23 +1223,20 @@ else:
             st.warning("No categorical column had enough variation.")
     else:
         st.warning("No categorical features available after filtering.")
+
 # =========================================================================
 # SPIDER CHART – FIGHTER‑SIDE FILTERS + LR + CALIBRATED KNN + SHRINKAGE + SIMILARITY
 # =========================================================================
 st.header("Fight Similarity & Comparison (Independent Filters)")
-
-# ---------- Spider‑specific fighter‑side categorical filters ----------
 st.subheader("Spider Chart Filters (fighter data only)")
 
 col_sp1, col_sp2 = st.columns(2)
-
 with col_sp1:
     spider_wc = st.multiselect("Weight Class", sorted(all_fights_display['WC'].dropna().unique()), key="spider_wc")
     spider_stance = st.multiselect("Stance", sorted(all_fights_display['Stance'].dropna().unique()), key="spider_stance")
     spider_country = st.multiselect("Country", sorted(all_fights_display['Country'].dropna().unique()), key="spider_country")
     spider_sched_rounds = st.multiselect("Scheduled Rounds", sorted(all_fights_display['ScheduledRounds'].dropna().unique()), key="spider_sched")
     spider_event_country = st.multiselect("Event Country", sorted(all_fights_display['EventCountry'].dropna().unique()), key="spider_eventc")
-
 with col_sp2:
     spider_title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"], key="spider_title")
     spider_hometown = st.selectbox("Hometown", ["All", "Yes", "No"], key="spider_home")
@@ -1263,7 +1244,6 @@ with col_sp2:
     spider_skip_nc = st.checkbox("Skip NC outcomes", key="spider_skip_nc")
     spider_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
 
-# Outcome column names (skip NC or not)
 if spider_skip_nc:
     spider_prev1_col = 'Prev1_Outcome_skipNC'; spider_prev2_col = 'Prev2_Outcome_skipNC'; spider_prev3_col = 'Prev3_Outcome_skipNC'
     spider_career1_col = 'Career1_Outcome_skipNC'; spider_career2_col = 'Career2_Outcome_skipNC'; spider_career3_col = 'Career3_Outcome_skipNC'
@@ -1282,11 +1262,8 @@ with st.expander("Previous Outcomes (Spider)"):
     spider_career2 = st.multiselect("Career F2", all_outcomes_career_spider, key="spider_career2")
     spider_career3 = st.multiselect("Career F3", all_outcomes_career_spider, key="spider_career3")
 
-# ---------- Apply spider filters ----------
 spider_data = all_fights_display.copy()
-
 mask = pd.Series(True, index=spider_data.index)
-
 if spider_wc: mask &= spider_data['WC'].isin(spider_wc)
 if spider_stance: mask &= spider_data['Stance'].isin(spider_stance)
 if spider_country: mask &= spider_data['Country'].isin(spider_country)
@@ -1295,9 +1272,7 @@ if spider_title_fight != "All": mask &= spider_data['Title'] == spider_title_fig
 if spider_hometown != "All": mask &= spider_data['HometownFighter'] == spider_hometown
 if spider_event_country: mask &= spider_data['EventCountry'].isin(spider_event_country)
 if spider_new_wc: mask &= spider_data['IsNewWeightClass'] == True
-if spider_prev_title != "All":
-    mask &= spider_data['Prev1_Title'] == spider_prev_title
-
+if spider_prev_title != "All": mask &= spider_data['Prev1_Title'] == spider_prev_title
 if spider_prev1: mask &= spider_data[spider_prev1_col].isin(spider_prev1)
 if spider_prev2: mask &= spider_data[spider_prev2_col].isin(spider_prev2)
 if spider_prev3: mask &= spider_data[spider_prev3_col].isin(spider_prev3)
@@ -1305,11 +1280,8 @@ if spider_career1: mask &= spider_data[spider_career1_col].isin(spider_career1)
 if spider_career2: mask &= spider_data[spider_career2_col].isin(spider_career2)
 if spider_career3: mask &= spider_data[spider_career3_col].isin(spider_career3)
 
-# Keep only fights where the fighter side matches the mask (both fighters must be present later)
 valid_fight_ids = spider_data.loc[mask, 'FightID'].unique()
 spider_data = spider_data[spider_data['FightID'].isin(valid_fight_ids)]
-
-# ----- Upcoming fights (must have exactly 2 rows per fight) -----
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
 
 if spider_upcoming.empty:
@@ -1318,14 +1290,10 @@ else:
     fight_counts = spider_upcoming.groupby('FightID').size()
     complete_ids = fight_counts[fight_counts == 2].index
     spider_upcoming = spider_upcoming[spider_upcoming['FightID'].isin(complete_ids)]
-
     if spider_upcoming.empty:
         st.warning("No upcoming fight has both fighters after spider filters.")
     else:
-        # ----- Build training data (all historical fights that match spider filters) -----
         spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
-
-        # Choose numeric variables available in upcoming rows
         numeric_cols = [c for c in spider_upcoming.columns if pd.api.types.is_numeric_dtype(spider_upcoming[c])]
         clean_cols = [c for c in numeric_cols if not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')]
         wanted_keys = [
@@ -1337,17 +1305,11 @@ else:
             '_Diff'
         ]
         spider_vars = sorted([c for c in clean_cols if any(c.startswith(k) or k in c for k in wanted_keys)])
-
         if not spider_vars:
             st.warning("No numeric variables found.")
         else:
-            selected_vars = st.multiselect(
-                "Select variables for models", spider_vars,
-                default=spider_vars[:5], max_selections=8, key="spider_vars"
-            )
-
+            selected_vars = st.multiselect("Select variables for models", spider_vars, default=spider_vars[:5], max_selections=8, key="spider_vars")
         if selected_vars:
-            # Training set: drop rows with any missing selected variable
             train_spider = spider_hist.dropna(subset=selected_vars)
             if len(train_spider) < 10 or train_spider['Win?'].nunique() < 2:
                 st.warning("Not enough historical data to train models.")
@@ -1356,29 +1318,25 @@ else:
                 X_train = train_spider[selected_vars].values.astype(np.float64)
                 y_train = train_spider['target'].values
 
-                # ---------- Logistic Regression (unchanged) ----------
+                # LR
                 lr_spider = LogisticRegression(max_iter=1000)
                 lr_spider.fit(X_train, y_train)
                 y_prob_lr_in = lr_spider.predict_proba(X_train)[:, 1]
                 ll_lr_spider = log_loss(y_train, y_prob_lr_in)
                 bs_lr_spider = brier_score_loss(y_train, y_prob_lr_in)
 
-                # ---------- Weighted KNN with Platt calibration (matching scatterplots) ----------
+                # KNN (Platt)
                 k_spider = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_spider")
                 scaler_knn = StandardScaler()
                 X_scaled = scaler_knn.fit_transform(X_train)
-
                 base_knn = KNeighborsClassifier(n_neighbors=k_spider, weights='distance')
                 calibrated_knn = CalibratedClassifierCV(base_knn, method='sigmoid', cv=5)
                 calibrated_knn.fit(X_scaled, y_train)
-
-                # In‑sample probabilities for metrics
                 y_prob_knn_in = calibrated_knn.predict_proba(X_scaled)[:, 1]
                 y_prob_knn_in = np.clip(y_prob_knn_in, 0.1, 0.9)
                 ll_knn_spider = log_loss(y_train, y_prob_knn_in)
                 bs_knn_spider = brier_score_loss(y_train, y_prob_knn_in)
 
-                # ---------- Display model metrics ----------
                 col_sm1, col_sm2 = st.columns(2)
                 with col_sm1:
                     st.metric("LogReg Log‑loss", f"{ll_lr_spider:.3f}")
@@ -1387,16 +1345,14 @@ else:
                     st.metric("KNN Log‑loss", f"{ll_knn_spider:.3f}")
                     st.metric("KNN Brier", f"{bs_knn_spider:.3f}")
 
-                # ---------- Upcoming fight selection ----------
                 up_ids = sorted(spider_upcoming['FightID'].unique())
                 chosen_fight = st.selectbox("Choose an upcoming fight", up_ids, key="spider_fight")
-
                 if chosen_fight:
                     fight_rows = spider_upcoming[spider_upcoming['FightID'] == chosen_fight]
                     f1 = fight_rows.iloc[0]
                     f2 = fight_rows.iloc[1]
 
-                    # ----- Spider chart (advantage for fighter 1) -----
+                    # Radar
                     radar_vals = []
                     for var in selected_vars:
                         if var.endswith('_Diff') or var in {'AgeDiff','HeightDiff','ReachDiff'}:
@@ -1406,19 +1362,13 @@ else:
                             v2 = f2[var] if pd.notna(f2[var]) else 0
                             val = v1 - v2
                         radar_vals.append(val)
-
-                    fig = go.Figure(go.Scatterpolar(
-                        r=radar_vals, theta=selected_vars, fill='toself',
-                        name=f"{f1['Fighter']} advantage"
-                    ))
-                    fig.update_layout(
-                        polar=dict(radialaxis=dict(visible=True)),
-                        title=f"Advantage: {f1['Fighter']} vs {f2['Fighter']}"
-                    )
+                    fig = go.Figure(go.Scatterpolar(r=radar_vals, theta=selected_vars, fill='toself',
+                                                    name=f"{f1['Fighter']} advantage"))
+                    fig.update_layout(polar=dict(radialaxis=dict(visible=True)),
+                                      title=f"Advantage: {f1['Fighter']} vs {f2['Fighter']}")
                     st.plotly_chart(fig, use_container_width=True)
 
-                    # ----- Predict win probability for fighter 1 -----
-                    # Prepare the input vector, impute missing with training column means
+                    # Predictions
                     means = X_train.mean(axis=0)
                     up_vals = []
                     for i, var in enumerate(selected_vars):
@@ -1429,33 +1379,22 @@ else:
                             v = means[i]
                         up_vals.append(v)
                     up_vec = np.array([up_vals], dtype=np.float64)
-
-                    # LR probability
                     prob_lr_f1 = lr_spider.predict_proba(up_vec)[0, 1]
-
-                    # KNN probability (scale using the SAME scaler)
                     up_scaled = scaler_knn.transform(up_vec)
                     prob_knn_f1 = calibrated_knn.predict_proba(up_scaled)[0, 1]
                     prob_knn_f1 = np.clip(prob_knn_f1, 0.1, 0.9)
 
-                    # ----- Bayesian shrinkage (consistent with scatterplots) -----
-                    # Use only the *filtered* historical fights for win rates
                     overall_wr_spider = (spider_hist['Win?'] == 'Yes').mean() * 100 if len(spider_hist) > 0 else 0.0
                     recent_spider = spider_hist.tail(recent_window)
                     recent_wr_spider = (recent_spider['Win?'] == 'Yes').mean() * 100 if len(recent_spider) > 0 else 0.0
                     recent_count_spider = len(recent_spider)
-
-                    # Shrunken recent win rate
                     if recent_count_spider > 0:
                         shrunk_recent = (prior_weight * overall_wr_spider + recent_count_spider * recent_wr_spider) / (prior_weight + recent_count_spider)
                     else:
                         shrunk_recent = overall_wr_spider
-
-                    # Shrink probabilities toward that recent win rate
                     shrunk_lr = (prior_weight * (shrunk_recent / 100) + prob_lr_f1) / (prior_weight + 1)
                     shrunk_knn = (prior_weight * (shrunk_recent / 100) + prob_knn_f1) / (prior_weight + 1)
 
-                    # ----- Display probabilities -----
                     col_sp1, col_sp2, col_sp3 = st.columns(3)
                     with col_sp1:
                         st.metric("LogReg", f"{prob_lr_f1:.1%}")
@@ -1467,14 +1406,13 @@ else:
                         st.metric("Overall Win% (filtered)", f"{overall_wr_spider:.1f}%")
                         st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr_spider:.1f}%")
 
-                    # ----- Similarity table (most recent N fights) -----
+                    # Similarity
                     st.subheader(f"Most Similar Historical Fights (from last {recent_window} fights)")
                     scaler_sim = StandardScaler()
                     X_scaled_sim = scaler_sim.fit_transform(X_train)
                     up_scaled_sim = scaler_sim.transform(up_vec)
                     dists = cdist(up_scaled_sim, X_scaled_sim, 'euclidean').flatten()
                     sim_scores = 100 * (1 - dists / (dists.max() or 1))
-
                     sim_df = train_spider[['FightDate', 'Fighter', 'Opponent', 'Win?']].copy()
                     sim_df['Similarity'] = sim_scores.round(1)
                     sim_df = sim_df.sort_values('FightDate', ascending=False).head(recent_window)
