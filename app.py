@@ -778,6 +778,7 @@ if len(three_d_features) >= 3:
             st.plotly_chart(fig, use_container_width=True)
 
         # ----- Fit LR model & compute overall/recent win rates -----
+        # Build a clean historical dataset with unique columns
         hist_base = data[data['Win?'].isin(['Yes','No'])].copy()
         hist_base = hist_base.loc[:, ~hist_base.columns.duplicated()]
         hist_lr = hist_base[[x_lr, y_lr, z_lr, 'Win?']].dropna()
@@ -787,13 +788,13 @@ if len(three_d_features) >= 3:
         else:
             hist_lr['target'] = (hist_lr['Win?'] == 'Yes').astype(int)
             X_lr = hist_lr[[x_lr, y_lr, z_lr]].values
-            y_lr = hist_lr['target'].values
+            y_lr_target = hist_lr['target'].values
 
             lr_model = LogisticRegression(max_iter=1000)
-            lr_model.fit(X_lr, y_lr)
+            lr_model.fit(X_lr, y_lr_target)
             y_prob_lr_in = lr_model.predict_proba(X_lr)[:, 1]
-            ll_lr = log_loss(y_lr, y_prob_lr_in)
-            bs_lr = brier_score_loss(y_lr, y_prob_lr_in)
+            ll_lr = log_loss(y_lr_target, y_prob_lr_in)
+            bs_lr = brier_score_loss(y_lr_target, y_prob_lr_in)
 
             # Overall win rate (all filtered historical fights)
             full_hist = data[data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
@@ -806,7 +807,7 @@ if len(three_d_features) >= 3:
                 overall_wr = recent_wr = 0.0
                 recent_count = 0
 
-            # ---- CORE METRICS ----
+            # ---- CORE METRICS (always visible) ----
             col_m1, col_m2, col_m3 = st.columns(3)
             with col_m1:
                 st.metric("LR Log‑loss", f"{ll_lr:.3f}")
@@ -816,15 +817,15 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # ----- Prepare imputation values -----
+            # ----- Prepare imputation values (means from the CLEAN historical data) -----
             train_means = {}
             for col in (x_lr, y_lr, z_lr):
-                if col in list(hist_base.columns):
+                if col in hist_base.columns:
                     train_means[col] = hist_base[col].mean()
                 else:
-                    train_means[col] = 0
+                    train_means[col] = 0   # fallback, should never happen
 
-            # ----- Upcoming fight prediction -----
+            # ----- Upcoming fight prediction (missing values filled with mean) -----
             st.subheader("LR Win Probability Estimate")
             all_upcoming = all_fights_display[
                 all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')
@@ -851,7 +852,7 @@ if len(three_d_features) >= 3:
                         up_val = np.array([[v1, v2, v3]])
                         prob_lr = lr_model.predict_proba(up_val)[0, 1]
 
-                        # Empirical Bayes shrinkage
+                        # Empirical Bayes shrinkage of recent win rate
                         if recent_count > 0:
                             shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
                         else:
@@ -866,10 +867,11 @@ if len(three_d_features) >= 3:
             else:
                 st.write("No upcoming fights available.")
 
-    # --- LR 3‑Variable Combination Builder (In‑Sample Brier) ---
+    # --- LR 3‑Variable Combination Builder (Brier) ---
     st.subheader("LR 3‑Variable Combinations (Brier)")
     combo_candidates = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
 
+    # Ensure mi_df exists (compute if missing)
     if 'mi_df' not in dir():
         importance_features = [c for c in numerical_features
                                if not c.startswith('Opponent_')
@@ -893,6 +895,7 @@ if len(three_d_features) >= 3:
     candidates = top_feats[:num_top]
     candidates = [c for c in candidates if c != 'FighterOddsNum']
 
+    # Persist results across variable changes
     data_fp = hash(str(data.shape))
     if "lr_combo_results" not in st.session_state:
         st.session_state.lr_combo_results = None
@@ -916,8 +919,7 @@ if len(three_d_features) >= 3:
                     y = sub['WinNum'].values
                     try:
                         lr = LogisticRegression(max_iter=1000)
-                        lr.fit(X, y)
-                        y_prob = lr.predict_proba(X)[:, 1]
+                        y_prob = cross_val_predict(lr, X, y, cv=5, method='predict_proba')[:, 1]
                         bs = brier_score_loss(y, y_prob)
                         results.append({'Variables': ', '.join(combo), 'Brier': bs})
                     except:
