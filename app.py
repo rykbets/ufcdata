@@ -942,16 +942,18 @@ st.subheader("KNN Win Probability Estimate")
 all_upcoming = all_fights_display[
     all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')
 ]
+
 if not all_upcoming.empty:
     up_ids = all_upcoming['FightID'].unique()
     chosen_id = st.selectbox("Select upcoming fight", sorted(up_ids), key="knn_up")
+
     if chosen_id:
         up_rows = all_upcoming[all_upcoming['FightID'] == chosen_id]
+
         if len(up_rows) == 2:
             fighter_row = up_rows.iloc[0]
 
-            # ---- Build the training matrix for the 3 selected features ----
-            # (hist_knn was created above with exactly these three columns + 'target')
+            # ---- Build the training matrix for exactly the 3 selected features ----
             X_knn_fresh = hist_knn[[x_knn, y_knn, z_knn]].values
 
             # ---- Compute safe means from the training data ----
@@ -976,7 +978,7 @@ if not all_upcoming.empty:
 
             # Create a (1, 3) array of pure floats
             up_val = np.array([up_vals], dtype=float)
-            # Last‑resort NaN removal (shouldn’t be needed, but safe)
+            # Final safety net – replace any remaining NaN with 0
             up_val = np.nan_to_num(up_val, nan=0.0)
 
             # ---- Fit a fresh scaler on the training data (exactly 3 features) ----
@@ -988,7 +990,7 @@ if not all_upcoming.empty:
             prob_knn = calibrated_knn.predict_proba(up_val_scaled)[0, 1]
             prob_knn = np.clip(prob_knn, 0.1, 0.9)
 
-            # ---- Empirical Bayes shrinkage (same as before) ----
+            # ---- Empirical Bayes shrinkage ----
             if recent_count > 0:
                 shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
             else:
