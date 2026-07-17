@@ -763,7 +763,6 @@ if len(three_d_features) >= 3:
     if x_lr and y_lr and z_lr:
         # 3D scatter
         plot_data = data[[x_lr, y_lr, z_lr, 'DetailedResult', 'Fight']].copy()
-        # Remove duplicate column names (fixes DuplicateError)
         plot_data = plot_data.loc[:, ~plot_data.columns.duplicated()].dropna()
         if len(plot_data) < 10:
             st.warning("Not enough data for 3D plot.")
@@ -815,12 +814,12 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # ----- Upcoming fight prediction (all complete fights shown, warning if missing) -----
+            # ----- Upcoming fight prediction (NO false warnings) -----
             st.subheader("LR Win Probability Estimate")
             all_upcoming = all_fights_display[
                 all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')
             ]
-            # Keep only fights with both fighters present
+            # Keep only complete fights (both fighters present)
             fight_counts = all_upcoming.groupby('FightID').size()
             complete_ids = fight_counts[fight_counts == 2].index
             upcoming_complete = all_upcoming[all_upcoming['FightID'].isin(complete_ids)]
@@ -833,18 +832,8 @@ if len(three_d_features) >= 3:
                 up_rows = upcoming_complete[upcoming_complete['FightID'] == chosen_id]
                 fighter_row = up_rows.iloc[0]
 
-                # Check if the selected fighter has all three predictors
-                ok = True
-                for col in (x_lr, y_lr, z_lr):
-                    try:
-                        if pd.isna(fighter_row[col]):
-                            ok = False
-                            break
-                    except KeyError:
-                        ok = False
-                        break
-
-                if ok:
+                # Predict directly – if a value is truly missing, the model will handle it or we show a fallback
+                try:
                     up_val = np.array([fighter_row[[x_lr, y_lr, z_lr]].values])
                     prob_lr = lr_model.predict_proba(up_val)[0, 1]
 
@@ -853,7 +842,6 @@ if len(three_d_features) >= 3:
                         shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
                     else:
                         shrunk_recent = overall_wr
-                    # Shrink model probability toward the shrunken recent rate
                     shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
 
                     col_p1, col_p2 = st.columns(2)
@@ -861,8 +849,8 @@ if len(three_d_features) >= 3:
                         st.metric("LR win prob", f"{prob_lr:.1%}")
                     with col_p2:
                         st.metric("LR shrunken", f"{shrunk_prob:.1%}")
-                else:
-                    st.warning("Selected fighter does not have all predictor values.")
+                except:
+                    st.warning("Could not compute prediction for this fighter (missing data).")
 
     # --- LR 3‑Variable Combination Builder (Brier) ---
     st.subheader("LR 3‑Variable Combinations (Brier)")
