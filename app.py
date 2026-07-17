@@ -815,7 +815,8 @@ if len(three_d_features) >= 3:
 
             # ----- Upcoming fight prediction (first valid fight pre‑selected) -----
             st.subheader("LR Win Probability Estimate")
-            all_upcoming = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
+            # USE THE CORRECT UPCOMING MASK – catches "nan", "Upcoming", etc.
+            all_upcoming = all_fights_display[~all_fights_display['Win?'].isin(['Yes','No'])]
 
             # Build list of upcoming fights where the first fighter has all three features
             valid_ids = []
