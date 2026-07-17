@@ -778,20 +778,23 @@ if len(three_d_features) >= 3:
             st.plotly_chart(fig, use_container_width=True)
 
         # ----- Fit LR model & compute overall/recent win rates -----
-        hist_lr = data[data['Win?'].isin(['Yes','No'])].copy()
-        hist_lr = hist_lr[[x_lr, y_lr, z_lr, 'Win?']].dropna()
+        # Build a clean historical dataset with unique columns
+        hist_base = data[data['Win?'].isin(['Yes','No'])].copy()
+        hist_base = hist_base.loc[:, ~hist_base.columns.duplicated()]
+        hist_lr = hist_base[[x_lr, y_lr, z_lr, 'Win?']].dropna()
+
         if len(hist_lr) < 10 or hist_lr['Win?'].nunique() < 2:
             st.warning("Not enough historical data for LR model.")
         else:
             hist_lr['target'] = (hist_lr['Win?'] == 'Yes').astype(int)
             X_lr = hist_lr[[x_lr, y_lr, z_lr]].values
-            y_lr = hist_lr['target'].values
+            y_lr_target = hist_lr['target'].values
 
             lr_model = LogisticRegression(max_iter=1000)
-            lr_model.fit(X_lr, y_lr)
+            lr_model.fit(X_lr, y_lr_target)
             y_prob_lr_in = lr_model.predict_proba(X_lr)[:, 1]
-            ll_lr = log_loss(y_lr, y_prob_lr_in)
-            bs_lr = brier_score_loss(y_lr, y_prob_lr_in)
+            ll_lr = log_loss(y_lr_target, y_prob_lr_in)
+            bs_lr = brier_score_loss(y_lr_target, y_prob_lr_in)
 
             # Overall win rate (all filtered historical fights)
             full_hist = data[data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
@@ -814,14 +817,15 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # ----- Prepare imputation values (means from training data) -----
-            train_means = {
-                x_lr: hist_lr[x_lr].mean(),
-                y_lr: hist_lr[y_lr].mean(),
-                z_lr: hist_lr[z_lr].mean()
-            }
+            # ----- Prepare imputation values (means from the CLEAN historical data) -----
+            train_means = {}
+            for col in (x_lr, y_lr, z_lr):
+                if col in hist_base.columns:
+                    train_means[col] = hist_base[col].mean()
+                else:
+                    train_means[col] = 0   # fallback, should never happen
 
-            # ----- Upcoming fight prediction (always shows, missing values filled with mean) -----
+            # ----- Upcoming fight prediction (missing values filled with mean) -----
             st.subheader("LR Win Probability Estimate")
             all_upcoming = all_fights_display[
                 all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')
@@ -834,7 +838,6 @@ if len(three_d_features) >= 3:
                     if len(up_rows) == 2:
                         fighter_row = up_rows.iloc[0]
 
-                        # Safe getter with imputation for NaN or missing columns
                         def safe_val(col):
                             try:
                                 val = fighter_row[col]
