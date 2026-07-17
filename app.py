@@ -1015,11 +1015,11 @@ if len(three_d_features) >= 3:
             model = CalibratedClassifierCV(base_knn, method='sigmoid', cv=5)
             model.fit(X_scaled, y_train)
 
-            # Out‑of‑fold probabilities for metrics
-            y_prob_oof = cross_val_predict(model, X_scaled, y_train, cv=5, method='predict_proba')[:, 1]
-            y_prob_oof = np.clip(y_prob_oof, 0.1, 0.9)
-            ll_knn = log_loss(y_train, y_prob_oof)
-            bs_knn = brier_score_loss(y_train, y_prob_oof)
+            # In‑sample probabilities for metrics (matches combo builder)
+            y_prob_in = model.predict_proba(X_scaled)[:, 1]
+            y_prob_in = np.clip(y_prob_in, 0.1, 0.9)
+            ll_knn = log_loss(y_train, y_prob_in)
+            bs_knn = brier_score_loss(y_train, y_prob_in)
 
             # Overall & recent win rates
             full_hist = data[data['Win?'].isin(['Yes', 'No'])].sort_values('FightDate')
