@@ -814,7 +814,7 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # ----- Upcoming fight prediction (same logic as your working 2‑D block) -----
+            # ----- Upcoming fight prediction (safe column check) -----
             st.subheader("LR Win Probability Estimate")
             all_upcoming = all_fights_display[
                 all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')
@@ -826,26 +826,32 @@ if len(three_d_features) >= 3:
                     up_rows = all_upcoming[all_upcoming['FightID'] == chosen_id]
                     if len(up_rows) == 2:
                         fighter_row = up_rows.iloc[0]
+
+                        # Safe check: first verify the columns exist in the row
                         feats = [x_lr, y_lr, z_lr]
-                        if all(pd.notna(fighter_row[f]) for f in feats):
-                            # Construct the input exactly like the working 2‑D version
-                            up_val = np.array([[fighter_row[x_lr], fighter_row[y_lr], fighter_row[z_lr]]])
-                            prob_lr = lr_model.predict_proba(up_val)[0, 1]
-
-                            # Empirical Bayes shrinkage
-                            if recent_count > 0:
-                                shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
-                            else:
-                                shrunk_recent = overall_wr
-                            shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
-
-                            col_p1, col_p2 = st.columns(2)
-                            with col_p1:
-                                st.metric("LR win prob", f"{prob_lr:.1%}")
-                            with col_p2:
-                                st.metric("LR shrunken", f"{shrunk_prob:.1%}")
+                        cols_exist = all(col in fighter_row.index for col in feats)
+                        if not cols_exist:
+                            st.warning("Selected fighter does not have all predictor values (column missing).")
                         else:
-                            st.warning("Selected fighter does not have all predictor values.")
+                            # Now check for NaN
+                            if all(pd.notna(fighter_row[col]) for col in feats):
+                                up_val = np.array([[fighter_row[x_lr], fighter_row[y_lr], fighter_row[z_lr]]])
+                                prob_lr = lr_model.predict_proba(up_val)[0, 1]
+
+                                # Empirical Bayes shrinkage
+                                if recent_count > 0:
+                                    shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
+                                else:
+                                    shrunk_recent = overall_wr
+                                shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
+
+                                col_p1, col_p2 = st.columns(2)
+                                with col_p1:
+                                    st.metric("LR win prob", f"{prob_lr:.1%}")
+                                with col_p2:
+                                    st.metric("LR shrunken", f"{shrunk_prob:.1%}")
+                            else:
+                                st.warning("Selected fighter does not have all predictor values.")
             else:
                 st.write("No upcoming fights available.")
 
