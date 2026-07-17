@@ -808,8 +808,21 @@ if len(three_d_features) >= 3:
                     if len(up_rows_lr) == 2:
                         fighter_row = up_rows_lr.iloc[0]
                         feats = [x_lr, y_lr, z_lr]
-                        # ROBUST CHECK – avoids the earlier TypeError
-                        if all(c in fighter_row.index and not pd.isna(fighter_row[c]) for c in feats):
+
+                        # -----------------------------------------------------------------
+                        # 100% safe check – no pandas hashing, no contains, no ambiguity
+                        # -----------------------------------------------------------------
+                        missing = False
+                        for col in feats:
+                            try:
+                                if pd.isna(fighter_row[col]):
+                                    missing = True
+                                    break
+                            except KeyError:
+                                missing = True
+                                break
+
+                        if not missing:
                             up_val_lr = np.array([fighter_row[feats].values])
                             prob_lr = lr_model.predict_proba(up_val_lr)[0, 1]
 
@@ -839,7 +852,7 @@ if len(three_d_features) >= 3:
     st.subheader("LR 3‑Variable Combinations (Brier)")
     combo_candidates_lr = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
 
-    # Compute mi_df if not present (from the feature importance section)
+    # Ensure mi_df exists (compute if needed)
     if 'mi_df' not in dir():
         importance_features = [c for c in numerical_features
                                if not c.startswith('Opponent_')
