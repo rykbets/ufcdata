@@ -814,43 +814,40 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # ----- Upcoming fight prediction (correct 2‑D shape) -----
+            # ----- Upcoming fight prediction (same logic as your working 2‑D block) -----
             st.subheader("LR Win Probability Estimate")
             all_upcoming = all_fights_display[
                 all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')
             ]
-            # Keep only complete fights (both fighters present)
-            fight_counts = all_upcoming.groupby('FightID').size()
-            complete_ids = fight_counts[fight_counts == 2].index
-            upcoming_complete = all_upcoming[all_upcoming['FightID'].isin(complete_ids)]
+            if not all_upcoming.empty:
+                up_ids = all_upcoming['FightID'].unique()
+                chosen_id = st.selectbox("Select upcoming fight", sorted(up_ids), key="lr_up")
+                if chosen_id:
+                    up_rows = all_upcoming[all_upcoming['FightID'] == chosen_id]
+                    if len(up_rows) == 2:
+                        fighter_row = up_rows.iloc[0]
+                        feats = [x_lr, y_lr, z_lr]
+                        if all(pd.notna(fighter_row[f]) for f in feats):
+                            # Construct the input exactly like the working 2‑D version
+                            up_val = np.array([[fighter_row[x_lr], fighter_row[y_lr], fighter_row[z_lr]]])
+                            prob_lr = lr_model.predict_proba(up_val)[0, 1]
 
-            if upcoming_complete.empty:
-                st.write("No upcoming fights have both fighters after filters.")
+                            # Empirical Bayes shrinkage
+                            if recent_count > 0:
+                                shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
+                            else:
+                                shrunk_recent = overall_wr
+                            shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
+
+                            col_p1, col_p2 = st.columns(2)
+                            with col_p1:
+                                st.metric("LR win prob", f"{prob_lr:.1%}")
+                            with col_p2:
+                                st.metric("LR shrunken", f"{shrunk_prob:.1%}")
+                        else:
+                            st.warning("Selected fighter does not have all predictor values.")
             else:
-                up_ids = sorted(upcoming_complete['FightID'].unique())
-                chosen_id = st.selectbox("Select upcoming fight", up_ids, index=0, key="lr_up")
-                up_rows = upcoming_complete[upcoming_complete['FightID'] == chosen_id]
-                fighter_row = up_rows.iloc[0]
-
-                # FIXED: build a proper 2‑D array of shape (1, 3)
-                try:
-                    up_val = np.array([[fighter_row[x_lr], fighter_row[y_lr], fighter_row[z_lr]]])
-                    prob_lr = lr_model.predict_proba(up_val)[0, 1]
-
-                    # Empirical Bayes shrinkage of recent win rate
-                    if recent_count > 0:
-                        shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
-                    else:
-                        shrunk_recent = overall_wr
-                    shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
-
-                    col_p1, col_p2 = st.columns(2)
-                    with col_p1:
-                        st.metric("LR win prob", f"{prob_lr:.1%}")
-                    with col_p2:
-                        st.metric("LR shrunken", f"{shrunk_prob:.1%}")
-                except:
-                    st.warning("Could not compute prediction (missing or malformed data).")
+                st.write("No upcoming fights available.")
 
     # --- LR 3‑Variable Combination Builder (Brier) ---
     st.subheader("LR 3‑Variable Combinations (Brier)")
