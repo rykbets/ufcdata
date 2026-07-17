@@ -174,7 +174,7 @@ def load_full_data():
 
     # ---------- Career averages (cumulative sums of raw stats only) ----------
     # We will only cumsum the base counting stats, not the derived ratios.
-    career_stat_cols = ['SS','SSA','TS','TSA','TD','TDA','Subs','Reversals','KD','DSL']
+    career_stat_cols = ['SS','SSA','TS','TSA','TD','TDA','Subs','Reversals','KD','DSL','DSA']
     if 'Ctrl' in fight_totals.columns:
         career_stat_cols.append('Ctrl')
 
@@ -254,7 +254,7 @@ def load_full_data():
     # We'll add Def_* base stats to career_stat_cols? They are already in fight_totals.
     # We can just recompute career averages for Def_* by repeating the process.
     # Let's do that quickly:
-    def_cols = ['Def_SS','Def_SSA','Def_TS','Def_TSA','Def_TD','Def_TDA','Def_Subs','Def_Reversals','Def_KD','Def_DSL','Def_Ctrl']
+    def_cols = ['Def_SS','Def_SSA','Def_TS','Def_TSA','Def_TD','Def_TDA','Def_Subs','Def_Reversals','Def_KD','Def_DSL','Def_DSA','Def_Ctrl']
     for col in def_cols:
         if col in fight_totals.columns:
             if f'cum_{col}' in stats_df.columns:  # not already there
