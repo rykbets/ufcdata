@@ -1163,7 +1163,7 @@ else:
 # =========================================================================
 st.header("Top 20 Feature Importance (Current Filter Set)")
 
-# Only historical fights from the **already filtered** data
+# Only historical fights from the already filtered data
 hist_imp = data[data['Win?'].isin(['Yes', 'No'])].copy()
 
 if len(hist_imp) < 10:
@@ -1203,7 +1203,9 @@ else:
     # -------- 2. Categorical Feature Importance (fixed, outcome‑free list) --------
     st.subheader("Categorical Feature Importance with Win/Loss")
 
-    # This is the exact list you originally used – no outcome columns can sneak in
+    # Import the missing function – no changes needed at the top of your script
+    from sklearn.metrics import mutual_info_score
+
     potential_cat_cols = [
         'WC', 'Stance', 'Country', 'EventCountry', 'Title',
         'ScheduledRounds', 'HometownFighter', 'Opponent_Hometown'
