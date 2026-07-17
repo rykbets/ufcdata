@@ -1047,11 +1047,11 @@ else:
     st.warning("Not enough numerical features for a 3D plot (need at least 3).")
 
 # =========================================================================
-# ADVANCED ANALYSIS (filtered data)
+# ADVANCED ANALYSIS
 # =========================================================================
 st.header("Advanced Analysis")
 
-# ---------- 1. Numerical Feature Importance ----------
+# ---------- 1. Numerical Feature Importance (fighter stats only) ----------
 st.subheader("Feature Importance – Fighter Numerical Stats")
 
 importance_features = [c for c in numerical_features
@@ -1080,98 +1080,7 @@ if not mi_df.empty:
 else:
     st.warning("Not enough historical data for feature importance.")
 
-# ---------- Best Variable Combinations (Weighted KNN, Brier) ----------
-st.subheader("Best Variable Combinations for Win/Loss")
-st.markdown("Find the best 2‑ and 3‑variable combinations using weighted KNN (k=5), scaled, with 5‑fold CV, ranked by Brier score. `FighterOddsNum` is excluded.")
-
-combo_candidates = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
-
-data_fingerprint = hash(str(data.shape))
-
-if "combo_results" not in st.session_state:
-    st.session_state.combo_results = None
-if "last_combo_hash" not in st.session_state:
-    st.session_state.last_combo_hash = data_fingerprint
-
-if st.session_state.last_combo_hash != data_fingerprint:
-    st.session_state.combo_results = None
-    st.session_state.last_combo_hash = data_fingerprint
-
-if not mi_df.empty:
-    top_features = mi_df['Feature'].tolist()
-else:
-    top_features = combo_candidates
-
-num_top = st.slider("Number of top features to test", min_value=5, max_value=min(30, len(top_features)), value=10)
-candidates = top_features[:num_top]
-candidates = [c for c in candidates if c != 'FighterOddsNum']
-
-if len(candidates) >= 2:
-    compute_clicked = st.button("Compute best combinations", key="compute_combo")
-
-    if compute_clicked or st.session_state.combo_results is None:
-        with st.spinner(f"Testing combinations among top {len(candidates)} features…"):
-            hist = data[data['Win?'].isin(['Yes','No'])].copy()
-            hist['WinNum'] = (hist['Win?'] == 'Yes').astype(int)
-
-            # --- Two variables ---
-            combo_two = []
-            for x_col in candidates:
-                for y_col in candidates:
-                    if x_col == y_col:
-                        continue
-                    sub = hist[[x_col, y_col, 'WinNum']].dropna()
-                    if len(sub) < 10 or sub['WinNum'].nunique() < 2:
-                        continue
-                    X = sub[[x_col, y_col]].values
-                    y = sub['WinNum'].values
-                    try:
-                        scaler = StandardScaler()
-                        X_scaled = scaler.fit_transform(X)
-                        knn_cv = KNeighborsClassifier(n_neighbors=5, weights='distance')
-                        y_prob = cross_val_predict(knn_cv, X_scaled, y, cv=5, method='predict_proba')[:, 1]
-                        y_prob = np.clip(y_prob, 0.1, 0.9)
-                        ll = log_loss(y, y_prob)
-                        bs = brier_score_loss(y, y_prob)
-                        combo_two.append({'Variables': f"{x_col}, {y_col}", 'LogLoss': ll, 'Brier': bs})
-                    except:
-                        pass
-            df2 = pd.DataFrame(combo_two).sort_values('Brier').head(20)
-
-            # --- Three variables ---
-            combo_three = []
-            for combo in itertools.combinations(candidates, 3):
-                sub = hist[list(combo) + ['WinNum']].dropna()
-                if len(sub) < 10 or sub['WinNum'].nunique() < 2:
-                    continue
-                X = sub[list(combo)].values
-                y = sub['WinNum'].values
-                try:
-                    scaler = StandardScaler()
-                    X_scaled = scaler.fit_transform(X)
-                    knn_cv = KNeighborsClassifier(n_neighbors=5, weights='distance')
-                    y_prob = cross_val_predict(knn_cv, X_scaled, y, cv=5, method='predict_proba')[:, 1]
-                    y_prob = np.clip(y_prob, 0.1, 0.9)
-                    ll = log_loss(y, y_prob)
-                    bs = brier_score_loss(y, y_prob)
-                    combo_three.append({'Variables': ', '.join(combo), 'LogLoss': ll, 'Brier': bs})
-                except:
-                    pass
-            df3 = pd.DataFrame(combo_three).sort_values('Brier').head(20)
-
-            st.session_state.combo_results = {'two': df2, 'three': df3}
-
-    if st.session_state.combo_results is not None:
-        st.write("**Top 20 Two‑Variable Combinations (Brier)**")
-        st.dataframe(st.session_state.combo_results['two'], use_container_width=True)
-        st.write("**Top 20 Three‑Variable Combinations (Brier)**")
-        st.dataframe(st.session_state.combo_results['three'], use_container_width=True)
-    else:
-        st.info("Click the button above to compute the best combinations.")
-else:
-    st.warning("Not enough features to test (after excluding FighterOddsNum).")
-
-# ---------- Categorical Feature Importance ----------
+# ---------- 2. Categorical Feature Importance (Mutual Information) ----------
 st.subheader("Categorical Feature Importance with Win/Loss")
 
 potential_cat_cols = ['WC','Stance','Country','EventCountry','Title','ScheduledRounds','HometownFighter','Opponent_Hometown']
@@ -1203,11 +1112,163 @@ else:
     st.write("No categorical columns with meaningful variation.")
 
 # =========================================================================
-# SPIDER CHART – FIGHTER‑SIDE FILTERS + LR + WEIGHTED KNN + META + SIMILARITY + BAYESIAN WIN RATES
+# 3D SCATTER + COMBINATION BUILDER (LOGISTIC REGRESSION)
+# =========================================================================
+st.header("3D Relationship & Best LR Combinations")
+
+three_d_features = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
+if len(three_d_features) >= 3:
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        x_lr = st.selectbox("X", three_d_features, key="lr_x")
+    with col2:
+        y_lr = st.selectbox("Y", three_d_features, key="lr_y")
+    with col3:
+        z_lr = st.selectbox("Z", three_d_features, key="lr_z")
+
+    if x_lr and y_lr and z_lr:
+        plot_data = data[[x_lr, y_lr, z_lr, 'DetailedResult', 'Fight']].dropna()
+        if len(plot_data) < 10:
+            st.warning("Not enough data for 3D plot.")
+        else:
+            fig = px.scatter_3d(
+                plot_data,
+                x=x_lr, y=y_lr, z=z_lr,
+                color='DetailedResult',
+                color_discrete_map=color_map,
+                hover_data=['Fight'],
+                title="3D Scatter (Logistic Regression combo builder below)"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+    # --- Logistic Regression combination builder (3‑variable) ---
+    st.subheader("LR 3‑Variable Combinations (Brier)")
+    combo_candidates_lr = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
+
+    if not mi_df.empty:
+        top_features_lr = mi_df['Feature'].tolist()
+    else:
+        top_features_lr = combo_candidates_lr
+
+    num_top_lr = st.slider("Top features to test", 5, min(30, len(top_features_lr)), 10, key="lr_combo_top")
+    candidates_lr = top_features_lr[:num_top_lr]
+    candidates_lr = [c for c in candidates_lr if c != 'FighterOddsNum']
+
+    if len(candidates_lr) >= 3:
+        if st.button("Compute LR 3‑Var Combos", key="lr_combo_btn"):
+            with st.spinner("Testing 3‑variable LR combos…"):
+                hist = data[data['Win?'].isin(['Yes','No'])].copy()
+                hist['WinNum'] = (hist['Win?'] == 'Yes').astype(int)
+
+                combo_list = []
+                for combo in itertools.combinations(candidates_lr, 3):
+                    sub = hist[list(combo) + ['WinNum']].dropna()
+                    if len(sub) < 10 or sub['WinNum'].nunique() < 2:
+                        continue
+                    X = sub[list(combo)].values
+                    y = sub['WinNum'].values
+                    try:
+                        lr = LogisticRegression(max_iter=1000)
+                        y_prob = cross_val_predict(lr, X, y, cv=5, method='predict_proba')[:, 1]
+                        bs = brier_score_loss(y, y_prob)
+                        combo_list.append({'Variables': ', '.join(combo), 'Brier': bs})
+                    except:
+                        pass
+                if combo_list:
+                    df = pd.DataFrame(combo_list).sort_values('Brier').head(20)
+                    st.write("**Top 20 3‑Variable Combinations (Brier)**")
+                    st.dataframe(df, use_container_width=True)
+                else:
+                    st.warning("Could not evaluate any combination.")
+    else:
+        st.warning("Not enough features to test (need at least 3).")
+else:
+    st.warning("Not enough numerical features for a 3D plot (need at least 3).")
+
+# =========================================================================
+# 3D SCATTER + COMBINATION BUILDER (WEIGHTED KNN)
+# =========================================================================
+st.header("3D Relationship & Best KNN Combinations")
+
+if len(three_d_features) >= 3:
+    col1_knn, col2_knn, col3_knn = st.columns(3)
+    with col1_knn:
+        x_knn = st.selectbox("X", three_d_features, key="knn_x")
+    with col2_knn:
+        y_knn = st.selectbox("Y", three_d_features, key="knn_y")
+    with col3_knn:
+        z_knn = st.selectbox("Z", three_d_features, key="knn_z")
+
+    if x_knn and y_knn and z_knn:
+        plot_data_knn = data[[x_knn, y_knn, z_knn, 'DetailedResult', 'Fight']].dropna()
+        if len(plot_data_knn) < 10:
+            st.warning("Not enough data for 3D plot.")
+        else:
+            fig_knn = px.scatter_3d(
+                plot_data_knn,
+                x=x_knn, y=y_knn, z=z_knn,
+                color='DetailedResult',
+                color_discrete_map=color_map,
+                hover_data=['Fight'],
+                title="3D Scatter (Weighted KNN combo builder below)"
+            )
+            st.plotly_chart(fig_knn, use_container_width=True)
+
+    # --- Weighted KNN combination builder (3‑variable, with K slider) ---
+    st.subheader("KNN 3‑Variable Combinations (Brier)")
+    combo_candidates_knn = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
+
+    if not mi_df.empty:
+        top_features_knn = mi_df['Feature'].tolist()
+    else:
+        top_features_knn = combo_candidates_knn
+
+    num_top_knn = st.slider("Top features to test", 5, min(30, len(top_features_knn)), 10, key="knn_combo_top")
+    candidates_knn = top_features_knn[:num_top_knn]
+    candidates_knn = [c for c in candidates_knn if c != 'FighterOddsNum']
+
+    k_combo = st.slider("KNN neighbors for combo builder", 1, 20, 5, key="knn_combo_k")
+
+    if len(candidates_knn) >= 3:
+        if st.button("Compute KNN 3‑Var Combos", key="knn_combo_btn"):
+            with st.spinner("Testing 3‑variable Weighted KNN combos…"):
+                hist = data[data['Win?'].isin(['Yes','No'])].copy()
+                hist['WinNum'] = (hist['Win?'] == 'Yes').astype(int)
+
+                combo_list = []
+                for combo in itertools.combinations(candidates_knn, 3):
+                    sub = hist[list(combo) + ['WinNum']].dropna()
+                    if len(sub) < 10 or sub['WinNum'].nunique() < 2:
+                        continue
+                    X = sub[list(combo)].values
+                    y = sub['WinNum'].values
+                    try:
+                        scaler = StandardScaler()
+                        X_scaled = scaler.fit_transform(X)
+                        knn = KNeighborsClassifier(n_neighbors=k_combo, weights='distance')
+                        y_prob = cross_val_predict(knn, X_scaled, y, cv=5, method='predict_proba')[:, 1]
+                        y_prob = np.clip(y_prob, 0.1, 0.9)
+                        bs = brier_score_loss(y, y_prob)
+                        combo_list.append({'Variables': ', '.join(combo), 'Brier': bs})
+                    except:
+                        pass
+                if combo_list:
+                    df = pd.DataFrame(combo_list).sort_values('Brier').head(20)
+                    st.write("**Top 20 3‑Variable Combinations (Brier)**")
+                    st.dataframe(df, use_container_width=True)
+                else:
+                    st.warning("Could not evaluate any combination.")
+    else:
+        st.warning("Not enough features to test (need at least 3).")
+else:
+    st.warning("Not enough numerical features for a 3D plot (need at least 3).")
+
+# =========================================================================
+# SPIDER CHART – FIGHTER‑SIDE FILTERS + LR + WEIGHTED KNN (NO META) + SIMILARITY + BAYESIAN WIN RATES
 # =========================================================================
 st.header("Fight Similarity & Comparison (Independent Filters)")
 
-# ---- Spider‑specific fighter‑side categorical filters ----
+# Spider‑specific fighter‑side categorical filters
 st.subheader("Spider Chart Filters (fighter data only)")
 
 col_sp1, col_sp2 = st.columns(2)
@@ -1226,7 +1287,6 @@ with col_sp2:
     spider_skip_nc = st.checkbox("Skip NC outcomes", key="spider_skip_nc")
     spider_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
 
-# Previous outcome columns (fighter only, based on spider_skip_nc)
 if spider_skip_nc:
     spider_prev1_col = 'Prev1_Outcome_skipNC'; spider_prev2_col = 'Prev2_Outcome_skipNC'; spider_prev3_col = 'Prev3_Outcome_skipNC'
     spider_career1_col = 'Career1_Outcome_skipNC'; spider_career2_col = 'Career2_Outcome_skipNC'; spider_career3_col = 'Career3_Outcome_skipNC'
@@ -1245,12 +1305,10 @@ with st.expander("Previous Outcomes (Spider)"):
     spider_career2 = st.multiselect("Career F2", all_outcomes_career_spider, key="spider_career2")
     spider_career3 = st.multiselect("Career F3", all_outcomes_career_spider, key="spider_career3")
 
-# ---- Build a mask of rows that satisfy the spider filters (fighter‑side) ----
 spider_data = all_fights_display.copy()
 
 mask = pd.Series(True, index=spider_data.index)
 
-# Apply each filter to the mask
 if spider_wc: mask &= spider_data['WC'].isin(spider_wc)
 if spider_stance: mask &= spider_data['Stance'].isin(spider_stance)
 if spider_country: mask &= spider_data['Country'].isin(spider_country)
@@ -1262,7 +1320,6 @@ if spider_new_wc: mask &= spider_data['IsNewWeightClass'] == True
 if spider_prev_title != "All":
     mask &= spider_data['Prev1_Title'] == spider_prev_title
 
-# Fighter‑side previous outcomes
 if spider_prev1: mask &= spider_data[spider_prev1_col].isin(spider_prev1)
 if spider_prev2: mask &= spider_data[spider_prev2_col].isin(spider_prev2)
 if spider_prev3: mask &= spider_data[spider_prev3_col].isin(spider_prev3)
@@ -1270,19 +1327,14 @@ if spider_career1: mask &= spider_data[spider_career1_col].isin(spider_career1)
 if spider_career2: mask &= spider_data[spider_career2_col].isin(spider_career2)
 if spider_career3: mask &= spider_data[spider_career3_col].isin(spider_career3)
 
-# Find FightIDs where at least one row passes the mask
 valid_fight_ids = spider_data.loc[mask, 'FightID'].unique()
-
-# Keep all rows for those FightIDs (so both fighters stay together)
 spider_data = spider_data[spider_data['FightID'].isin(valid_fight_ids)]
 
-# ---- Extract upcoming fights from spider_data ----
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
 
 if spider_upcoming.empty:
     st.write("No upcoming fights after spider filters.")
 else:
-    # Keep only complete fights (both fighters present)
     fight_counts = spider_upcoming.groupby('FightID').size()
     complete_ids = fight_counts[fight_counts == 2].index
     spider_upcoming = spider_upcoming[spider_upcoming['FightID'].isin(complete_ids)]
@@ -1290,13 +1342,9 @@ else:
     if spider_upcoming.empty:
         st.warning("No upcoming fight has both fighters after spider filters.")
     else:
-        # Full historical data (all rows for these FightIDs)
         spider_hist_full = spider_data[spider_data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
-
-        # For overall win rate, use only the rows that actually passed the mask
         spider_hist_filtered = spider_data.loc[mask & spider_data['Win?'].isin(['Yes','No'])]
 
-        # Variable selector
         numeric_cols = [c for c in spider_upcoming.columns if pd.api.types.is_numeric_dtype(spider_upcoming[c])]
         clean_cols = [c for c in numeric_cols if not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')]
         wanted_keys = [
@@ -1324,55 +1372,35 @@ else:
                 X_spider = spider_hist_clean[selected_vars].values
                 y_spider = spider_hist_clean['target'].values
 
-                # --- Cross‑validated base predictions (for meta) ---
-                from sklearn.model_selection import cross_val_predict
-
-                lr_cv_spider = LogisticRegression(max_iter=1000)
-                y_prob_lr_spider_oof = cross_val_predict(lr_cv_spider, X_spider, y_spider, cv=5, method='predict_proba')[:, 1]
-
-                k_spider = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_spider")
-                scaler_knn_spider = StandardScaler()
-                X_spider_scaled_knn = scaler_knn_spider.fit_transform(X_spider)
-                knn_cv_spider = KNeighborsClassifier(n_neighbors=k_spider, weights='distance')
-                y_prob_knn_spider_oof = cross_val_predict(knn_cv_spider, X_spider_scaled_knn, y_spider, cv=5, method='predict_proba')[:, 1]
-                y_prob_knn_spider_oof = np.clip(y_prob_knn_spider_oof, 0.1, 0.9)
-
-                # Train base models on all data
+                # Logistic Regression
                 lr_spider = LogisticRegression(max_iter=1000)
                 lr_spider.fit(X_spider, y_spider)
+                y_prob_lr_in = lr_spider.predict_proba(X_spider)[:, 1]
+                ll_lr_spider = log_loss(y_spider, y_prob_lr_in)
+                bs_lr_spider = brier_score_loss(y_spider, y_prob_lr_in)
+
+                # Weighted KNN (cross‑validated metrics, clipped)
+                k_spider = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_spider")
+                scaler_knn_spider = StandardScaler()
+                X_spider_scaled = scaler_knn_spider.fit_transform(X_spider)
+                knn_cv_spider = KNeighborsClassifier(n_neighbors=k_spider, weights='distance')
+                y_prob_knn_oof = cross_val_predict(knn_cv_spider, X_spider_scaled, y_spider, cv=5, method='predict_proba')[:, 1]
+                y_prob_knn_oof = np.clip(y_prob_knn_oof, 0.1, 0.9)
+                ll_knn_spider = log_loss(y_spider, y_prob_knn_oof)
+                bs_knn_spider = brier_score_loss(y_spider, y_prob_knn_oof)
+
+                # Final KNN for prediction
                 knn_spider = KNeighborsClassifier(n_neighbors=k_spider, weights='distance')
-                knn_spider.fit(X_spider_scaled_knn, y_spider)
+                knn_spider.fit(X_spider_scaled, y_spider)
 
-                # In‑sample LR metrics
-                y_prob_lr_spider_in = lr_spider.predict_proba(X_spider)[:, 1]
-                ll_lr_spider = log_loss(y_spider, y_prob_lr_spider_in)
-                bs_lr_spider = brier_score_loss(y_spider, y_prob_lr_spider_in)
-
-                # OOF KNN metrics
-                ll_knn_spider = log_loss(y_spider, y_prob_knn_spider_oof)
-                bs_knn_spider = brier_score_loss(y_spider, y_prob_knn_spider_oof)
-
-                # --- Meta‑model ---
-                meta_X_spider = np.column_stack([y_prob_lr_spider_oof, y_prob_knn_spider_oof])
-                meta_spider = LogisticRegression(max_iter=1000)
-                meta_spider.fit(meta_X_spider, y_spider)
-                y_prob_meta_spider_oof = meta_spider.predict_proba(meta_X_spider)[:, 1]
-                ll_meta_spider = log_loss(y_spider, y_prob_meta_spider_oof)
-                bs_meta_spider = brier_score_loss(y_spider, y_prob_meta_spider_oof)
-
-                # Display metrics
-                col_sm1, col_sm2, col_sm3 = st.columns(3)
+                col_sm1, col_sm2 = st.columns(2)
                 with col_sm1:
                     st.metric("LogReg Log‑loss", f"{ll_lr_spider:.3f}")
                     st.metric("LogReg Brier", f"{bs_lr_spider:.3f}")
                 with col_sm2:
                     st.metric("KNN Log‑loss", f"{ll_knn_spider:.3f}")
                     st.metric("KNN Brier", f"{bs_knn_spider:.3f}")
-                with col_sm3:
-                    st.metric("Meta Log‑loss", f"{ll_meta_spider:.3f}")
-                    st.metric("Meta Brier", f"{bs_meta_spider:.3f}")
 
-                # Pick upcoming fight
                 up_ids = sorted(spider_upcoming['FightID'].unique())
                 chosen_fight = st.selectbox("Choose an upcoming fight", up_ids, key="spider_fight")
 
@@ -1381,7 +1409,6 @@ else:
                     f1 = fight_rows.iloc[0]
                     f2 = fight_rows.iloc[1]
 
-                    # Radar of differentials
                     radar_vals = []
                     for var in selected_vars:
                         if var.endswith('_Diff') or var in {'AgeDiff','HeightDiff','ReachDiff'}:
@@ -1398,48 +1425,38 @@ else:
                                       title=f"Advantage: {f1['Fighter']} vs {f2['Fighter']}")
                     st.plotly_chart(fig, use_container_width=True)
 
-                    # Win probabilities
                     up_vec = f1[selected_vars].values.reshape(1, -1)
                     prob_lr_f1 = lr_spider.predict_proba(up_vec)[0, 1]
                     up_vec_scaled = scaler_knn_spider.transform(up_vec)
                     prob_knn_f1 = np.clip(knn_spider.predict_proba(up_vec_scaled)[0, 1], 0.1, 0.9)
-                    prob_meta_f1 = np.clip(meta_spider.predict_proba(np.column_stack([prob_lr_f1, prob_knn_f1]).reshape(1, -1))[0, 1], 0.1, 0.9)
 
-                    # Dataset‑wide win rates (based on filtered rows)
                     overall_wr_spider = (spider_hist_filtered['Win?'] == 'Yes').mean() * 100 if len(spider_hist_filtered) > 0 else 0.0
                     recent_spider = spider_hist_filtered.tail(recent_window)
                     recent_wr_spider = (recent_spider['Win?'] == 'Yes').mean() * 100 if len(recent_spider) > 0 else 0.0
-                    shrunk_lr_spider = (prior_weight * (overall_wr_spider / 100) + prob_lr_f1) / (prior_weight + 1)
-                    shrunk_knn_spider = (prior_weight * (overall_wr_spider / 100) + prob_knn_f1) / (prior_weight + 1)
-                    shrunk_meta_spider = (prior_weight * (overall_wr_spider / 100) + prob_meta_f1) / (prior_weight + 1)
+                    shrunk_lr = (prior_weight * (overall_wr_spider / 100) + prob_lr_f1) / (prior_weight + 1)
+                    shrunk_knn = (prior_weight * (overall_wr_spider / 100) + prob_knn_f1) / (prior_weight + 1)
 
-                    col_sp1, col_sp2, col_sp3, col_sp4 = st.columns(4)
+                    col_sp1, col_sp2, col_sp3 = st.columns(3)
                     with col_sp1:
                         st.metric("LogReg", f"{prob_lr_f1:.1%}")
-                        st.metric("LogReg shrunken", f"{shrunk_lr_spider:.1%}")
+                        st.metric("LogReg shrunken", f"{shrunk_lr:.1%}")
                     with col_sp2:
                         st.metric("KNN", f"{prob_knn_f1:.1%}")
-                        st.metric("KNN shrunken", f"{shrunk_knn_spider:.1%}")
+                        st.metric("KNN shrunken", f"{shrunk_knn:.1%}")
                     with col_sp3:
-                        st.metric("Meta", f"{prob_meta_f1:.1%}")
-                        st.metric("Meta shrunken", f"{shrunk_meta_spider:.1%}")
-                    with col_sp4:
                         st.metric("Overall Win% (filtered)", f"{overall_wr_spider:.1f}%")
                         st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr_spider:.1f}%")
 
-                    # ---- Similarity Score (restricted to the most recent N fights) ----
+                    # Similarity (most recent N fights)
                     st.subheader(f"Most Similar Historical Fights (from last {recent_window} fights)")
-                    scaler = StandardScaler()
-                    X_spider_scaled = scaler.fit_transform(X_spider)
-                    up_scaled = scaler.transform(up_vec)
-                    dists = cdist(up_scaled, X_spider_scaled, 'euclidean').flatten()
+                    scaler_sim = StandardScaler()
+                    X_spider_scaled_sim = scaler_sim.fit_transform(X_spider)
+                    up_scaled_sim = scaler_sim.transform(up_vec)
+                    dists = cdist(up_scaled_sim, X_spider_scaled_sim, 'euclidean').flatten()
                     sim_scores = 100 * (1 - dists / (dists.max() or 1))
 
                     sim_df = spider_hist_clean[['FightDate', 'Fighter', 'Opponent', 'Win?']].copy()
                     sim_df['Similarity'] = sim_scores.round(1)
-
-                    # Keep only the most recent N fights, then top 20 by similarity
                     sim_df = sim_df.sort_values('FightDate', ascending=False).head(recent_window)
                     top_sim = sim_df.sort_values('Similarity', ascending=False).head(20)
-
                     st.dataframe(top_sim, use_container_width=True)
