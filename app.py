@@ -811,7 +811,7 @@ else:
     st.write("No categorical columns with meaningful variation.")
 
 # =========================================================================
-# 3D SCATTER + LR COMBINATION BUILDER (WITH MODEL METRICS)
+# 3D SCATTER + LR COMBINATION BUILDER
 # =========================================================================
 st.header("3D Relationship & Best LR Combinations")
 
@@ -840,7 +840,7 @@ if len(three_d_features) >= 3:
             )
             st.plotly_chart(fig, use_container_width=True)
 
-        # Fit LR
+        # Fit LR model and display metrics
         hist_lr = data[data['Win?'].isin(['Yes','No'])].copy()
         hist_lr = hist_lr[[x_lr, y_lr, z_lr, 'Win?']].dropna()
         if len(hist_lr) < 10 or hist_lr['Win?'].nunique() < 2:
@@ -872,8 +872,8 @@ if len(three_d_features) >= 3:
                     if len(up_rows_lr) == 2:
                         fighter_row = up_rows_lr.iloc[0]
                         feats = [x_lr, y_lr, z_lr]
-                        missing = [c for c in feats if c not in fighter_row.index or pd.isna(fighter_row[c])]
-                        if len(missing) == 0:
+                        # safe check
+                        if set(feats).issubset(fighter_row.index) and fighter_row[feats].notna().all(axis=None):
                             up_val_lr = np.array([fighter_row[feats].values])
                             prob_lr = lr_model.predict_proba(up_val_lr)[0, 1]
 
@@ -954,7 +954,7 @@ else:
     st.warning("Not enough numerical features for a 3D plot (need at least 3).")
 
 # =========================================================================
-# 3D SCATTER + KNN COMBINATION BUILDER (WITH MODEL METRICS)
+# 3D SCATTER + KNN COMBINATION BUILDER
 # =========================================================================
 st.header("3D Relationship & Best KNN Combinations")
 
@@ -982,7 +982,7 @@ if len(three_d_features) >= 3:
             )
             st.plotly_chart(fig_knn, use_container_width=True)
 
-        # Fit KNN
+        # Fit KNN and display metrics
         hist_knn = data[data['Win?'].isin(['Yes','No'])].copy()
         hist_knn = hist_knn[[x_knn, y_knn, z_knn, 'Win?']].dropna()
         if len(hist_knn) < 10 or hist_knn['Win?'].nunique() < 2:
@@ -1021,8 +1021,7 @@ if len(three_d_features) >= 3:
                     if len(up_rows_knn) == 2:
                         fighter_row = up_rows_knn.iloc[0]
                         feats = [x_knn, y_knn, z_knn]
-                        missing = [c for c in feats if c not in fighter_row.index or pd.isna(fighter_row[c])]
-                        if len(missing) == 0:
+                        if set(feats).issubset(fighter_row.index) and fighter_row[feats].notna().all(axis=None):
                             up_val_knn = np.array([fighter_row[feats].values])
                             up_val_scaled = scaler_knn.transform(up_val_knn)
                             prob_knn = np.clip(knn_model.predict_proba(up_val_scaled)[0, 1], 0.1, 0.9)
