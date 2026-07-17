@@ -776,7 +776,6 @@ if len(three_d_features) >= 3:
             )
             st.plotly_chart(fig, use_container_width=True)
 
-        # Fit LR
         hist_lr = data[data['Win?'].isin(['Yes','No'])].copy()
         hist_lr = hist_lr[[x_lr, y_lr, z_lr, 'Win?']].dropna()
         if len(hist_lr) < 10 or hist_lr['Win?'].nunique() < 2:
@@ -808,7 +807,8 @@ if len(three_d_features) >= 3:
                     if len(up_rows_lr) == 2:
                         fighter_row = up_rows_lr.iloc[0]
                         feats = [x_lr, y_lr, z_lr]
-                        if all(pd.notna(fighter_row[f]) for f in feats):
+                        # safe check – avoid KeyError
+                        if all(col in fighter_row.index and pd.notna(fighter_row[col]) for col in feats):
                             up_val_lr = np.array([fighter_row[feats].values])
                             prob_lr = lr_model.predict_proba(up_val_lr)[0, 1]
 
@@ -866,7 +866,6 @@ if len(three_d_features) >= 3:
             )
             st.plotly_chart(fig_knn, use_container_width=True)
 
-        # Fit KNN
         hist_knn = data[data['Win?'].isin(['Yes','No'])].copy()
         hist_knn = hist_knn[[x_knn, y_knn, z_knn, 'Win?']].dropna()
         if len(hist_knn) < 10 or hist_knn['Win?'].nunique() < 2:
@@ -905,7 +904,7 @@ if len(three_d_features) >= 3:
                     if len(up_rows_knn) == 2:
                         fighter_row = up_rows_knn.iloc[0]
                         feats = [x_knn, y_knn, z_knn]
-                        if all(pd.notna(fighter_row[f]) for f in feats):
+                        if all(col in fighter_row.index and pd.notna(fighter_row[col]) for col in feats):
                             up_val_knn = np.array([fighter_row[feats].values])
                             up_val_scaled = scaler_knn.transform(up_val_knn)
                             prob_knn = np.clip(knn_model.predict_proba(up_val_scaled)[0, 1], 0.1, 0.9)
