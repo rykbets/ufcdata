@@ -968,7 +968,7 @@ if len(three_d_features) >= 3:
             )
             st.plotly_chart(fig_knn, use_container_width=True)
 
-        # ----- Build KNN model with Platt scaling -----
+        # ----- Fit KNN model with Platt scaling & imputation -----
         hist_base = data[data['Win?'].isin(['Yes','No'])].copy()
         hist_base = hist_base.loc[:, ~hist_base.columns.duplicated()]
         hist_knn = hist_base[[x_knn, y_knn, z_knn, 'Win?']].dropna()
@@ -978,26 +978,26 @@ if len(three_d_features) >= 3:
         else:
             hist_knn['target'] = (hist_knn['Win?'] == 'Yes').astype(int)
             X_knn = hist_knn[[x_knn, y_knn, z_knn]].values
-            y_knn = hist_knn['target'].values
+            y_knn_target = hist_knn['target'].values
 
-            # --- KNN slider for the main model ---
+            # --- KNN neighbors slider ---
             k_knn = st.slider("KNN neighbors (model)", min_value=1, max_value=20, value=5, key="knn_model_k")
 
             # Scale features
             scaler_knn = StandardScaler()
             X_knn_scaled = scaler_knn.fit_transform(X_knn)
 
-            # Weighted KNN wrapped in Platt calibration (5‑fold CV internally)
+            # Weighted KNN with Platt calibration (5‑fold CV internally)
             base_knn = KNeighborsClassifier(n_neighbors=k_knn, weights='distance')
             calibrated_knn = CalibratedClassifierCV(base_knn, method='sigmoid', cv=5)
-            calibrated_knn.fit(X_knn_scaled, y_knn)
+            calibrated_knn.fit(X_knn_scaled, y_knn_target)
 
             # Cross‑validated calibrated probabilities for metrics
-            y_prob_calibrated_oof = cross_val_predict(calibrated_knn, X_knn_scaled, y_knn, cv=5, method='predict_proba')[:, 1]
+            y_prob_calibrated_oof = cross_val_predict(calibrated_knn, X_knn_scaled, y_knn_target, cv=5, method='predict_proba')[:, 1]
             y_prob_calibrated_oof = np.clip(y_prob_calibrated_oof, 0.1, 0.9)
 
-            ll_knn = log_loss(y_knn, y_prob_calibrated_oof)
-            bs_knn = brier_score_loss(y_knn, y_prob_calibrated_oof)
+            ll_knn = log_loss(y_knn_target, y_prob_calibrated_oof)
+            bs_knn = brier_score_loss(y_knn_target, y_prob_calibrated_oof)
 
             # Overall / recent win rates
             full_hist = data[data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
@@ -1020,7 +1020,7 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # ----- Upcoming fight prediction (imputation for debutants) -----
+            # ----- Prepare imputation values (means from clean historical data) -----
             train_means = {}
             for col in (x_knn, y_knn, z_knn):
                 if col in list(hist_base.columns):
@@ -1028,6 +1028,7 @@ if len(three_d_features) >= 3:
                 else:
                     train_means[col] = 0
 
+            # ----- Upcoming fight prediction -----
             st.subheader("KNN Win Probability Estimate")
             all_upcoming = all_fights_display[
                 all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')
