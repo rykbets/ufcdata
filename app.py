@@ -762,7 +762,9 @@ if len(three_d_features) >= 3:
 
     if x_lr and y_lr and z_lr:
         # 3D scatter
-        plot_data = data[[x_lr, y_lr, z_lr, 'DetailedResult', 'Fight']].dropna()
+        plot_data = data[[x_lr, y_lr, z_lr, 'DetailedResult', 'Fight']].copy()
+        # Remove any duplicate column names (fixes the DuplicateError)
+        plot_data = plot_data.loc[:, ~plot_data.columns.duplicated()].dropna()
         if len(plot_data) < 10:
             st.warning("Not enough data for 3D plot.")
         else:
@@ -854,10 +856,9 @@ if len(three_d_features) >= 3:
 
                 # --- Empirical Bayes shrinkage of recent win rate ---
                 if recent_count > 0:
-                    # Shrink recent win rate toward overall win rate
                     shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
                 else:
-                    shrunk_recent = overall_wr   # no recent data
+                    shrunk_recent = overall_wr
 
                 # Shrink model probability toward the shrunken recent rate
                 shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
