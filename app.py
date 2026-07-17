@@ -968,24 +968,50 @@ if len(three_d_features) >= 3:
             )
             st.plotly_chart(fig_knn, use_container_width=True)
 
-        # ---------- Build training data (3 selected features, NO duplicates) ----------
-        train_df = data[data['Win?'].isin(['Yes', 'No'])].copy()
-        # Remove any duplicate column names before subselection
-        train_df = train_df.loc[:, ~train_df.columns.duplicated()]
-        # Now select only the 3 features + target
-        train_df = train_df[[x_knn, y_knn, z_knn, 'Win?']].dropna()
+        # ---------- Build training data (EXACTLY 3 columns) ----------
+        hist_all = data[data['Win?'].isin(['Yes', 'No'])].copy()
+        # Keep only rows where the three selected features are not all NaN
+        # We cannot use dropna on the whole subset because duplicates may exist.
+        # Instead, we will build X_train manually column by column.
+        
+        # --- Safe helper: get first occurrence of a column name ---
+        def first_column(df, col_name):
+            """Return the first column that matches col_name as a 1D numpy array."""
+            # Get all columns with that name (a DataFrame if multiple, Series if one)
+            subset = df[col_name]
+            if isinstance(subset, pd.DataFrame):
+                # Take the first column
+                return subset.iloc[:, 0].values.astype(np.float64)
+            else:
+                return subset.values.astype(np.float64)
 
-        if len(train_df) < 10 or train_df['Win?'].nunique() < 2:
+        # Build a 3‑column numeric matrix by extracting each feature individually
+        col1_vals = first_column(hist_all, x_knn)
+        col2_vals = first_column(hist_all, y_knn)
+        col3_vals = first_column(hist_all, z_knn)
+        win_vals  = first_column(hist_all, 'Win?')   # will be 'Yes'/'No' strings
+        
+        # Create a clean DataFrame for training
+        temp_df = pd.DataFrame({
+            'f1': col1_vals,
+            'f2': col2_vals,
+            'f3': col3_vals,
+            'Win?': win_vals
+        }).dropna()
+        
+        if len(temp_df) < 10 or temp_df['Win?'].nunique() < 2:
             st.warning("Not enough training data for KNN model.")
         else:
-            train_df['target'] = (train_df['Win?'] == 'Yes').astype(int)
-            X_train = train_df[[x_knn, y_knn, z_knn]].values.astype(np.float64)
-            y_train = train_df['target'].values
+            X_train = temp_df[['f1', 'f2', 'f3']].values.astype(np.float64)
+            y_train = (temp_df['Win?'] == 'Yes').astype(int).values
 
-            # KNN slider
+            # Verify shape (should be (n, 3))
+            st.caption(f"Training matrix shape: {X_train.shape}")   # debug line – keep it
+
+            # ----- KNN hyperparameter -----
             k_knn = st.slider("KNN neighbors (model)", 1, 20, 5, key="knn_model_k")
 
-            # --- Fit model (scaler is fitted on X_train here) ---
+            # ----- Fit model -----
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X_train)
 
@@ -993,7 +1019,7 @@ if len(three_d_features) >= 3:
             model = CalibratedClassifierCV(base_knn, method='sigmoid', cv=5)
             model.fit(X_scaled, y_train)
 
-            # Out-of-fold probabilities for metrics
+            # Out‑of‑fold probabilities for metrics
             y_prob_oof = cross_val_predict(model, X_scaled, y_train, cv=5, method='predict_proba')[:, 1]
             y_prob_oof = np.clip(y_prob_oof, 0.1, 0.9)
             ll_knn = log_loss(y_train, y_prob_oof)
@@ -1016,7 +1042,7 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # ---------- Upcoming fight prediction (FRESH scaler to avoid any conflict) ----------
+            # ---------- Upcoming fight prediction ----------
             st.subheader("KNN Win Probability Estimate")
             upcoming = all_fights_display[
                 all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')
@@ -1028,11 +1054,12 @@ if len(three_d_features) >= 3:
                     if len(rows) == 2:
                         fighter = rows.iloc[0]
 
-                        # Compute means from the SAME training data (3 columns)
+                        # Impute missing values with training column means
                         means = X_train.mean(axis=0)
                         vals = []
-                        for i, col in enumerate([x_knn, y_knn, z_knn]):
-                            raw = fighter[col]
+                        for i, col_name in enumerate([x_knn, y_knn, z_knn]):
+                            # Extract fighter's value (first occurrence if duplicated)
+                            raw = first_column(pd.DataFrame(fighter).T, col_name)[0] if col_name in fighter else np.nan
                             try:
                                 v = float(raw)
                                 if np.isnan(v):
@@ -1043,12 +1070,8 @@ if len(three_d_features) >= 3:
 
                         up_arr = np.array([vals], dtype=np.float64)
 
-                        # --- RE-FIT a brand‑new scaler on exactly 3 features (bulletproof) ---
-                        fresh_scaler = StandardScaler()
-                        fresh_scaler.fit(X_train)               # X_train is always (n,3)
-                        st.caption(f"Scaler expects {fresh_scaler.n_features_in_} features")  # debug: should show 3
-                        up_scaled = fresh_scaler.transform(up_arr)
-
+                        # Use the exact same scaler (fitted on 3 features)
+                        up_scaled = scaler.transform(up_arr)
                         prob_knn = model.predict_proba(up_scaled)[0, 1]
                         prob_knn = np.clip(prob_knn, 0.1, 0.9)
 
