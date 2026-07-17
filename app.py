@@ -757,9 +757,9 @@ def compute_win_rates(fighter_name, hist_df, recent_window=5):
 prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight_global")
 recent_window = st.sidebar.slider("Recent fights window", 1, 100, 5, key="recent_win_global")
 
-# ---------- 2D Win/Loss Prediction (Logistic Regression + Weighted KNN) ----------
+# ---------- 2D Win/Loss Prediction (LR + Weighted KNN + Meta) ----------
 st.header("2D Win/Loss Prediction")
-st.markdown("Select two predictor variables. Logistic Regression and KNN models are fitted. Log‑loss, Brier score, win probability, and dataset‑wide win rates are shown.")
+st.markdown("Select two predictor variables. Logistic Regression, Weighted KNN, and a Meta‑model are fitted. Log‑loss, Brier score, win probability, and dataset‑wide win rates are shown.")
 
 available_pred = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
 
@@ -783,39 +783,51 @@ if len(available_pred) >= 2:
                 X_hist = hist[[pred_x, pred_y]].values
                 y_hist = hist['target'].values
 
-                # Logistic Regression (unchanged)
-                logreg = LogisticRegression(max_iter=1000)
-                logreg.fit(X_hist, y_hist)
-                y_prob_lr = logreg.predict_proba(X_hist)[:, 1]
-                ll_lr = log_loss(y_hist, y_prob_lr)
-                bs_lr = brier_score_loss(y_hist, y_prob_lr)
-
-                # KNN (weighted, scaled, cross‑validated metrics, clipped)
-                k = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_2d")
+                # --- Cross‑validated base predictions (for meta) ---
                 from sklearn.model_selection import cross_val_predict
+
+                lr_cv = LogisticRegression(max_iter=1000)
+                y_prob_lr_oof = cross_val_predict(lr_cv, X_hist, y_hist, cv=5, method='predict_proba')[:, 1]
+
+                k = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_2d")
                 scaler_knn = StandardScaler()
                 X_hist_scaled = scaler_knn.fit_transform(X_hist)
                 knn_cv = KNeighborsClassifier(n_neighbors=k, weights='distance')
-                y_prob_knn = cross_val_predict(knn_cv, X_hist_scaled, y_hist, cv=5, method='predict_proba')[:, 1]
-                y_prob_knn = np.clip(y_prob_knn, 0.1, 0.9)
-                ll_knn = log_loss(y_hist, y_prob_knn)
-                bs_knn = brier_score_loss(y_hist, y_prob_knn)
+                y_prob_knn_oof = cross_val_predict(knn_cv, X_hist_scaled, y_hist, cv=5, method='predict_proba')[:, 1]
+                y_prob_knn_oof = np.clip(y_prob_knn_oof, 0.1, 0.9)
 
-                # Train final KNN on all data for prediction
+                # --- Train base models on all data ---
+                logreg = LogisticRegression(max_iter=1000)
+                logreg.fit(X_hist, y_hist)
                 knn = KNeighborsClassifier(n_neighbors=k, weights='distance')
                 knn.fit(X_hist_scaled, y_hist)
 
-                # Scatter plot with decision boundary
+                # In‑sample LR metrics
+                y_prob_lr_in = logreg.predict_proba(X_hist)[:, 1]
+                ll_lr = log_loss(y_hist, y_prob_lr_in)
+                bs_lr = brier_score_loss(y_hist, y_prob_lr_in)
+
+                # OOF KNN metrics
+                ll_knn = log_loss(y_hist, y_prob_knn_oof)
+                bs_knn = brier_score_loss(y_hist, y_prob_knn_oof)
+
+                # --- Meta‑model ---
+                meta_X = np.column_stack([y_prob_lr_oof, y_prob_knn_oof])
+                meta_model = LogisticRegression(max_iter=1000)
+                meta_model.fit(meta_X, y_hist)
+                y_prob_meta_oof = meta_model.predict_proba(meta_X)[:, 1]
+                ll_meta = log_loss(y_hist, y_prob_meta_oof)
+                bs_meta = brier_score_loss(y_hist, y_prob_meta_oof)
+
+                # Scatter plot (LR decision boundary for visual)
                 plot_data = data[[pred_x, pred_y, 'DetailedResult', 'Fight', 'Win?']].copy()
                 fig = px.scatter(
                     plot_data, x=pred_x, y=pred_y,
                     color='DetailedResult',
                     color_discrete_map=color_map,
                     hover_data=['Fight'],
-                    title=f"Logistic Regression (LR) & KNN (k={k})"
+                    title=f"Logistic Regression (LR) & KNN (k={k}) + Meta"
                 )
-
-                # Decision boundary (robust)
                 try:
                     x_min, x_max = X_hist[:, 0].min() - 0.5, X_hist[:, 0].max() + 0.5
                     y_min, y_max = X_hist[:, 1].min() - 0.5, X_hist[:, 1].max() + 0.5
@@ -839,14 +851,19 @@ if len(available_pred) >= 2:
 
                 st.plotly_chart(fig, use_container_width=True)
 
-                col_m1, col_m2 = st.columns(2)
+                # Metrics display
+                col_m1, col_m2, col_m3 = st.columns(3)
                 with col_m1:
                     st.metric("LR Log‑loss", f"{ll_lr:.3f}")
                     st.metric("LR Brier", f"{bs_lr:.3f}")
                 with col_m2:
                     st.metric("KNN Log‑loss", f"{ll_knn:.3f}")
                     st.metric("KNN Brier", f"{bs_knn:.3f}")
+                with col_m3:
+                    st.metric("Meta Log‑loss", f"{ll_meta:.3f}")
+                    st.metric("Meta Brier", f"{bs_meta:.3f}")
 
+                # Upcoming fight prediction
                 st.subheader("Win Probability Estimate")
                 all_upcoming_reg = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
                 if not all_upcoming_reg.empty:
@@ -860,8 +877,8 @@ if len(available_pred) >= 2:
                                 up_val = np.array([[fighter_row[pred_x], fighter_row[pred_y]]])
                                 prob_lr = logreg.predict_proba(up_val)[0, 1]
                                 up_val_scaled = scaler_knn.transform(up_val)
-                                prob_knn = knn.predict_proba(up_val_scaled)[0, 1]
-                                prob_knn = np.clip(prob_knn, 0.1, 0.9)
+                                prob_knn = np.clip(knn.predict_proba(up_val_scaled)[0, 1], 0.1, 0.9)
+                                prob_meta = np.clip(meta_model.predict_proba(np.column_stack([prob_lr, prob_knn]).reshape(1, -1))[0, 1], 0.1, 0.9)
 
                                 full_hist = data[data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
                                 if len(full_hist) > 0:
@@ -870,18 +887,22 @@ if len(available_pred) >= 2:
                                     recent_wr = (recent['Win?'] == 'Yes').mean() * 100 if len(recent) > 0 else 0.0
                                     shrunk_lr = (prior_weight * (overall_wr/100) + prob_lr) / (prior_weight + 1)
                                     shrunk_knn = (prior_weight * (overall_wr/100) + prob_knn) / (prior_weight + 1)
+                                    shrunk_meta = (prior_weight * (overall_wr/100) + prob_meta) / (prior_weight + 1)
                                 else:
                                     overall_wr = recent_wr = 0.0
-                                    shrunk_lr = shrunk_knn = None
+                                    shrunk_lr = shrunk_knn = shrunk_meta = None
 
-                                col_p1, col_p2, col_p3 = st.columns(3)
+                                col_p1, col_p2, col_p3, col_p4 = st.columns(4)
                                 with col_p1:
-                                    st.metric("LR win prob", f"{prob_lr:.1%}")
+                                    st.metric("LR", f"{prob_lr:.1%}")
                                     st.metric("LR shrunken", f"{shrunk_lr:.1%}" if shrunk_lr is not None else "N/A")
                                 with col_p2:
-                                    st.metric("KNN win prob", f"{prob_knn:.1%}")
+                                    st.metric("KNN", f"{prob_knn:.1%}")
                                     st.metric("KNN shrunken", f"{shrunk_knn:.1%}" if shrunk_knn is not None else "N/A")
                                 with col_p3:
+                                    st.metric("Meta", f"{prob_meta:.1%}")
+                                    st.metric("Meta shrunken", f"{shrunk_meta:.1%}" if shrunk_meta is not None else "N/A")
+                                with col_p4:
                                     st.metric("Overall Win% (dataset)", f"{overall_wr:.1f}%")
                                     st.metric("Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
                             else:
@@ -891,9 +912,9 @@ if len(available_pred) >= 2:
 else:
     st.warning("Not enough numerical features for win/loss prediction.")
 
-# ---------- 3D Win/Loss Prediction (Logistic Regression + Weighted KNN) ----------
+# ---------- 3D Win/Loss Prediction (LR + Weighted KNN + Meta) ----------
 st.header("3D Win/Loss Prediction")
-st.markdown("Select three numerical variables. Logistic Regression and KNN models are fitted. Log‑loss, Brier score, win probability, and dataset‑wide win rates are shown.")
+st.markdown("Select three numerical variables. Logistic Regression, Weighted KNN, and a Meta‑model are fitted. Log‑loss, Brier score, win probability, and dataset‑wide win rates are shown.")
 
 three_d_features = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
 if len(three_d_features) >= 3:
@@ -915,28 +936,43 @@ if len(three_d_features) >= 3:
             X_hist3d = hist3d[[x3d, y3d, z3d]].values
             y_hist3d = hist3d['target'].values
 
-            # Logistic Regression
-            logreg3d = LogisticRegression(max_iter=1000)
-            logreg3d.fit(X_hist3d, y_hist3d)
-            y_prob_lr3d = logreg3d.predict_proba(X_hist3d)[:, 1]
-            ll_lr3d = log_loss(y_hist3d, y_prob_lr3d)
-            bs_lr3d = brier_score_loss(y_hist3d, y_prob_lr3d)
+            # --- Cross‑validated base predictions ---
+            from sklearn.model_selection import cross_val_predict
 
-            # KNN (weighted, scaled, cross‑validated, clipped)
+            lr_cv3d = LogisticRegression(max_iter=1000)
+            y_prob_lr3d_oof = cross_val_predict(lr_cv3d, X_hist3d, y_hist3d, cv=5, method='predict_proba')[:, 1]
+
             k3d = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_3d")
             scaler_knn3d = StandardScaler()
             X_hist_scaled3d = scaler_knn3d.fit_transform(X_hist3d)
             knn_cv3d = KNeighborsClassifier(n_neighbors=k3d, weights='distance')
-            from sklearn.model_selection import cross_val_predict
-            y_prob_knn3d = cross_val_predict(knn_cv3d, X_hist_scaled3d, y_hist3d, cv=5, method='predict_proba')[:, 1]
-            y_prob_knn3d = np.clip(y_prob_knn3d, 0.1, 0.9)
-            ll_knn3d = log_loss(y_hist3d, y_prob_knn3d)
-            bs_knn3d = brier_score_loss(y_hist3d, y_prob_knn3d)
+            y_prob_knn3d_oof = cross_val_predict(knn_cv3d, X_hist_scaled3d, y_hist3d, cv=5, method='predict_proba')[:, 1]
+            y_prob_knn3d_oof = np.clip(y_prob_knn3d_oof, 0.1, 0.9)
 
-            # Final KNN for prediction
+            # --- Train base models on all data ---
+            logreg3d = LogisticRegression(max_iter=1000)
+            logreg3d.fit(X_hist3d, y_hist3d)
             knn3d = KNeighborsClassifier(n_neighbors=k3d, weights='distance')
             knn3d.fit(X_hist_scaled3d, y_hist3d)
 
+            # In‑sample LR metrics
+            y_prob_lr3d_in = logreg3d.predict_proba(X_hist3d)[:, 1]
+            ll_lr3d = log_loss(y_hist3d, y_prob_lr3d_in)
+            bs_lr3d = brier_score_loss(y_hist3d, y_prob_lr3d_in)
+
+            # OOF KNN metrics
+            ll_knn3d = log_loss(y_hist3d, y_prob_knn3d_oof)
+            bs_knn3d = brier_score_loss(y_hist3d, y_prob_knn3d_oof)
+
+            # --- Meta‑model ---
+            meta_X3d = np.column_stack([y_prob_lr3d_oof, y_prob_knn3d_oof])
+            meta_model3d = LogisticRegression(max_iter=1000)
+            meta_model3d.fit(meta_X3d, y_hist3d)
+            y_prob_meta3d_oof = meta_model3d.predict_proba(meta_X3d)[:, 1]
+            ll_meta3d = log_loss(y_hist3d, y_prob_meta3d_oof)
+            bs_meta3d = brier_score_loss(y_hist3d, y_prob_meta3d_oof)
+
+            # Plot
             plot_data3d = data[[x3d, y3d, z3d, 'DetailedResult', 'Fight']].dropna()
             fig3d = px.scatter_3d(
                 plot_data3d,
@@ -948,14 +984,19 @@ if len(three_d_features) >= 3:
             )
             st.plotly_chart(fig3d, use_container_width=True)
 
-            col_m1, col_m2 = st.columns(2)
+            # Metrics
+            col_m1, col_m2, col_m3 = st.columns(3)
             with col_m1:
                 st.metric("LR Log‑loss", f"{ll_lr3d:.3f}")
                 st.metric("LR Brier", f"{bs_lr3d:.3f}")
             with col_m2:
                 st.metric("KNN Log‑loss", f"{ll_knn3d:.3f}")
                 st.metric("KNN Brier", f"{bs_knn3d:.3f}")
+            with col_m3:
+                st.metric("Meta Log‑loss", f"{ll_meta3d:.3f}")
+                st.metric("Meta Brier", f"{bs_meta3d:.3f}")
 
+            # Upcoming fight
             st.subheader("Win Probability Estimate")
             all_upcoming_3d = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
             if not all_upcoming_3d.empty:
@@ -970,8 +1011,8 @@ if len(three_d_features) >= 3:
                             up_val3d = np.array([fighter_row[feats].values])
                             prob_lr = logreg3d.predict_proba(up_val3d)[0, 1]
                             up_val_scaled3d = scaler_knn3d.transform(up_val3d)
-                            prob_knn = knn3d.predict_proba(up_val_scaled3d)[0, 1]
-                            prob_knn = np.clip(prob_knn, 0.1, 0.9)
+                            prob_knn = np.clip(knn3d.predict_proba(up_val_scaled3d)[0, 1], 0.1, 0.9)
+                            prob_meta = np.clip(meta_model3d.predict_proba(np.column_stack([prob_lr, prob_knn]).reshape(1, -1))[0, 1], 0.1, 0.9)
 
                             full_hist = data[data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
                             if len(full_hist) > 0:
@@ -980,18 +1021,22 @@ if len(three_d_features) >= 3:
                                 recent_wr = (recent['Win?'] == 'Yes').mean() * 100 if len(recent) > 0 else 0.0
                                 shrunk_lr = (prior_weight * (overall_wr/100) + prob_lr) / (prior_weight + 1)
                                 shrunk_knn = (prior_weight * (overall_wr/100) + prob_knn) / (prior_weight + 1)
+                                shrunk_meta = (prior_weight * (overall_wr/100) + prob_meta) / (prior_weight + 1)
                             else:
                                 overall_wr = recent_wr = 0.0
-                                shrunk_lr = shrunk_knn = None
+                                shrunk_lr = shrunk_knn = shrunk_meta = None
 
-                            col_p1, col_p2, col_p3 = st.columns(3)
+                            col_p1, col_p2, col_p3, col_p4 = st.columns(4)
                             with col_p1:
-                                st.metric("LR win prob", f"{prob_lr:.1%}")
+                                st.metric("LR", f"{prob_lr:.1%}")
                                 st.metric("LR shrunken", f"{shrunk_lr:.1%}" if shrunk_lr is not None else "N/A")
                             with col_p2:
-                                st.metric("KNN win prob", f"{prob_knn:.1%}")
+                                st.metric("KNN", f"{prob_knn:.1%}")
                                 st.metric("KNN shrunken", f"{shrunk_knn:.1%}" if shrunk_knn is not None else "N/A")
                             with col_p3:
+                                st.metric("Meta", f"{prob_meta:.1%}")
+                                st.metric("Meta shrunken", f"{shrunk_meta:.1%}" if shrunk_meta is not None else "N/A")
+                            with col_p4:
                                 st.metric("Overall Win% (dataset)", f"{overall_wr:.1f}%")
                                 st.metric("Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
                         else:
@@ -1158,7 +1203,7 @@ else:
     st.write("No categorical columns with meaningful variation.")
 
 # =========================================================================
-# SPIDER CHART – FIGHTER‑SIDE FILTERS + LR + WEIGHTED KNN + SIMILARITY + BAYESIAN WIN RATES
+# SPIDER CHART – FIGHTER‑SIDE FILTERS + LR + WEIGHTED KNN + META + SIMILARITY + BAYESIAN WIN RATES
 # =========================================================================
 st.header("Fight Similarity & Comparison (Independent Filters)")
 
@@ -1279,35 +1324,53 @@ else:
                 X_spider = spider_hist_clean[selected_vars].values
                 y_spider = spider_hist_clean['target'].values
 
-                # Logistic Regression
-                lr_spider = LogisticRegression(max_iter=1000)
-                lr_spider.fit(X_spider, y_spider)
-                y_prob_lr = lr_spider.predict_proba(X_spider)[:, 1]
-                ll_lr_spider = log_loss(y_spider, y_prob_lr)
-                bs_lr_spider = brier_score_loss(y_spider, y_prob_lr)
+                # --- Cross‑validated base predictions (for meta) ---
+                from sklearn.model_selection import cross_val_predict
 
-                # KNN (weighted, scaled, cross‑validated, clipped)
+                lr_cv_spider = LogisticRegression(max_iter=1000)
+                y_prob_lr_spider_oof = cross_val_predict(lr_cv_spider, X_spider, y_spider, cv=5, method='predict_proba')[:, 1]
+
                 k_spider = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_spider")
                 scaler_knn_spider = StandardScaler()
                 X_spider_scaled_knn = scaler_knn_spider.fit_transform(X_spider)
                 knn_cv_spider = KNeighborsClassifier(n_neighbors=k_spider, weights='distance')
-                from sklearn.model_selection import cross_val_predict
-                y_prob_knn_spider = cross_val_predict(knn_cv_spider, X_spider_scaled_knn, y_spider, cv=5, method='predict_proba')[:, 1]
-                y_prob_knn_spider = np.clip(y_prob_knn_spider, 0.1, 0.9)
-                ll_knn_spider = log_loss(y_spider, y_prob_knn_spider)
-                bs_knn_spider = brier_score_loss(y_spider, y_prob_knn_spider)
+                y_prob_knn_spider_oof = cross_val_predict(knn_cv_spider, X_spider_scaled_knn, y_spider, cv=5, method='predict_proba')[:, 1]
+                y_prob_knn_spider_oof = np.clip(y_prob_knn_spider_oof, 0.1, 0.9)
 
-                # Final KNN for prediction
+                # Train base models on all data
+                lr_spider = LogisticRegression(max_iter=1000)
+                lr_spider.fit(X_spider, y_spider)
                 knn_spider = KNeighborsClassifier(n_neighbors=k_spider, weights='distance')
                 knn_spider.fit(X_spider_scaled_knn, y_spider)
 
-                col_sm1, col_sm2 = st.columns(2)
+                # In‑sample LR metrics
+                y_prob_lr_spider_in = lr_spider.predict_proba(X_spider)[:, 1]
+                ll_lr_spider = log_loss(y_spider, y_prob_lr_spider_in)
+                bs_lr_spider = brier_score_loss(y_spider, y_prob_lr_spider_in)
+
+                # OOF KNN metrics
+                ll_knn_spider = log_loss(y_spider, y_prob_knn_spider_oof)
+                bs_knn_spider = brier_score_loss(y_spider, y_prob_knn_spider_oof)
+
+                # --- Meta‑model ---
+                meta_X_spider = np.column_stack([y_prob_lr_spider_oof, y_prob_knn_spider_oof])
+                meta_spider = LogisticRegression(max_iter=1000)
+                meta_spider.fit(meta_X_spider, y_spider)
+                y_prob_meta_spider_oof = meta_spider.predict_proba(meta_X_spider)[:, 1]
+                ll_meta_spider = log_loss(y_spider, y_prob_meta_spider_oof)
+                bs_meta_spider = brier_score_loss(y_spider, y_prob_meta_spider_oof)
+
+                # Display metrics
+                col_sm1, col_sm2, col_sm3 = st.columns(3)
                 with col_sm1:
                     st.metric("LogReg Log‑loss", f"{ll_lr_spider:.3f}")
                     st.metric("LogReg Brier", f"{bs_lr_spider:.3f}")
                 with col_sm2:
                     st.metric("KNN Log‑loss", f"{ll_knn_spider:.3f}")
                     st.metric("KNN Brier", f"{bs_knn_spider:.3f}")
+                with col_sm3:
+                    st.metric("Meta Log‑loss", f"{ll_meta_spider:.3f}")
+                    st.metric("Meta Brier", f"{bs_meta_spider:.3f}")
 
                 # Pick upcoming fight
                 up_ids = sorted(spider_upcoming['FightID'].unique())
@@ -1340,22 +1403,27 @@ else:
                     prob_lr_f1 = lr_spider.predict_proba(up_vec)[0, 1]
                     up_vec_scaled = scaler_knn_spider.transform(up_vec)
                     prob_knn_f1 = np.clip(knn_spider.predict_proba(up_vec_scaled)[0, 1], 0.1, 0.9)
+                    prob_meta_f1 = np.clip(meta_spider.predict_proba(np.column_stack([prob_lr_f1, prob_knn_f1]).reshape(1, -1))[0, 1], 0.1, 0.9)
 
-                    # Dataset‑wide win rates (based ONLY on rows that passed the mask)
+                    # Dataset‑wide win rates (based on filtered rows)
                     overall_wr_spider = (spider_hist_filtered['Win?'] == 'Yes').mean() * 100 if len(spider_hist_filtered) > 0 else 0.0
                     recent_spider = spider_hist_filtered.tail(recent_window)
                     recent_wr_spider = (recent_spider['Win?'] == 'Yes').mean() * 100 if len(recent_spider) > 0 else 0.0
                     shrunk_lr_spider = (prior_weight * (overall_wr_spider / 100) + prob_lr_f1) / (prior_weight + 1)
                     shrunk_knn_spider = (prior_weight * (overall_wr_spider / 100) + prob_knn_f1) / (prior_weight + 1)
+                    shrunk_meta_spider = (prior_weight * (overall_wr_spider / 100) + prob_meta_f1) / (prior_weight + 1)
 
-                    col_sp1, col_sp2, col_sp3 = st.columns(3)
+                    col_sp1, col_sp2, col_sp3, col_sp4 = st.columns(4)
                     with col_sp1:
-                        st.metric("LogReg win prob", f"{prob_lr_f1:.1%}")
+                        st.metric("LogReg", f"{prob_lr_f1:.1%}")
                         st.metric("LogReg shrunken", f"{shrunk_lr_spider:.1%}")
                     with col_sp2:
-                        st.metric("KNN win prob", f"{prob_knn_f1:.1%}")
+                        st.metric("KNN", f"{prob_knn_f1:.1%}")
                         st.metric("KNN shrunken", f"{shrunk_knn_spider:.1%}")
                     with col_sp3:
+                        st.metric("Meta", f"{prob_meta_f1:.1%}")
+                        st.metric("Meta shrunken", f"{shrunk_meta_spider:.1%}")
+                    with col_sp4:
                         st.metric("Overall Win% (filtered)", f"{overall_wr_spider:.1f}%")
                         st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr_spider:.1f}%")
 
