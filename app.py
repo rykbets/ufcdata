@@ -695,11 +695,61 @@ display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
 
 # =========================================================================
+# COMMON DEFINITIONS (keep this!)
+# =========================================================================
+core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
+        'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev', 'Avg3DaysGap',
+        'FightNumber', 'Opponent_FightNumber', 'FighterOddsNum', 'PrevFighterOddsNum',
+        'CareerWinPct', 'Opponent_CareerWinPct']
+career_avg = [c for c in data.columns if c.startswith('CareerAvg_') and not c.startswith('Opponent_CareerAvg_')]
+opp_career_avg = [c for c in data.columns if c.startswith('Opponent_CareerAvg_')]
+diff_cols = [c for c in data.columns if c.endswith('_Diff')]
+numerical_features = list(dict.fromkeys(
+    c for c in core + career_avg + opp_career_avg + diff_cols
+    if c in data.columns and not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')
+    and data[c].nunique(dropna=True) >= 2
+))
+
+def detailed_result(row):
+    win_raw = row.get('Win?')
+    if win_raw is None or pd.isna(win_raw) or str(win_raw).strip().lower() in ('', 'none', 'nan'):
+        return 'Upcoming'
+    win_val = str(win_raw).strip()
+    method = str(row.get('Method', '')).strip().lower()
+    if 'dq' in method or 'disqualif' in method:
+        return 'Win by DQ' if win_val == 'Yes' else 'Loss by DQ'
+    if win_val in ('No Contest', 'NC'):
+        return 'No Contest'
+    if win_val == 'Draw':
+        return 'Draw'
+    if win_val == 'Yes':
+        return 'Win'
+    if win_val == 'No':
+        return 'Loss'
+    return 'Upcoming'
+
+data['DetailedResult'] = data.apply(detailed_result, axis=1)
+data['Fight'] = data['Fighter'].astype(str) + ' vs ' + data['Opponent'].astype(str)
+
+color_map = {
+    'Win': 'green',
+    'Loss': 'red',
+    'Win by DQ': 'limegreen',
+    'Loss by DQ': 'darkred',
+    'No Contest': 'purple',
+    'Upcoming': 'blue',
+    'Draw': 'gray'
+}
+
+# ---------- Bayesian Shrinkage Sliders ----------
+prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight_global")
+recent_window = st.sidebar.slider("Recent fights window", 1, 100, 50, key="recent_win_global")
+
+# =========================================================================
 # 3D LR SCATTERPLOT + PERFORMANCE METRICS + LR COMBO BUILDER
 # =========================================================================
 st.header("3D LR Win/Loss Prediction & Best LR Combinations")
 
-# --- 3D Scatter + Logistic Regression ---
 three_d_features = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
 if len(three_d_features) >= 3:
     col1, col2, col3 = st.columns(3)
@@ -711,7 +761,7 @@ if len(three_d_features) >= 3:
         z_lr = st.selectbox("Z", three_d_features, key="lr_z")
 
     if x_lr and y_lr and z_lr:
-        # 3D scatter plot
+        # 3D scatter
         plot_data = data[[x_lr, y_lr, z_lr, 'DetailedResult', 'Fight']].dropna()
         if len(plot_data) < 10:
             st.warning("Not enough data for 3D plot.")
@@ -726,7 +776,7 @@ if len(three_d_features) >= 3:
             )
             st.plotly_chart(fig, use_container_width=True)
 
-        # Fit Logistic Regression and show performance metrics
+        # Logistic Regression + metrics
         hist_lr = data[data['Win?'].isin(['Yes','No'])].copy()
         hist_lr = hist_lr[[x_lr, y_lr, z_lr, 'Win?']].dropna()
         if len(hist_lr) < 10 or hist_lr['Win?'].nunique() < 2:
@@ -758,7 +808,6 @@ if len(three_d_features) >= 3:
                     if len(up_rows_lr) == 2:
                         fighter_row = up_rows_lr.iloc[0]
                         feats = [x_lr, y_lr, z_lr]
-                        # safe check – avoids KeyError
                         if all(col in fighter_row.index and pd.notna(fighter_row[col]) for col in feats):
                             up_val_lr = np.array([fighter_row[feats].values])
                             prob_lr = lr_model.predict_proba(up_val_lr)[0, 1]
@@ -789,10 +838,26 @@ if len(three_d_features) >= 3:
     st.subheader("LR 3‑Variable Combinations (Brier)")
     combo_candidates_lr = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
 
-    if not mi_df.empty:
-        top_features_lr = mi_df['Feature'].tolist()
-    else:
-        top_features_lr = combo_candidates_lr
+    # mi_df might not exist yet – we'll compute it on the fly if needed
+    if 'mi_df' not in dir():
+        importance_features = [c for c in numerical_features
+                               if not c.startswith('Opponent_')
+                               and not c.endswith('_Diff')
+                               and not re.match(r'Prev\d+_', c)]
+        @st.cache_data
+        def numerical_importance(_data, features):
+            hist = _data[_data['Win?'].isin(['Yes','No'])].copy()
+            hist['Target'] = (hist['Win?'] == 'Yes').astype(int)
+            X = hist[features].dropna()
+            y = hist.loc[X.index, 'Target']
+            if len(X) > 10:
+                X_imp = SimpleImputer(strategy='median').fit_transform(X)
+                mi = mutual_info_classif(X_imp, y, discrete_features=False)
+                return pd.DataFrame({'Feature': features, 'Mutual Information': mi}).sort_values('Mutual Information', ascending=False).head(20)
+            return pd.DataFrame()
+        mi_df = numerical_importance(data, importance_features)
+
+    top_features_lr = mi_df['Feature'].tolist() if not mi_df.empty else combo_candidates_lr
 
     num_top_lr = st.slider("Top features to test", 5, min(30, len(top_features_lr)), 10, key="lr_combo_top")
     candidates_lr = top_features_lr[:num_top_lr]
