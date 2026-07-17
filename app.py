@@ -801,17 +801,17 @@ if len(three_d_features) >= 3:
             else:
                 overall_wr = recent_wr = 0.0
 
-            # Display metrics
+            # Display metrics (always visible)
             col_m1, col_m2, col_m3 = st.columns(3)
             with col_m1:
                 st.metric("LR Log‑loss", f"{ll_lr:.3f}")
-                st.metric("LR Brier", f"{bs_lr:.3f}")
             with col_m2:
-                st.metric("Overall Win%", f"{overall_wr:.1f}%")
+                st.metric("LR Brier", f"{bs_lr:.3f}")
             with col_m3:
+                st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # Upcoming fight prediction
+            # Upcoming fight prediction (only if an upcoming fight is selected)
             st.subheader("LR Win Probability Estimate")
             all_upcoming_lr = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
             if not all_upcoming_lr.empty:
@@ -823,7 +823,7 @@ if len(three_d_features) >= 3:
                         fighter_row = up_rows_lr.iloc[0]
                         feats = [x_lr, y_lr, z_lr]
 
-                        # 100% safe check
+                        # Safe check – no hashing, no contains
                         missing = False
                         for col in feats:
                             try:
@@ -857,7 +857,7 @@ if len(three_d_features) >= 3:
     st.subheader("LR 3‑Variable Combinations (Brier)")
     combo_candidates_lr = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
 
-    # Ensure mi_df exists
+    # Ensure mi_df exists (compute if needed)
     if 'mi_df' not in dir():
         importance_features = [c for c in numerical_features
                                if not c.startswith('Opponent_')
