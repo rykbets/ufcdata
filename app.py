@@ -809,7 +809,7 @@ if len(three_d_features) >= 3:
                         fighter_row = up_rows_lr.iloc[0]
                         feats = [x_lr, y_lr, z_lr]
                         # ROBUST CHECK – avoids the earlier TypeError
-                        if all(col in fighter_row and pd.notna(fighter_row[col]) for col in feats):
+                        if all(c in fighter_row.index and not pd.isna(fighter_row[c]) for c in feats):
                             up_val_lr = np.array([fighter_row[feats].values])
                             prob_lr = lr_model.predict_proba(up_val_lr)[0, 1]
 
