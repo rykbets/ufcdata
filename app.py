@@ -898,7 +898,7 @@ if len(three_d_features) >= 3:
             else:
                 st.write("No upcoming fights available.")
 
-    # LR Combo Builder
+    # LR Combo Builder (persisted)
     st.subheader("LR 3‑Variable Combinations (Brier)")
     combo_candidates_lr = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
 
@@ -1047,7 +1047,7 @@ if len(three_d_features) >= 3:
             else:
                 st.write("No upcoming fights available.")
 
-    # KNN Combo Builder
+    # KNN Combo Builder (persisted)
     st.subheader("KNN 3‑Variable Combinations (Brier)")
     combo_candidates_knn = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
 
