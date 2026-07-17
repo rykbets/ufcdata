@@ -872,7 +872,8 @@ if len(three_d_features) >= 3:
                     if len(up_rows_lr) == 2:
                         fighter_row = up_rows_lr.iloc[0]
                         feats = [x_lr, y_lr, z_lr]
-                        if set(feats).issubset(fighter_row.index) and all(pd.notna(fighter_row[f]) for f in feats):
+                        missing = [c for c in feats if c not in fighter_row.index or pd.isna(fighter_row[c])]
+                        if len(missing) == 0:
                             up_val_lr = np.array([fighter_row[feats].values])
                             prob_lr = lr_model.predict_proba(up_val_lr)[0, 1]
 
@@ -1020,7 +1021,8 @@ if len(three_d_features) >= 3:
                     if len(up_rows_knn) == 2:
                         fighter_row = up_rows_knn.iloc[0]
                         feats = [x_knn, y_knn, z_knn]
-                        if set(feats).issubset(fighter_row.index) and all(pd.notna(fighter_row[f]) for f in feats):
+                        missing = [c for c in feats if c not in fighter_row.index or pd.isna(fighter_row[c])]
+                        if len(missing) == 0:
                             up_val_knn = np.array([fighter_row[feats].values])
                             up_val_scaled = scaler_knn.transform(up_val_knn)
                             prob_knn = np.clip(knn_model.predict_proba(up_val_scaled)[0, 1], 0.1, 0.9)
