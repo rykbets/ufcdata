@@ -1095,63 +1095,94 @@ if len(three_d_features) >= 3:
 # --- KNN 3‑Variable Combination Builder (Platt‑scaled, cross‑validated) ---
 # (keep the rest of your existing combination builder code untouched)
 
-    # --- KNN 3‑Variable Combination Builder (Platt‑scaled, cross‑validated) ---
-    st.subheader("KNN 3‑Variable Combinations (Brier)")
-    combo_candidates_knn = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
+# --- KNN 3‑Variable Combination Builder (IN‑SAMPLE Brier, Platt‑scaled) ---
+st.subheader("KNN 3‑Variable Combinations (Brier, In‑Sample)")
 
-    if not mi_df.empty:
-        top_features_knn = mi_df['Feature'].tolist()
-    else:
-        top_features_knn = combo_candidates_knn
+combo_candidates_knn = [c for c in numerical_features
+                        if c != 'FighterOddsNum'
+                        and c in data.columns
+                        and data[c].nunique(dropna=True) >= 2]
 
-    num_top_knn = st.slider("Top features to test", 5, min(30, len(top_features_knn)), 10, key="knn_combo_top")
-    candidates_knn = top_features_knn[:num_top_knn]
-    candidates_knn = [c for c in candidates_knn if c != 'FighterOddsNum']
+if not mi_df.empty:
+    top_features_knn = mi_df['Feature'].tolist()
+else:
+    top_features_knn = combo_candidates_knn
 
-    k_combo = st.slider("KNN neighbors (combo builder)", 1, 20, 5, key="knn_combo_k")
+num_top_knn = st.slider("Top features to test", 5, min(30, len(top_features_knn)), 10, key="knn_combo_top")
+candidates_knn = top_features_knn[:num_top_knn]
+candidates_knn = [c for c in candidates_knn if c != 'FighterOddsNum']
 
-    data_fp_knn = hash(str(data.shape))
-    if "knn_combo_results" not in st.session_state:
-        st.session_state.knn_combo_results = None
-        st.session_state.knn_combo_hash = data_fp_knn
-    if st.session_state.knn_combo_hash != data_fp_knn:
-        st.session_state.knn_combo_results = None
-        st.session_state.knn_combo_hash = data_fp_knn
+k_combo = st.slider("KNN neighbors (combo builder)", 1, 20, 5, key="knn_combo_k")
 
-    if len(candidates_knn) >= 3:
-        if st.button("Compute KNN 3‑Var Combos", key="knn_combo_btn"):
-            with st.spinner("Testing 3‑variable Weighted KNN combos…"):
-                hist = data[data['Win?'].isin(['Yes','No'])].copy()
-                hist['WinNum'] = (hist['Win?'] == 'Yes').astype(int)
+# Persist results across variable changes
+data_fp_knn = hash(str(data.shape))
+if "knn_combo_results" not in st.session_state:
+    st.session_state.knn_combo_results = None
+    st.session_state.knn_combo_hash = data_fp_knn
+if st.session_state.knn_combo_hash != data_fp_knn:
+    st.session_state.knn_combo_results = None
+    st.session_state.knn_combo_hash = data_fp_knn
 
-                results = []
-                for combo in itertools.combinations(candidates_knn, 3):
-                    sub = hist[list(combo) + ['WinNum']].dropna()
-                    if len(sub) < 10 or sub['WinNum'].nunique() < 2:
-                        continue
-                    X = sub[list(combo)].values
-                    y = sub['WinNum'].values
-                    try:
-                        scaler = StandardScaler()
-                        X_scaled = scaler.fit_transform(X)
+if len(candidates_knn) >= 3:
+    if st.button("Compute KNN 3‑Var Combos (In‑Sample)", key="knn_combo_btn"):
+        with st.spinner("Testing 3‑variable KNN combos (in‑sample)…"):
+            hist = data[data['Win?'].isin(['Yes','No'])].copy()
+            hist = hist.loc[:, ~hist.columns.duplicated()]   # deduplicate
+            hist['WinNum'] = (hist['Win?'] == 'Yes').astype(int)
 
-                        base_knn_cv = KNeighborsClassifier(n_neighbors=k_combo, weights='distance')
-                        calibrated_cv = CalibratedClassifierCV(base_knn_cv, method='sigmoid', cv=5)
-                        y_prob = cross_val_predict(calibrated_cv, X_scaled, y, cv=5, method='predict_proba')[:, 1]
-                        y_prob = np.clip(y_prob, 0.1, 0.9)
-                        bs = brier_score_loss(y, y_prob)
-                        results.append({'Variables': ', '.join(combo), 'Brier': bs})
-                    except:
-                        pass
-                if results:
-                    st.session_state.knn_combo_results = pd.DataFrame(results).sort_values('Brier').head(20)
-                else:
-                    st.warning("Could not evaluate any combination.")
+            results = []
+            for combo in itertools.combinations(candidates_knn, 3):
+                # Build clean training set for this combo
+                # Safely extract each feature (first occurrence if duplicate names)
+                def get_col(df, col_name):
+                    if col_name not in df.columns:
+                        return np.full(len(df), np.nan)
+                    sub = df[col_name]
+                    if isinstance(sub, pd.DataFrame):
+                        return sub.iloc[:, 0].to_numpy(dtype=np.float64, na_value=np.nan)
+                    return pd.to_numeric(sub, errors='coerce').to_numpy(dtype=np.float64)
 
-        if st.session_state.knn_combo_results is not None:
-            st.write("**Top 20 3‑Variable Combinations (Brier)**")
-            st.dataframe(st.session_state.knn_combo_results, use_container_width=True)
-    else:
-        st.warning("Not enough features to test (need at least 3).")
+                c1 = get_col(hist, combo[0])
+                c2 = get_col(hist, combo[1])
+                c3 = get_col(hist, combo[2])
+                y = hist['WinNum'].values
+
+                # Drop rows where any feature is NaN
+                mask = ~(np.isnan(c1) | np.isnan(c2) | np.isnan(c3))
+                if mask.sum() < 10 or np.unique(y[mask]).size < 2:
+                    continue
+
+                X = np.column_stack([c1[mask], c2[mask], c3[mask]])
+                y_clean = y[mask]
+
+                try:
+                    # Scale features
+                    scaler = StandardScaler()
+                    X_scaled = scaler.fit_transform(X)
+
+                    # Calibrated KNN (fitted on all data)
+                    base_knn = KNeighborsClassifier(n_neighbors=k_combo, weights='distance')
+                    calibrated = CalibratedClassifierCV(base_knn, method='sigmoid', cv=5)
+                    calibrated.fit(X_scaled, y_clean)
+
+                    # In‑sample predictions
+                    y_prob = calibrated.predict_proba(X_scaled)[:, 1]
+                    y_prob = np.clip(y_prob, 0.1, 0.9)
+
+                    bs = brier_score_loss(y_clean, y_prob)
+                    results.append({'Variables': ', '.join(combo), 'Brier (In‑Sample)': bs})
+                except Exception:
+                    pass
+
+            if results:
+                st.session_state.knn_combo_results = pd.DataFrame(results).sort_values('Brier (In‑Sample)').head(20)
+            else:
+                st.warning("Could not evaluate any combination.")
+
+    if st.session_state.knn_combo_results is not None:
+        st.write("**Top 20 3‑Variable Combinations (Brier, In‑Sample)**")
+        st.dataframe(st.session_state.knn_combo_results, use_container_width=True)
+else:
+    st.warning("Not enough features to test (need at least 3).")
 else:
     st.warning("Not enough numerical features for a 3D plot (need at least 3).")
