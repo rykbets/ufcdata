@@ -814,7 +814,7 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # ----- Upcoming fight prediction (safe column check) -----
+            # ----- Upcoming fight prediction (safe, no hash) -----
             st.subheader("LR Win Probability Estimate")
             all_upcoming = all_fights_display[
                 all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')
@@ -827,31 +827,31 @@ if len(three_d_features) >= 3:
                     if len(up_rows) == 2:
                         fighter_row = up_rows.iloc[0]
 
-                        # Safe check: first verify the columns exist in the row
-                        feats = [x_lr, y_lr, z_lr]
-                        cols_exist = all(col in fighter_row.index for col in feats)
-                        if not cols_exist:
-                            st.warning("Selected fighter does not have all predictor values (column missing).")
-                        else:
-                            # Now check for NaN
-                            if all(pd.notna(fighter_row[col]) for col in feats):
-                                up_val = np.array([[fighter_row[x_lr], fighter_row[y_lr], fighter_row[z_lr]]])
-                                prob_lr = lr_model.predict_proba(up_val)[0, 1]
+                        # Try to predict; catch any missing column or NaN
+                        try:
+                            v1 = fighter_row[x_lr]
+                            v2 = fighter_row[y_lr]
+                            v3 = fighter_row[z_lr]
+                            if pd.isna(v1) or pd.isna(v2) or pd.isna(v3):
+                                raise ValueError("missing value")
 
-                                # Empirical Bayes shrinkage
-                                if recent_count > 0:
-                                    shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
-                                else:
-                                    shrunk_recent = overall_wr
-                                shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
+                            up_val = np.array([[v1, v2, v3]])
+                            prob_lr = lr_model.predict_proba(up_val)[0, 1]
 
-                                col_p1, col_p2 = st.columns(2)
-                                with col_p1:
-                                    st.metric("LR win prob", f"{prob_lr:.1%}")
-                                with col_p2:
-                                    st.metric("LR shrunken", f"{shrunk_prob:.1%}")
+                            # Empirical Bayes shrinkage of recent win rate
+                            if recent_count > 0:
+                                shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
                             else:
-                                st.warning("Selected fighter does not have all predictor values.")
+                                shrunk_recent = overall_wr
+                            shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
+
+                            col_p1, col_p2 = st.columns(2)
+                            with col_p1:
+                                st.metric("LR win prob", f"{prob_lr:.1%}")
+                            with col_p2:
+                                st.metric("LR shrunken", f"{shrunk_prob:.1%}")
+                        except (KeyError, ValueError):
+                            st.warning("Selected fighter does not have all predictor values.")
             else:
                 st.write("No upcoming fights available.")
 
@@ -883,6 +883,15 @@ if len(three_d_features) >= 3:
     candidates = top_feats[:num_top]
     candidates = [c for c in candidates if c != 'FighterOddsNum']
 
+    # Persist results across variable changes (only recompute on button press or data change)
+    data_fp = hash(str(data.shape))
+    if "lr_combo_results" not in st.session_state:
+        st.session_state.lr_combo_results = None
+        st.session_state.lr_combo_hash = data_fp
+    if st.session_state.lr_combo_hash != data_fp:
+        st.session_state.lr_combo_results = None
+        st.session_state.lr_combo_hash = data_fp
+
     if len(candidates) >= 3:
         if st.button("Compute LR 3‑Var Combos", key="lr_combo_btn"):
             with st.spinner("Testing 3‑variable LR combos…"):
@@ -904,11 +913,13 @@ if len(three_d_features) >= 3:
                     except:
                         pass
                 if results:
-                    df = pd.DataFrame(results).sort_values('Brier').head(20)
-                    st.write("**Top 20 3‑Variable Combinations (Brier)**")
-                    st.dataframe(df, use_container_width=True)
+                    st.session_state.lr_combo_results = pd.DataFrame(results).sort_values('Brier').head(20)
                 else:
                     st.warning("Could not evaluate any combination.")
+
+        if st.session_state.lr_combo_results is not None:
+            st.write("**Top 20 3‑Variable Combinations (Brier)**")
+            st.dataframe(st.session_state.lr_combo_results, use_container_width=True)
     else:
         st.warning("Not enough features to test (need at least 3).")
 else:
