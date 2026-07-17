@@ -952,7 +952,7 @@ if len(three_d_features) >= 3:
         z_knn = st.selectbox("Z", three_d_features, key="knn_z")
 
     if x_knn and y_knn and z_knn:
-        # ---------- 3D scatter (identical to LR) ----------
+        # ---------- 3D scatter ----------
         plot_data_knn = data[[x_knn, y_knn, z_knn, 'DetailedResult', 'Fight']].copy()
         plot_data_knn = plot_data_knn.loc[:, ~plot_data_knn.columns.duplicated()].dropna()
         if len(plot_data_knn) < 10:
@@ -968,50 +968,52 @@ if len(three_d_features) >= 3:
             )
             st.plotly_chart(fig_knn, use_container_width=True)
 
-        # ---------- Build training data (EXACTLY 3 columns) ----------
-        hist_all = data[data['Win?'].isin(['Yes', 'No'])].copy()
-        # Keep only rows where the three selected features are not all NaN
-        # We cannot use dropna on the whole subset because duplicates may exist.
-        # Instead, we will build X_train manually column by column.
-        
-        # --- Safe helper: get first occurrence of a column name ---
-        def first_column(df, col_name):
-            """Return the first column that matches col_name as a 1D numpy array."""
-            # Get all columns with that name (a DataFrame if multiple, Series if one)
-            subset = df[col_name]
-            if isinstance(subset, pd.DataFrame):
-                # Take the first column
-                return subset.iloc[:, 0].values.astype(np.float64)
-            else:
-                return subset.values.astype(np.float64)
+        # ---------- Training data: exactly 3 numeric columns ----------
+        hist = data[data['Win?'].isin(['Yes', 'No'])].copy()
 
-        # Build a 3‑column numeric matrix by extracting each feature individually
-        col1_vals = first_column(hist_all, x_knn)
-        col2_vals = first_column(hist_all, y_knn)
-        col3_vals = first_column(hist_all, z_knn)
-        win_vals  = first_column(hist_all, 'Win?')   # will be 'Yes'/'No' strings
-        
-        # Create a clean DataFrame for training
-        temp_df = pd.DataFrame({
-            'f1': col1_vals,
-            'f2': col2_vals,
-            'f3': col3_vals,
+        # Safe helper: get the first occurrence of a column name as a 1D numeric array
+        def get_first_col(df, col_name):
+            if col_name not in df.columns:
+                return np.full(len(df), np.nan)
+            sub = df[col_name]
+            if isinstance(sub, pd.DataFrame):
+                # multiple columns with same name – take first one
+                return sub.iloc[:, 0].to_numpy(dtype=np.float64, na_value=np.nan)
+            return pd.to_numeric(sub, errors='coerce').to_numpy(dtype=np.float64)
+
+        # Extract the three feature columns (always 1D arrays)
+        c1 = get_first_col(hist, x_knn)
+        c2 = get_first_col(hist, y_knn)
+        c3 = get_first_col(hist, z_knn)
+
+        # Target: first occurrence of 'Win?' column (strings)
+        win_col = hist['Win?']
+        if isinstance(win_col, pd.DataFrame):
+            win_vals = win_col.iloc[:, 0].values  # as strings
+        else:
+            win_vals = win_col.values
+
+        # Create clean DataFrame
+        train_df = pd.DataFrame({
+            'f1': c1,
+            'f2': c2,
+            'f3': c3,
             'Win?': win_vals
         }).dropna()
-        
-        if len(temp_df) < 10 or temp_df['Win?'].nunique() < 2:
+
+        if len(train_df) < 10 or train_df['Win?'].nunique() < 2:
             st.warning("Not enough training data for KNN model.")
         else:
-            X_train = temp_df[['f1', 'f2', 'f3']].values.astype(np.float64)
-            y_train = (temp_df['Win?'] == 'Yes').astype(int).values
+            X_train = train_df[['f1', 'f2', 'f3']].values.astype(np.float64)
+            y_train = (train_df['Win?'] == 'Yes').astype(int).values
 
-            # Verify shape (should be (n, 3))
-            st.caption(f"Training matrix shape: {X_train.shape}")   # debug line – keep it
+            # Debug – confirm shape
+            st.caption(f"Training matrix shape: {X_train.shape}")
 
             # ----- KNN hyperparameter -----
             k_knn = st.slider("KNN neighbors (model)", 1, 20, 5, key="knn_model_k")
 
-            # ----- Fit model -----
+            # ----- Fit scaler and model -----
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X_train)
 
@@ -1058,8 +1060,8 @@ if len(three_d_features) >= 3:
                         means = X_train.mean(axis=0)
                         vals = []
                         for i, col_name in enumerate([x_knn, y_knn, z_knn]):
-                            # Extract fighter's value (first occurrence if duplicated)
-                            raw = first_column(pd.DataFrame(fighter).T, col_name)[0] if col_name in fighter else np.nan
+                            # Get fighter's value – first occurrence
+                            raw = get_first_col(pd.DataFrame(fighter).T, col_name)[0]
                             try:
                                 v = float(raw)
                                 if np.isnan(v):
@@ -1070,12 +1072,12 @@ if len(three_d_features) >= 3:
 
                         up_arr = np.array([vals], dtype=np.float64)
 
-                        # Use the exact same scaler (fitted on 3 features)
+                        # Scale with the SAME scaler (fitted on 3 features)
                         up_scaled = scaler.transform(up_arr)
                         prob_knn = model.predict_proba(up_scaled)[0, 1]
                         prob_knn = np.clip(prob_knn, 0.1, 0.9)
 
-                        # Shrinkage
+                        # Empirical Bayes shrinkage
                         if recent_count > 0:
                             shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
                         else:
