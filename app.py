@@ -776,7 +776,7 @@ if len(three_d_features) >= 3:
             )
             st.plotly_chart(fig, use_container_width=True)
 
-        # Logistic Regression + dataset‑wide metrics (always visible)
+        # ----- Logistic Regression + dataset‑wide metrics (always visible) -----
         hist_lr = data[data['Win?'].isin(['Yes','No'])].copy()
         hist_lr = hist_lr[[x_lr, y_lr, z_lr, 'Win?']].dropna()
         if len(hist_lr) < 10 or hist_lr['Win?'].nunique() < 2:
@@ -801,7 +801,7 @@ if len(three_d_features) >= 3:
             else:
                 overall_wr = recent_wr = 0.0
 
-            # Display metrics (always visible)
+            # ---- CORE METRICS (always displayed) ----
             col_m1, col_m2, col_m3 = st.columns(3)
             with col_m1:
                 st.metric("LR Log‑loss", f"{ll_lr:.3f}")
@@ -811,7 +811,7 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # Upcoming fight prediction (only if an upcoming fight is selected)
+            # ----- Upcoming fight prediction (optional) -----
             st.subheader("LR Win Probability Estimate")
             all_upcoming_lr = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
             if not all_upcoming_lr.empty:
