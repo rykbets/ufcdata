@@ -1159,11 +1159,11 @@ if len(three_d_features) >= 3:
 else:
     st.warning("Not enough numerical features for a 3D plot (need at least 3).")
 # =========================================================================
-# FEATURE IMPORTANCE CHARTS (Numerical & Categorical) – APPLIED TO FILTERS
+# FEATURE IMPORTANCE CHARTS (Numerical & Categorical) – FILTER‑AWARE
 # =========================================================================
 st.header("Top 20 Feature Importance (Current Filter Set)")
 
-# Only historical fights (Win/Loss) from the **already filtered** data
+# Only historical fights from the already filtered data
 hist = data[data['Win?'].isin(['Yes', 'No'])].copy()
 
 if len(hist) < 10:
@@ -1172,8 +1172,6 @@ else:
     hist['Target'] = (hist['Win?'] == 'Yes').astype(int)
 
     # -------- Numerical features --------
-    # Use the same numerical_features list defined earlier, but only those
-    # present in hist and with enough variation
     num_feats = [c for c in numerical_features if c in hist.columns and hist[c].nunique(dropna=True) >= 2]
     if num_feats:
         X_num = hist[num_feats].dropna()
@@ -1197,20 +1195,32 @@ else:
     else:
         st.warning("No numerical features available after filtering.")
 
-    # -------- Categorical features --------
-    exclude_cols = ['FightID', 'Fighter', 'Opponent', 'FightDate', 'Win?', 'Method',
-                    'DetailedResult', 'Fight', 'FighterOddsBFO', 'OpponentOddsBFO',
-                    'EventCountry', 'Country', 'HometownFighter', 'Opponent_Hometown',
-                    'Stance', 'WC', 'Title', 'ScheduledRounds']
-    exclude_patterns = [r'Prev\d+_Outcome', r'Career\d+_Outcome', r'Opponent_Prev\d+_Outcome',
-                        r'Opponent_Career\d+_Outcome', r'Prev\d+_Title', r'Opponent_Prev\d+_Title']
+    # -------- Categorical features (strict exclusion) --------
+    # Columns to always drop
+    exclude_cols = [
+        'FightID', 'Fighter', 'Opponent', 'FightDate', 'Win?', 'Method',
+        'DetailedResult', 'Fight', 'FighterOddsBFO', 'OpponentOddsBFO',
+        'EventCountry', 'Country', 'HometownFighter', 'Opponent_Hometown',
+        'Stance', 'WC', 'Title', 'ScheduledRounds'
+    ]
+    # Exclude any column whose name contains these keywords
+    exclude_keywords = ['Outcome', 'Title']   # case‑insensitive match
 
-    cat_cols = [col for col in hist.columns
-                if hist[col].dtype == object
-                and col not in exclude_cols
-                and not any(re.match(pat, col) for pat in exclude_patterns)
-                and hist[col].nunique() > 1
-                and hist[col].nunique() <= 20]
+    cat_cols = []
+    for col in hist.columns:
+        # Must be object dtype
+        if hist[col].dtype != object:
+            continue
+        # Skip explicitly listed columns
+        if col in exclude_cols:
+            continue
+        # Skip if any keyword appears in the column name
+        if any(kw.lower() in col.lower() for kw in exclude_keywords):
+            continue
+        # Only keep columns with >1 unique value and ≤20 unique values
+        n_unique = hist[col].nunique()
+        if n_unique > 1 and n_unique <= 20:
+            cat_cols.append(col)
 
     if cat_cols:
         from sklearn.preprocessing import LabelEncoder
