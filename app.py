@@ -819,7 +819,7 @@ if len(three_d_features) >= 3:
             # ----- Prepare imputation values -----
             train_means = {}
             for col in (x_lr, y_lr, z_lr):
-                if col in hist_base.columns:
+                if col in list(hist_base.columns):
                     train_means[col] = hist_base[col].mean()
                 else:
                     train_means[col] = 0
@@ -1021,7 +1021,7 @@ if len(three_d_features) >= 3:
             # ----- Upcoming fight prediction (imputation for debutants) -----
             train_means = {}
             for col in (x_knn, y_knn, z_knn):
-                if col in hist_base.columns:
+                if col in list(hist_base.columns):
                     train_means[col] = hist_base[col].mean()
                 else:
                     train_means[col] = 0
