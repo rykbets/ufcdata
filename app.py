@@ -1159,90 +1159,80 @@ if len(three_d_features) >= 3:
 else:
     st.warning("Not enough numerical features for a 3D plot (need at least 3).")
 # =========================================================================
-# FEATURE IMPORTANCE CHARTS (Numerical & Categorical) – FILTER‑AWARE
+# FEATURE IMPORTANCE CHARTS (Numerical & Categorical) – APPLIED TO FILTERS
 # =========================================================================
 st.header("Top 20 Feature Importance (Current Filter Set)")
 
-# Only historical fights from the already filtered data
-hist = data[data['Win?'].isin(['Yes', 'No'])].copy()
+# Only historical fights from the **already filtered** data
+hist_imp = data[data['Win?'].isin(['Yes', 'No'])].copy()
 
-if len(hist) < 10:
+if len(hist_imp) < 10:
     st.warning("Too few historical fights after filtering to compute importance.")
 else:
-    hist['Target'] = (hist['Win?'] == 'Yes').astype(int)
+    hist_imp['Target'] = (hist_imp['Win?'] == 'Yes').astype(int)
 
-    # -------- Numerical features --------
-    num_feats = [c for c in numerical_features if c in hist.columns and hist[c].nunique(dropna=True) >= 2]
-    if num_feats:
-        X_num = hist[num_feats].dropna()
-        if len(X_num) > 10:
+    # -------- 1. Numerical Feature Importance (fighter stats only) --------
+    st.subheader("Feature Importance – Fighter Numerical Stats")
+
+    importance_features = [c for c in numerical_features
+                           if not c.startswith('Opponent_')
+                           and not c.endswith('_Diff')
+                           and not re.match(r'Prev\d+_', c)
+                           and c in hist_imp.columns]
+
+    if importance_features:
+        X_num = hist_imp[importance_features].dropna()
+        if len(X_num) > 10 and X_num.shape[1] > 0:
             imputer = SimpleImputer(strategy='median')
             X_imp = imputer.fit_transform(X_num)
-            y_num = hist.loc[X_num.index, 'Target']
-            mi_num = mutual_info_classif(X_imp, y_num, discrete_features=False)
-            mi_num_df = pd.DataFrame({
-                'Feature': num_feats,
-                'Mutual Information': mi_num
+            y_num = hist_imp.loc[X_num.index, 'Target']
+            mi = mutual_info_classif(X_imp, y_num, discrete_features=False)
+            mi_df_num = pd.DataFrame({
+                'Feature': importance_features,
+                'Mutual Information': mi
             }).sort_values('Mutual Information', ascending=False).head(20)
 
-            fig_num = px.bar(mi_num_df, x='Mutual Information', y='Feature',
-                             orientation='h', title='Top 20 Numerical Features (Mutual Information)',
-                             color='Mutual Information', color_continuous_scale='blues')
-            fig_num.update_layout(yaxis={'categoryorder':'total ascending'})
+            fig_num = px.bar(mi_df_num, x='Mutual Information', y='Feature', orientation='h',
+                             title="Top 20 Fighter Stats by Mutual Information with Win/Loss")
             st.plotly_chart(fig_num, use_container_width=True)
         else:
             st.warning("Not enough complete rows for numerical importance.")
     else:
         st.warning("No numerical features available after filtering.")
 
-    # -------- Categorical features (strict exclusion) --------
-    # Columns to always drop
-    exclude_cols = [
-        'FightID', 'Fighter', 'Opponent', 'FightDate', 'Win?', 'Method',
-        'DetailedResult', 'Fight', 'FighterOddsBFO', 'OpponentOddsBFO',
-        'EventCountry', 'Country', 'HometownFighter', 'Opponent_Hometown',
-        'Stance', 'WC', 'Title', 'ScheduledRounds'
+    # -------- 2. Categorical Feature Importance (fixed, outcome‑free list) --------
+    st.subheader("Categorical Feature Importance with Win/Loss")
+
+    # This is the exact list you originally used – no outcome columns can sneak in
+    potential_cat_cols = [
+        'WC', 'Stance', 'Country', 'EventCountry', 'Title',
+        'ScheduledRounds', 'HometownFighter', 'Opponent_Hometown'
     ]
-    # Exclude any column whose name contains these keywords
-    exclude_keywords = ['Outcome', 'Title']   # case‑insensitive match
+    categorical_cols = [
+        c for c in potential_cat_cols
+        if c in hist_imp.columns and hist_imp[c].nunique(dropna=True) > 1
+    ]
 
-    cat_cols = []
-    for col in hist.columns:
-        # Must be object dtype
-        if hist[col].dtype != object:
-            continue
-        # Skip explicitly listed columns
-        if col in exclude_cols:
-            continue
-        # Skip if any keyword appears in the column name
-        if any(kw.lower() in col.lower() for kw in exclude_keywords):
-            continue
-        # Only keep columns with >1 unique value and ≤20 unique values
-        n_unique = hist[col].nunique()
-        if n_unique > 1 and n_unique <= 20:
-            cat_cols.append(col)
-
-    if cat_cols:
-        from sklearn.preprocessing import LabelEncoder
-        importances_cat = []
-        for col in cat_cols:
-            sub = hist[[col, 'Target']].dropna()
-            if len(sub) < 10 or sub[col].nunique() < 2:
+    if categorical_cols:
+        scores = {}
+        for col in categorical_cols:
+            sub = hist_imp[[col, 'Target']].dropna()
+            if sub[col].nunique() < 2:
                 continue
-            le = LabelEncoder()
-            X_cat = le.fit_transform(sub[col].astype(str)).reshape(-1, 1)
-            y_cat = sub['Target'].values
-            mi = mutual_info_classif(X_cat, y_cat, discrete_features=True)[0]
-            importances_cat.append({'Feature': col, 'Mutual Information': mi})
+            codes, _ = pd.factorize(sub[col])
+            scores[col] = mutual_info_score(codes, sub['Target'])
 
-        if importances_cat:
-            mi_cat_df = pd.DataFrame(importances_cat).sort_values('Mutual Information', ascending=False).head(20)
-            fig_cat = px.bar(mi_cat_df, x='Mutual Information', y='Feature',
-                             orientation='h', title='Top 20 Categorical Features (Mutual Information)',
-                             color='Mutual Information', color_continuous_scale='oranges')
-            fig_cat.update_layout(yaxis={'categoryorder':'total ascending'})
+        if scores:
+            cat_mi_df = pd.DataFrame({
+                'Feature': list(scores.keys()),
+                'Mutual Information': list(scores.values())
+            }).sort_values('Mutual Information', ascending=False).head(20)
+
+            fig_cat = px.bar(cat_mi_df, x='Mutual Information', y='Feature', orientation='h',
+                             title="Top Categorical Features by Mutual Information with Win/Loss",
+                             color_discrete_sequence=['#636efa'])
             st.plotly_chart(fig_cat, use_container_width=True)
         else:
-            st.warning("Could not compute categorical importance.")
+            st.warning("No categorical column had enough variation.")
     else:
-        st.warning("No suitable categorical features after filtering.")
+        st.warning("No categorical features available after filtering.")
