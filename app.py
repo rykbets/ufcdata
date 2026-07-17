@@ -814,7 +814,7 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # ----- Upcoming fight prediction (NO false warnings) -----
+            # ----- Upcoming fight prediction (correct 2‑D shape) -----
             st.subheader("LR Win Probability Estimate")
             all_upcoming = all_fights_display[
                 all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')
@@ -832,9 +832,9 @@ if len(three_d_features) >= 3:
                 up_rows = upcoming_complete[upcoming_complete['FightID'] == chosen_id]
                 fighter_row = up_rows.iloc[0]
 
-                # Predict directly – if a value is truly missing, the model will handle it or we show a fallback
+                # FIXED: build a proper 2‑D array of shape (1, 3)
                 try:
-                    up_val = np.array([fighter_row[[x_lr, y_lr, z_lr]].values])
+                    up_val = np.array([[fighter_row[x_lr], fighter_row[y_lr], fighter_row[z_lr]]])
                     prob_lr = lr_model.predict_proba(up_val)[0, 1]
 
                     # Empirical Bayes shrinkage of recent win rate
@@ -850,7 +850,7 @@ if len(three_d_features) >= 3:
                     with col_p2:
                         st.metric("LR shrunken", f"{shrunk_prob:.1%}")
                 except:
-                    st.warning("Could not compute prediction for this fighter (missing data).")
+                    st.warning("Could not compute prediction (missing or malformed data).")
 
     # --- LR 3‑Variable Combination Builder (Brier) ---
     st.subheader("LR 3‑Variable Combinations (Brier)")
