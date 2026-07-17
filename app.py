@@ -776,7 +776,7 @@ if len(three_d_features) >= 3:
             )
             st.plotly_chart(fig, use_container_width=True)
 
-        # Logistic Regression + metrics
+        # Logistic Regression + dataset‑wide metrics (always visible)
         hist_lr = data[data['Win?'].isin(['Yes','No'])].copy()
         hist_lr = hist_lr[[x_lr, y_lr, z_lr, 'Win?']].dropna()
         if len(hist_lr) < 10 or hist_lr['Win?'].nunique() < 2:
@@ -792,12 +792,26 @@ if len(three_d_features) >= 3:
             ll_lr = log_loss(y_lr, y_prob_lr_in)
             bs_lr = brier_score_loss(y_lr, y_prob_lr_in)
 
-            col_m1, col_m2 = st.columns(2)
+            # Dataset‑wide win rates (always shown)
+            full_hist = data[data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
+            if len(full_hist) > 0:
+                overall_wr = (full_hist['Win?'] == 'Yes').mean() * 100
+                recent = full_hist.tail(recent_window)
+                recent_wr = (recent['Win?'] == 'Yes').mean() * 100 if len(recent) > 0 else 0.0
+            else:
+                overall_wr = recent_wr = 0.0
+
+            # Display metrics
+            col_m1, col_m2, col_m3 = st.columns(3)
             with col_m1:
                 st.metric("LR Log‑loss", f"{ll_lr:.3f}")
-            with col_m2:
                 st.metric("LR Brier", f"{bs_lr:.3f}")
+            with col_m2:
+                st.metric("Overall Win%", f"{overall_wr:.1f}%")
+            with col_m3:
+                st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
+            # Upcoming fight prediction
             st.subheader("LR Win Probability Estimate")
             all_upcoming_lr = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
             if not all_upcoming_lr.empty:
@@ -809,9 +823,7 @@ if len(three_d_features) >= 3:
                         fighter_row = up_rows_lr.iloc[0]
                         feats = [x_lr, y_lr, z_lr]
 
-                        # -----------------------------------------------------------------
-                        # 100% safe check – no pandas hashing, no contains, no ambiguity
-                        # -----------------------------------------------------------------
+                        # 100% safe check
                         missing = False
                         for col in feats:
                             try:
@@ -826,23 +838,16 @@ if len(three_d_features) >= 3:
                             up_val_lr = np.array([fighter_row[feats].values])
                             prob_lr = lr_model.predict_proba(up_val_lr)[0, 1]
 
-                            full_hist = data[data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
-                            if len(full_hist) > 0:
-                                overall_wr = (full_hist['Win?'] == 'Yes').mean() * 100
-                                recent = full_hist.tail(recent_window)
-                                recent_wr = (recent['Win?'] == 'Yes').mean() * 100 if len(recent) > 0 else 0.0
+                            if overall_wr > 0:
                                 shrunk_lr = (prior_weight * (overall_wr/100) + prob_lr) / (prior_weight + 1)
                             else:
-                                overall_wr = recent_wr = 0.0
-                                shrunk_lr = None
+                                shrunk_lr = prob_lr
 
                             col_p1, col_p2 = st.columns(2)
                             with col_p1:
                                 st.metric("LR win prob", f"{prob_lr:.1%}")
-                                st.metric("LR shrunken", f"{shrunk_lr:.1%}" if shrunk_lr is not None else "N/A")
                             with col_p2:
-                                st.metric("Overall Win% (dataset)", f"{overall_wr:.1f}%")
-                                st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
+                                st.metric("LR shrunken", f"{shrunk_lr:.1%}")
                         else:
                             st.warning("Selected fighter does not have all predictor values.")
             else:
@@ -852,7 +857,7 @@ if len(three_d_features) >= 3:
     st.subheader("LR 3‑Variable Combinations (Brier)")
     combo_candidates_lr = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
 
-    # Ensure mi_df exists (compute if needed)
+    # Ensure mi_df exists
     if 'mi_df' not in dir():
         importance_features = [c for c in numerical_features
                                if not c.startswith('Opponent_')
