@@ -814,7 +814,14 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # ----- Upcoming fight prediction (safe, no hash) -----
+            # ----- Prepare imputation values (means from training data) -----
+            train_means = {
+                x_lr: hist_lr[x_lr].mean(),
+                y_lr: hist_lr[y_lr].mean(),
+                z_lr: hist_lr[z_lr].mean()
+            }
+
+            # ----- Upcoming fight prediction (always shows, missing values filled with mean) -----
             st.subheader("LR Win Probability Estimate")
             all_upcoming = all_fights_display[
                 all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')
@@ -827,31 +834,33 @@ if len(three_d_features) >= 3:
                     if len(up_rows) == 2:
                         fighter_row = up_rows.iloc[0]
 
-                        # Try to predict; catch any missing column or NaN
-                        try:
-                            v1 = fighter_row[x_lr]
-                            v2 = fighter_row[y_lr]
-                            v3 = fighter_row[z_lr]
-                            if pd.isna(v1) or pd.isna(v2) or pd.isna(v3):
-                                raise ValueError("missing value")
+                        # Safe getter with imputation for NaN or missing columns
+                        def safe_val(col):
+                            try:
+                                val = fighter_row[col]
+                                return val if pd.notna(val) else train_means[col]
+                            except (KeyError, ValueError):
+                                return train_means[col]
 
-                            up_val = np.array([[v1, v2, v3]])
-                            prob_lr = lr_model.predict_proba(up_val)[0, 1]
+                        v1 = safe_val(x_lr)
+                        v2 = safe_val(y_lr)
+                        v3 = safe_val(z_lr)
 
-                            # Empirical Bayes shrinkage of recent win rate
-                            if recent_count > 0:
-                                shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
-                            else:
-                                shrunk_recent = overall_wr
-                            shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
+                        up_val = np.array([[v1, v2, v3]])
+                        prob_lr = lr_model.predict_proba(up_val)[0, 1]
 
-                            col_p1, col_p2 = st.columns(2)
-                            with col_p1:
-                                st.metric("LR win prob", f"{prob_lr:.1%}")
-                            with col_p2:
-                                st.metric("LR shrunken", f"{shrunk_prob:.1%}")
-                        except (KeyError, ValueError):
-                            st.warning("Selected fighter does not have all predictor values.")
+                        # Empirical Bayes shrinkage of recent win rate
+                        if recent_count > 0:
+                            shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
+                        else:
+                            shrunk_recent = overall_wr
+                        shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
+
+                        col_p1, col_p2 = st.columns(2)
+                        with col_p1:
+                            st.metric("LR win prob", f"{prob_lr:.1%}")
+                        with col_p2:
+                            st.metric("LR shrunken", f"{shrunk_prob:.1%}")
             else:
                 st.write("No upcoming fights available.")
 
@@ -883,7 +892,7 @@ if len(three_d_features) >= 3:
     candidates = top_feats[:num_top]
     candidates = [c for c in candidates if c != 'FighterOddsNum']
 
-    # Persist results across variable changes (only recompute on button press or data change)
+    # Persist results across variable changes
     data_fp = hash(str(data.shape))
     if "lr_combo_results" not in st.session_state:
         st.session_state.lr_combo_results = None
