@@ -952,7 +952,7 @@ if len(three_d_features) >= 3:
         z_knn = st.selectbox("Z", three_d_features, key="knn_z")
 
     if x_knn and y_knn and z_knn:
-        # 3D scatter (identical to LR)
+        # ---------- 3D scatter (identical to LR logic) ----------
         plot_data_knn = data[[x_knn, y_knn, z_knn, 'DetailedResult', 'Fight']].copy()
         plot_data_knn = plot_data_knn.loc[:, ~plot_data_knn.columns.duplicated()].dropna()
         if len(plot_data_knn) < 10:
@@ -968,45 +968,47 @@ if len(three_d_features) >= 3:
             )
             st.plotly_chart(fig_knn, use_container_width=True)
 
-        # --- Build training data (exactly the 3 selected features) ---
-        train_df = data[data['Win?'].isin(['Yes', 'No'])].copy()
-        train_df = train_df[[x_knn, y_knn, z_knn, 'Win?']].dropna()
+        # ---------- Build training set (3 selected features only) ----------
+        hist_knn = data[data['Win?'].isin(['Yes', 'No'])].copy()
+        # Remove duplicate columns to guarantee exactly 1 column per feature name
+        hist_knn = hist_knn.loc[:, ~hist_knn.columns.duplicated()]
+        hist_knn = hist_knn[[x_knn, y_knn, z_knn, 'Win?']].dropna()
 
-        if len(train_df) < 10 or train_df['Win?'].nunique() < 2:
+        if len(hist_knn) < 10 or hist_knn['Win?'].nunique() < 2:
             st.warning("Not enough training data for KNN model.")
         else:
-            train_df['target'] = (train_df['Win?'] == 'Yes').astype(int)
+            hist_knn['target'] = (hist_knn['Win?'] == 'Yes').astype(int)
 
-            # Training matrix – 3 columns only
-            X_train = train_df[[x_knn, y_knn, z_knn]].values.astype(float)
-            y_train = train_df['target'].values
+            # Exactly 3 numeric columns – no chance of duplicates here
+            X_train = hist_knn[[x_knn, y_knn, z_knn]].values.astype(np.float64)
+            y_train = hist_knn['target'].values
 
-            # KNN slider
+            # ----- KNN hyperparameter -----
             k_knn = st.slider("KNN neighbors (model)", 1, 20, 5, key="knn_model_k")
 
-            # Fit scaler on exactly 3 features
+            # ----- Fit scaler & model -----
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X_train)
 
-            # Calibrated KNN
             base_knn = KNeighborsClassifier(n_neighbors=k_knn, weights='distance')
             model = CalibratedClassifierCV(base_knn, method='sigmoid', cv=5)
             model.fit(X_scaled, y_train)
 
-            # Out‑of‑fold probabilities for metrics
+            # ----- Out-of-fold calibrated probabilities (metrics) -----
             y_prob_oof = cross_val_predict(model, X_scaled, y_train, cv=5, method='predict_proba')[:, 1]
             y_prob_oof = np.clip(y_prob_oof, 0.1, 0.9)
+
             ll_knn = log_loss(y_train, y_prob_oof)
             bs_knn = brier_score_loss(y_train, y_prob_oof)
 
-            # Win rates
+            # ----- Overall & recent win rates -----
             full_hist = data[data['Win?'].isin(['Yes', 'No'])].sort_values('FightDate')
-            overall_wr = (full_hist['Win?'] == 'Yes').mean() * 100 if len(full_hist) > 0 else 0
+            overall_wr = (full_hist['Win?'] == 'Yes').mean() * 100 if len(full_hist) > 0 else 0.0
             recent = full_hist.tail(recent_window)
-            recent_wr = (recent['Win?'] == 'Yes').mean() * 100 if len(recent) > 0 else 0
+            recent_wr = (recent['Win?'] == 'Yes').mean() * 100 if len(recent) > 0 else 0.0
             recent_count = len(recent)
 
-            # Metrics display
+            # ----- Display metrics -----
             col_m1, col_m2, col_m3 = st.columns(3)
             with col_m1:
                 st.metric("KNN Log‑loss", f"{ll_knn:.3f}")
@@ -1016,7 +1018,7 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # --- Upcoming fight prediction ---
+            # ----- Upcoming fight prediction (same pattern as LR) -----
             st.subheader("KNN Win Probability Estimate")
             upcoming = all_fights_display[
                 all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')
@@ -1028,38 +1030,38 @@ if len(three_d_features) >= 3:
                     if len(rows) == 2:
                         fighter = rows.iloc[0]
 
-                        # Impute missing values with training means
+                        # Impute missing values with column means from training data
                         means = X_train.mean(axis=0)
                         vals = []
                         for i, col in enumerate([x_knn, y_knn, z_knn]):
-                            val = fighter[col]
+                            raw = fighter[col]
                             try:
-                                val = float(val)
-                                if np.isnan(val):
-                                    val = means[i]
+                                v = float(raw)
+                                if np.isnan(v):
+                                    v = means[i]
                             except (ValueError, TypeError):
-                                val = means[i]
-                            vals.append(val)
+                                v = means[i]
+                            vals.append(v)
 
-                        up_arr = np.array([vals], dtype=float)
+                        up_arr = np.array([vals], dtype=np.float64)
 
-                        # Transform using the exact same scaler (fitted on 3 features)
+                        # Transform using the EXACT SAME scaler that was fitted on 3 features
                         up_scaled = scaler.transform(up_arr)
                         prob_knn = model.predict_proba(up_scaled)[0, 1]
                         prob_knn = np.clip(prob_knn, 0.1, 0.9)
 
-                        # Shrinkage (same as LR)
+                        # Empirical Bayes shrinkage (identical to LR)
                         if recent_count > 0:
                             shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
                         else:
                             shrunk_recent = overall_wr
-                        shrunk = (prior_weight * (shrunk_recent / 100) + prob_knn) / (prior_weight + 1)
+                        shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_knn) / (prior_weight + 1)
 
                         col_p1, col_p2 = st.columns(2)
                         with col_p1:
                             st.metric("KNN win prob", f"{prob_knn:.1%}")
                         with col_p2:
-                            st.metric("KNN shrunken", f"{shrunk:.1%}")
+                            st.metric("KNN shrunken", f"{shrunk_prob:.1%}")
             else:
                 st.write("No upcoming fights available.")
 
