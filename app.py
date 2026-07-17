@@ -1238,3 +1238,200 @@ else:
             st.warning("No categorical column had enough variation.")
     else:
         st.warning("No categorical features available after filtering.")
+# =========================================================================
+# SPIDER CHART – FIGHTER‑SIDE FILTERS + LR + WEIGHTED KNN (NO META) + SIMILARITY + BAYESIAN WIN RATES
+# =========================================================================
+st.header("Fight Similarity & Comparison (Independent Filters)")
+
+# Spider‑specific fighter‑side categorical filters
+st.subheader("Spider Chart Filters (fighter data only)")
+
+col_sp1, col_sp2 = st.columns(2)
+
+with col_sp1:
+    spider_wc = st.multiselect("Weight Class", sorted(all_fights_display['WC'].dropna().unique()), key="spider_wc")
+    spider_stance = st.multiselect("Stance", sorted(all_fights_display['Stance'].dropna().unique()), key="spider_stance")
+    spider_country = st.multiselect("Country", sorted(all_fights_display['Country'].dropna().unique()), key="spider_country")
+    spider_sched_rounds = st.multiselect("Scheduled Rounds", sorted(all_fights_display['ScheduledRounds'].dropna().unique()), key="spider_sched")
+    spider_event_country = st.multiselect("Event Country", sorted(all_fights_display['EventCountry'].dropna().unique()), key="spider_eventc")
+
+with col_sp2:
+    spider_title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"], key="spider_title")
+    spider_hometown = st.selectbox("Hometown", ["All", "Yes", "No"], key="spider_home")
+    spider_new_wc = st.checkbox("New Weight Class", key="spider_new_wc")
+    spider_skip_nc = st.checkbox("Skip NC outcomes", key="spider_skip_nc")
+    spider_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
+
+if spider_skip_nc:
+    spider_prev1_col = 'Prev1_Outcome_skipNC'; spider_prev2_col = 'Prev2_Outcome_skipNC'; spider_prev3_col = 'Prev3_Outcome_skipNC'
+    spider_career1_col = 'Career1_Outcome_skipNC'; spider_career2_col = 'Career2_Outcome_skipNC'; spider_career3_col = 'Career3_Outcome_skipNC'
+else:
+    spider_prev1_col = 'Prev1_Outcome_raw'; spider_prev2_col = 'Prev2_Outcome_raw'; spider_prev3_col = 'Prev3_Outcome_raw'
+    spider_career1_col = 'Career1_Outcome_raw'; spider_career2_col = 'Career2_Outcome_raw'; spider_career3_col = 'Career3_Outcome_raw'
+
+all_outcomes_raw_spider = sorted(all_fights[spider_prev1_col].dropna().unique())
+all_outcomes_career_spider = sorted(all_fights[spider_career1_col].dropna().unique())
+
+with st.expander("Previous Outcomes (Spider)"):
+    spider_prev1 = st.multiselect("Prev Fight 1", all_outcomes_raw_spider, key="spider_prev1")
+    spider_prev2 = st.multiselect("Prev Fight 2", all_outcomes_raw_spider, key="spider_prev2")
+    spider_prev3 = st.multiselect("Prev Fight 3", all_outcomes_raw_spider, key="spider_prev3")
+    spider_career1 = st.multiselect("Career F1", all_outcomes_career_spider, key="spider_career1")
+    spider_career2 = st.multiselect("Career F2", all_outcomes_career_spider, key="spider_career2")
+    spider_career3 = st.multiselect("Career F3", all_outcomes_career_spider, key="spider_career3")
+
+spider_data = all_fights_display.copy()
+
+mask = pd.Series(True, index=spider_data.index)
+
+if spider_wc: mask &= spider_data['WC'].isin(spider_wc)
+if spider_stance: mask &= spider_data['Stance'].isin(spider_stance)
+if spider_country: mask &= spider_data['Country'].isin(spider_country)
+if spider_sched_rounds: mask &= spider_data['ScheduledRounds'].isin(spider_sched_rounds)
+if spider_title_fight != "All": mask &= spider_data['Title'] == spider_title_fight
+if spider_hometown != "All": mask &= spider_data['HometownFighter'] == spider_hometown
+if spider_event_country: mask &= spider_data['EventCountry'].isin(spider_event_country)
+if spider_new_wc: mask &= spider_data['IsNewWeightClass'] == True
+if spider_prev_title != "All":
+    mask &= spider_data['Prev1_Title'] == spider_prev_title
+
+if spider_prev1: mask &= spider_data[spider_prev1_col].isin(spider_prev1)
+if spider_prev2: mask &= spider_data[spider_prev2_col].isin(spider_prev2)
+if spider_prev3: mask &= spider_data[spider_prev3_col].isin(spider_prev3)
+if spider_career1: mask &= spider_data[spider_career1_col].isin(spider_career1)
+if spider_career2: mask &= spider_data[spider_career2_col].isin(spider_career2)
+if spider_career3: mask &= spider_data[spider_career3_col].isin(spider_career3)
+
+valid_fight_ids = spider_data.loc[mask, 'FightID'].unique()
+spider_data = spider_data[spider_data['FightID'].isin(valid_fight_ids)]
+
+spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
+
+if spider_upcoming.empty:
+    st.write("No upcoming fights after spider filters.")
+else:
+    fight_counts = spider_upcoming.groupby('FightID').size()
+    complete_ids = fight_counts[fight_counts == 2].index
+    spider_upcoming = spider_upcoming[spider_upcoming['FightID'].isin(complete_ids)]
+
+    if spider_upcoming.empty:
+        st.warning("No upcoming fight has both fighters after spider filters.")
+    else:
+        spider_hist_full = spider_data[spider_data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
+        spider_hist_filtered = spider_data.loc[mask & spider_data['Win?'].isin(['Yes','No'])]
+
+        numeric_cols = [c for c in spider_upcoming.columns if pd.api.types.is_numeric_dtype(spider_upcoming[c])]
+        clean_cols = [c for c in numeric_cols if not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')]
+        wanted_keys = [
+            'Age', 'Height', 'Reach',
+            'DaysSincePrev', 'Avg3DaysGap',
+            'FightNumber', 'Opponent_FightNumber',
+            'FighterOddsNum', 'PrevFighterOddsNum',
+            'CareerWinPct', 'CareerAvg_', 'Opponent_CareerAvg_',
+            '_Diff'
+        ]
+        spider_vars = sorted([c for c in clean_cols if any(c.startswith(k) or k in c for k in wanted_keys)])
+
+        if not spider_vars:
+            st.warning("No numeric variables found.")
+        else:
+            selected_vars = st.multiselect("Select variables for models", spider_vars,
+                                           default=spider_vars[:5], max_selections=8, key="spider_vars")
+
+        if selected_vars:
+            spider_hist_clean = spider_hist_full.dropna(subset=selected_vars)
+            if len(spider_hist_clean) < 10 or spider_hist_clean['Win?'].nunique() < 2:
+                st.warning("Not enough historical data to train models.")
+            else:
+                spider_hist_clean['target'] = (spider_hist_clean['Win?'] == 'Yes').astype(int)
+                X_spider = spider_hist_clean[selected_vars].values
+                y_spider = spider_hist_clean['target'].values
+
+                # Logistic Regression
+                lr_spider = LogisticRegression(max_iter=1000)
+                lr_spider.fit(X_spider, y_spider)
+                y_prob_lr_in = lr_spider.predict_proba(X_spider)[:, 1]
+                ll_lr_spider = log_loss(y_spider, y_prob_lr_in)
+                bs_lr_spider = brier_score_loss(y_spider, y_prob_lr_in)
+
+                # Weighted KNN (cross‑validated metrics, clipped)
+                k_spider = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_spider")
+                scaler_knn_spider = StandardScaler()
+                X_spider_scaled = scaler_knn_spider.fit_transform(X_spider)
+                knn_cv_spider = KNeighborsClassifier(n_neighbors=k_spider, weights='distance')
+                y_prob_knn_oof = cross_val_predict(knn_cv_spider, X_spider_scaled, y_spider, cv=5, method='predict_proba')[:, 1]
+                y_prob_knn_oof = np.clip(y_prob_knn_oof, 0.1, 0.9)
+                ll_knn_spider = log_loss(y_spider, y_prob_knn_oof)
+                bs_knn_spider = brier_score_loss(y_spider, y_prob_knn_oof)
+
+                # Final KNN for prediction
+                knn_spider = KNeighborsClassifier(n_neighbors=k_spider, weights='distance')
+                knn_spider.fit(X_spider_scaled, y_spider)
+
+                col_sm1, col_sm2 = st.columns(2)
+                with col_sm1:
+                    st.metric("LogReg Log‑loss", f"{ll_lr_spider:.3f}")
+                    st.metric("LogReg Brier", f"{bs_lr_spider:.3f}")
+                with col_sm2:
+                    st.metric("KNN Log‑loss", f"{ll_knn_spider:.3f}")
+                    st.metric("KNN Brier", f"{bs_knn_spider:.3f}")
+
+                up_ids = sorted(spider_upcoming['FightID'].unique())
+                chosen_fight = st.selectbox("Choose an upcoming fight", up_ids, key="spider_fight")
+
+                if chosen_fight:
+                    fight_rows = spider_upcoming[spider_upcoming['FightID'] == chosen_fight]
+                    f1 = fight_rows.iloc[0]
+                    f2 = fight_rows.iloc[1]
+
+                    radar_vals = []
+                    for var in selected_vars:
+                        if var.endswith('_Diff') or var in {'AgeDiff','HeightDiff','ReachDiff'}:
+                            val = f1[var] if pd.notna(f1[var]) else 0
+                        else:
+                            v1 = f1[var] if pd.notna(f1[var]) else 0
+                            v2 = f2[var] if pd.notna(f2[var]) else 0
+                            val = v1 - v2
+                        radar_vals.append(val)
+
+                    fig = go.Figure(go.Scatterpolar(r=radar_vals, theta=selected_vars, fill='toself',
+                                                    name=f"{f1['Fighter']} advantage"))
+                    fig.update_layout(polar=dict(radialaxis=dict(visible=True)),
+                                      title=f"Advantage: {f1['Fighter']} vs {f2['Fighter']}")
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    up_vec = f1[selected_vars].values.reshape(1, -1)
+                    prob_lr_f1 = lr_spider.predict_proba(up_vec)[0, 1]
+                    up_vec_scaled = scaler_knn_spider.transform(up_vec)
+                    prob_knn_f1 = np.clip(knn_spider.predict_proba(up_vec_scaled)[0, 1], 0.1, 0.9)
+
+                    overall_wr_spider = (spider_hist_filtered['Win?'] == 'Yes').mean() * 100 if len(spider_hist_filtered) > 0 else 0.0
+                    recent_spider = spider_hist_filtered.tail(recent_window)
+                    recent_wr_spider = (recent_spider['Win?'] == 'Yes').mean() * 100 if len(recent_spider) > 0 else 0.0
+                    shrunk_lr = (prior_weight * (overall_wr_spider / 100) + prob_lr_f1) / (prior_weight + 1)
+                    shrunk_knn = (prior_weight * (overall_wr_spider / 100) + prob_knn_f1) / (prior_weight + 1)
+
+                    col_sp1, col_sp2, col_sp3 = st.columns(3)
+                    with col_sp1:
+                        st.metric("LogReg", f"{prob_lr_f1:.1%}")
+                        st.metric("LogReg shrunken", f"{shrunk_lr:.1%}")
+                    with col_sp2:
+                        st.metric("KNN", f"{prob_knn_f1:.1%}")
+                        st.metric("KNN shrunken", f"{shrunk_knn:.1%}")
+                    with col_sp3:
+                        st.metric("Overall Win% (filtered)", f"{overall_wr_spider:.1f}%")
+                        st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr_spider:.1f}%")
+
+                    # Similarity (most recent N fights)
+                    st.subheader(f"Most Similar Historical Fights (from last {recent_window} fights)")
+                    scaler_sim = StandardScaler()
+                    X_spider_scaled_sim = scaler_sim.fit_transform(X_spider)
+                    up_scaled_sim = scaler_sim.transform(up_vec)
+                    dists = cdist(up_scaled_sim, X_spider_scaled_sim, 'euclidean').flatten()
+                    sim_scores = 100 * (1 - dists / (dists.max() or 1))
+
+                    sim_df = spider_hist_clean[['FightDate', 'Fighter', 'Opponent', 'Win?']].copy()
+                    sim_df['Similarity'] = sim_scores.round(1)
+                    sim_df = sim_df.sort_values('FightDate', ascending=False).head(recent_window)
+                    top_sim = sim_df.sort_values('Similarity', ascending=False).head(20)
+                    st.dataframe(top_sim, use_container_width=True)
