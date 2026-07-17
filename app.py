@@ -1158,3 +1158,81 @@ if len(three_d_features) >= 3:
         st.warning("Not enough features to test (need at least 3).")
 else:
     st.warning("Not enough numerical features for a 3D plot (need at least 3).")
+# =========================================================================
+# FEATURE IMPORTANCE CHARTS (Numerical & Categorical) – APPLIED TO FILTERS
+# =========================================================================
+st.header("Top 20 Feature Importance (Current Filter Set)")
+
+# Only historical fights (Win/Loss) from the **already filtered** data
+hist = data[data['Win?'].isin(['Yes', 'No'])].copy()
+
+if len(hist) < 10:
+    st.warning("Too few historical fights after filtering to compute importance.")
+else:
+    hist['Target'] = (hist['Win?'] == 'Yes').astype(int)
+
+    # -------- Numerical features --------
+    # Use the same numerical_features list defined earlier, but only those
+    # present in hist and with enough variation
+    num_feats = [c for c in numerical_features if c in hist.columns and hist[c].nunique(dropna=True) >= 2]
+    if num_feats:
+        X_num = hist[num_feats].dropna()
+        if len(X_num) > 10:
+            imputer = SimpleImputer(strategy='median')
+            X_imp = imputer.fit_transform(X_num)
+            y_num = hist.loc[X_num.index, 'Target']
+            mi_num = mutual_info_classif(X_imp, y_num, discrete_features=False)
+            mi_num_df = pd.DataFrame({
+                'Feature': num_feats,
+                'Mutual Information': mi_num
+            }).sort_values('Mutual Information', ascending=False).head(20)
+
+            fig_num = px.bar(mi_num_df, x='Mutual Information', y='Feature',
+                             orientation='h', title='Top 20 Numerical Features (Mutual Information)',
+                             color='Mutual Information', color_continuous_scale='blues')
+            fig_num.update_layout(yaxis={'categoryorder':'total ascending'})
+            st.plotly_chart(fig_num, use_container_width=True)
+        else:
+            st.warning("Not enough complete rows for numerical importance.")
+    else:
+        st.warning("No numerical features available after filtering.")
+
+    # -------- Categorical features --------
+    exclude_cols = ['FightID', 'Fighter', 'Opponent', 'FightDate', 'Win?', 'Method',
+                    'DetailedResult', 'Fight', 'FighterOddsBFO', 'OpponentOddsBFO',
+                    'EventCountry', 'Country', 'HometownFighter', 'Opponent_Hometown',
+                    'Stance', 'WC', 'Title', 'ScheduledRounds']
+    exclude_patterns = [r'Prev\d+_Outcome', r'Career\d+_Outcome', r'Opponent_Prev\d+_Outcome',
+                        r'Opponent_Career\d+_Outcome', r'Prev\d+_Title', r'Opponent_Prev\d+_Title']
+
+    cat_cols = [col for col in hist.columns
+                if hist[col].dtype == object
+                and col not in exclude_cols
+                and not any(re.match(pat, col) for pat in exclude_patterns)
+                and hist[col].nunique() > 1
+                and hist[col].nunique() <= 20]
+
+    if cat_cols:
+        from sklearn.preprocessing import LabelEncoder
+        importances_cat = []
+        for col in cat_cols:
+            sub = hist[[col, 'Target']].dropna()
+            if len(sub) < 10 or sub[col].nunique() < 2:
+                continue
+            le = LabelEncoder()
+            X_cat = le.fit_transform(sub[col].astype(str)).reshape(-1, 1)
+            y_cat = sub['Target'].values
+            mi = mutual_info_classif(X_cat, y_cat, discrete_features=True)[0]
+            importances_cat.append({'Feature': col, 'Mutual Information': mi})
+
+        if importances_cat:
+            mi_cat_df = pd.DataFrame(importances_cat).sort_values('Mutual Information', ascending=False).head(20)
+            fig_cat = px.bar(mi_cat_df, x='Mutual Information', y='Feature',
+                             orientation='h', title='Top 20 Categorical Features (Mutual Information)',
+                             color='Mutual Information', color_continuous_scale='oranges')
+            fig_cat.update_layout(yaxis={'categoryorder':'total ascending'})
+            st.plotly_chart(fig_cat, use_container_width=True)
+        else:
+            st.warning("Could not compute categorical importance.")
+    else:
+        st.warning("No suitable categorical features after filtering.")
