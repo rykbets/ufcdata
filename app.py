@@ -867,7 +867,7 @@ if len(three_d_features) >= 3:
             else:
                 st.write("No upcoming fights available.")
 
-    # --- LR 3‑Variable Combination Builder (Brier) ---
+       # --- LR 3‑Variable Combination Builder (In‑Sample Brier) ---
     st.subheader("LR 3‑Variable Combinations (Brier)")
     combo_candidates = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
 
@@ -919,7 +919,8 @@ if len(three_d_features) >= 3:
                     y = sub['WinNum'].values
                     try:
                         lr = LogisticRegression(max_iter=1000)
-                        y_prob = cross_val_predict(lr, X, y, cv=5, method='predict_proba')[:, 1]
+                        lr.fit(X, y)                                  # fit on all data
+                        y_prob = lr.predict_proba(X)[:, 1]           # predict on same data
                         bs = brier_score_loss(y, y_prob)
                         results.append({'Variables': ', '.join(combo), 'Brier': bs})
                     except:
@@ -934,5 +935,3 @@ if len(three_d_features) >= 3:
             st.dataframe(st.session_state.lr_combo_results, use_container_width=True)
     else:
         st.warning("Not enough features to test (need at least 3).")
-else:
-    st.warning("Not enough numerical features for a 3D plot (need at least 3).")
