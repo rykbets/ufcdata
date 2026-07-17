@@ -1239,11 +1239,11 @@ else:
     else:
         st.warning("No categorical features available after filtering.")
 # =========================================================================
-# SPIDER CHART – FIGHTER‑SIDE FILTERS + LR + WEIGHTED KNN (NO META) + SIMILARITY + BAYESIAN WIN RATES
+# SPIDER CHART – FIGHTER‑SIDE FILTERS + LR + CALIBRATED KNN + SHRINKAGE + SIMILARITY
 # =========================================================================
 st.header("Fight Similarity & Comparison (Independent Filters)")
 
-# Spider‑specific fighter‑side categorical filters
+# ---------- Spider‑specific fighter‑side categorical filters ----------
 st.subheader("Spider Chart Filters (fighter data only)")
 
 col_sp1, col_sp2 = st.columns(2)
@@ -1262,6 +1262,7 @@ with col_sp2:
     spider_skip_nc = st.checkbox("Skip NC outcomes", key="spider_skip_nc")
     spider_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
 
+# Outcome column names (skip NC or not)
 if spider_skip_nc:
     spider_prev1_col = 'Prev1_Outcome_skipNC'; spider_prev2_col = 'Prev2_Outcome_skipNC'; spider_prev3_col = 'Prev3_Outcome_skipNC'
     spider_career1_col = 'Career1_Outcome_skipNC'; spider_career2_col = 'Career2_Outcome_skipNC'; spider_career3_col = 'Career3_Outcome_skipNC'
@@ -1280,6 +1281,7 @@ with st.expander("Previous Outcomes (Spider)"):
     spider_career2 = st.multiselect("Career F2", all_outcomes_career_spider, key="spider_career2")
     spider_career3 = st.multiselect("Career F3", all_outcomes_career_spider, key="spider_career3")
 
+# ---------- Apply spider filters ----------
 spider_data = all_fights_display.copy()
 
 mask = pd.Series(True, index=spider_data.index)
@@ -1302,9 +1304,11 @@ if spider_career1: mask &= spider_data[spider_career1_col].isin(spider_career1)
 if spider_career2: mask &= spider_data[spider_career2_col].isin(spider_career2)
 if spider_career3: mask &= spider_data[spider_career3_col].isin(spider_career3)
 
+# Keep only fights where the fighter side matches the mask (both fighters must be present later)
 valid_fight_ids = spider_data.loc[mask, 'FightID'].unique()
 spider_data = spider_data[spider_data['FightID'].isin(valid_fight_ids)]
 
+# ----- Upcoming fights (must have exactly 2 rows per fight) -----
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
 
 if spider_upcoming.empty:
@@ -1317,9 +1321,10 @@ else:
     if spider_upcoming.empty:
         st.warning("No upcoming fight has both fighters after spider filters.")
     else:
-        spider_hist_full = spider_data[spider_data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
-        spider_hist_filtered = spider_data.loc[mask & spider_data['Win?'].isin(['Yes','No'])]
+        # ----- Build training data (all historical fights that match spider filters) -----
+        spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
 
+        # Choose numeric variables available in upcoming rows
         numeric_cols = [c for c in spider_upcoming.columns if pd.api.types.is_numeric_dtype(spider_upcoming[c])]
         clean_cols = [c for c in numeric_cols if not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')]
         wanted_keys = [
@@ -1335,39 +1340,44 @@ else:
         if not spider_vars:
             st.warning("No numeric variables found.")
         else:
-            selected_vars = st.multiselect("Select variables for models", spider_vars,
-                                           default=spider_vars[:5], max_selections=8, key="spider_vars")
+            selected_vars = st.multiselect(
+                "Select variables for models", spider_vars,
+                default=spider_vars[:5], max_selections=8, key="spider_vars"
+            )
 
         if selected_vars:
-            spider_hist_clean = spider_hist_full.dropna(subset=selected_vars)
-            if len(spider_hist_clean) < 10 or spider_hist_clean['Win?'].nunique() < 2:
+            # Training set: drop rows with any missing selected variable
+            train_spider = spider_hist.dropna(subset=selected_vars)
+            if len(train_spider) < 10 or train_spider['Win?'].nunique() < 2:
                 st.warning("Not enough historical data to train models.")
             else:
-                spider_hist_clean['target'] = (spider_hist_clean['Win?'] == 'Yes').astype(int)
-                X_spider = spider_hist_clean[selected_vars].values
-                y_spider = spider_hist_clean['target'].values
+                train_spider['target'] = (train_spider['Win?'] == 'Yes').astype(int)
+                X_train = train_spider[selected_vars].values.astype(np.float64)
+                y_train = train_spider['target'].values
 
-                # Logistic Regression
+                # ---------- Logistic Regression (unchanged) ----------
                 lr_spider = LogisticRegression(max_iter=1000)
-                lr_spider.fit(X_spider, y_spider)
-                y_prob_lr_in = lr_spider.predict_proba(X_spider)[:, 1]
-                ll_lr_spider = log_loss(y_spider, y_prob_lr_in)
-                bs_lr_spider = brier_score_loss(y_spider, y_prob_lr_in)
+                lr_spider.fit(X_train, y_train)
+                y_prob_lr_in = lr_spider.predict_proba(X_train)[:, 1]
+                ll_lr_spider = log_loss(y_train, y_prob_lr_in)
+                bs_lr_spider = brier_score_loss(y_train, y_prob_lr_in)
 
-                # Weighted KNN (cross‑validated metrics, clipped)
+                # ---------- Weighted KNN with Platt calibration (matching scatterplots) ----------
                 k_spider = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_spider")
-                scaler_knn_spider = StandardScaler()
-                X_spider_scaled = scaler_knn_spider.fit_transform(X_spider)
-                knn_cv_spider = KNeighborsClassifier(n_neighbors=k_spider, weights='distance')
-                y_prob_knn_oof = cross_val_predict(knn_cv_spider, X_spider_scaled, y_spider, cv=5, method='predict_proba')[:, 1]
-                y_prob_knn_oof = np.clip(y_prob_knn_oof, 0.1, 0.9)
-                ll_knn_spider = log_loss(y_spider, y_prob_knn_oof)
-                bs_knn_spider = brier_score_loss(y_spider, y_prob_knn_oof)
+                scaler_knn = StandardScaler()
+                X_scaled = scaler_knn.fit_transform(X_train)
 
-                # Final KNN for prediction
-                knn_spider = KNeighborsClassifier(n_neighbors=k_spider, weights='distance')
-                knn_spider.fit(X_spider_scaled, y_spider)
+                base_knn = KNeighborsClassifier(n_neighbors=k_spider, weights='distance')
+                calibrated_knn = CalibratedClassifierCV(base_knn, method='sigmoid', cv=5)
+                calibrated_knn.fit(X_scaled, y_train)
 
+                # In‑sample probabilities for metrics
+                y_prob_knn_in = calibrated_knn.predict_proba(X_scaled)[:, 1]
+                y_prob_knn_in = np.clip(y_prob_knn_in, 0.1, 0.9)
+                ll_knn_spider = log_loss(y_train, y_prob_knn_in)
+                bs_knn_spider = brier_score_loss(y_train, y_prob_knn_in)
+
+                # ---------- Display model metrics ----------
                 col_sm1, col_sm2 = st.columns(2)
                 with col_sm1:
                     st.metric("LogReg Log‑loss", f"{ll_lr_spider:.3f}")
@@ -1376,6 +1386,7 @@ else:
                     st.metric("KNN Log‑loss", f"{ll_knn_spider:.3f}")
                     st.metric("KNN Brier", f"{bs_knn_spider:.3f}")
 
+                # ---------- Upcoming fight selection ----------
                 up_ids = sorted(spider_upcoming['FightID'].unique())
                 chosen_fight = st.selectbox("Choose an upcoming fight", up_ids, key="spider_fight")
 
@@ -1384,6 +1395,7 @@ else:
                     f1 = fight_rows.iloc[0]
                     f2 = fight_rows.iloc[1]
 
+                    # ----- Spider chart (advantage for fighter 1) -----
                     radar_vals = []
                     for var in selected_vars:
                         if var.endswith('_Diff') or var in {'AgeDiff','HeightDiff','ReachDiff'}:
@@ -1394,23 +1406,55 @@ else:
                             val = v1 - v2
                         radar_vals.append(val)
 
-                    fig = go.Figure(go.Scatterpolar(r=radar_vals, theta=selected_vars, fill='toself',
-                                                    name=f"{f1['Fighter']} advantage"))
-                    fig.update_layout(polar=dict(radialaxis=dict(visible=True)),
-                                      title=f"Advantage: {f1['Fighter']} vs {f2['Fighter']}")
+                    fig = go.Figure(go.Scatterpolar(
+                        r=radar_vals, theta=selected_vars, fill='toself',
+                        name=f"{f1['Fighter']} advantage"
+                    ))
+                    fig.update_layout(
+                        polar=dict(radialaxis=dict(visible=True)),
+                        title=f"Advantage: {f1['Fighter']} vs {f2['Fighter']}"
+                    )
                     st.plotly_chart(fig, use_container_width=True)
 
-                    up_vec = f1[selected_vars].values.reshape(1, -1)
+                    # ----- Predict win probability for fighter 1 -----
+                    # Prepare the input vector, impute missing with training column means
+                    means = X_train.mean(axis=0)
+                    up_vals = []
+                    for i, var in enumerate(selected_vars):
+                        raw = f1[var]
+                        try:
+                            v = float(raw) if pd.notna(raw) else means[i]
+                        except (ValueError, TypeError):
+                            v = means[i]
+                        up_vals.append(v)
+                    up_vec = np.array([up_vals], dtype=np.float64)
+
+                    # LR probability
                     prob_lr_f1 = lr_spider.predict_proba(up_vec)[0, 1]
-                    up_vec_scaled = scaler_knn_spider.transform(up_vec)
-                    prob_knn_f1 = np.clip(knn_spider.predict_proba(up_vec_scaled)[0, 1], 0.1, 0.9)
 
-                    overall_wr_spider = (spider_hist_filtered['Win?'] == 'Yes').mean() * 100 if len(spider_hist_filtered) > 0 else 0.0
-                    recent_spider = spider_hist_filtered.tail(recent_window)
+                    # KNN probability (scale using the SAME scaler)
+                    up_scaled = scaler_knn.transform(up_vec)
+                    prob_knn_f1 = calibrated_knn.predict_proba(up_scaled)[0, 1]
+                    prob_knn_f1 = np.clip(prob_knn_f1, 0.1, 0.9)
+
+                    # ----- Bayesian shrinkage (consistent with scatterplots) -----
+                    # Use only the *filtered* historical fights for win rates
+                    overall_wr_spider = (spider_hist['Win?'] == 'Yes').mean() * 100 if len(spider_hist) > 0 else 0.0
+                    recent_spider = spider_hist.tail(recent_window)
                     recent_wr_spider = (recent_spider['Win?'] == 'Yes').mean() * 100 if len(recent_spider) > 0 else 0.0
-                    shrunk_lr = (prior_weight * (overall_wr_spider / 100) + prob_lr_f1) / (prior_weight + 1)
-                    shrunk_knn = (prior_weight * (overall_wr_spider / 100) + prob_knn_f1) / (prior_weight + 1)
+                    recent_count_spider = len(recent_spider)
 
+                    # Shrunken recent win rate
+                    if recent_count_spider > 0:
+                        shrunk_recent = (prior_weight * overall_wr_spider + recent_count_spider * recent_wr_spider) / (prior_weight + recent_count_spider)
+                    else:
+                        shrunk_recent = overall_wr_spider
+
+                    # Shrink probabilities toward that recent win rate
+                    shrunk_lr = (prior_weight * (shrunk_recent / 100) + prob_lr_f1) / (prior_weight + 1)
+                    shrunk_knn = (prior_weight * (shrunk_recent / 100) + prob_knn_f1) / (prior_weight + 1)
+
+                    # ----- Display probabilities -----
                     col_sp1, col_sp2, col_sp3 = st.columns(3)
                     with col_sp1:
                         st.metric("LogReg", f"{prob_lr_f1:.1%}")
@@ -1422,15 +1466,15 @@ else:
                         st.metric("Overall Win% (filtered)", f"{overall_wr_spider:.1f}%")
                         st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr_spider:.1f}%")
 
-                    # Similarity (most recent N fights)
+                    # ----- Similarity table (most recent N fights) -----
                     st.subheader(f"Most Similar Historical Fights (from last {recent_window} fights)")
                     scaler_sim = StandardScaler()
-                    X_spider_scaled_sim = scaler_sim.fit_transform(X_spider)
+                    X_scaled_sim = scaler_sim.fit_transform(X_train)
                     up_scaled_sim = scaler_sim.transform(up_vec)
-                    dists = cdist(up_scaled_sim, X_spider_scaled_sim, 'euclidean').flatten()
+                    dists = cdist(up_scaled_sim, X_scaled_sim, 'euclidean').flatten()
                     sim_scores = 100 * (1 - dists / (dists.max() or 1))
 
-                    sim_df = spider_hist_clean[['FightDate', 'Fighter', 'Opponent', 'Win?']].copy()
+                    sim_df = train_spider[['FightDate', 'Fighter', 'Opponent', 'Win?']].copy()
                     sim_df['Similarity'] = sim_scores.round(1)
                     sim_df = sim_df.sort_values('FightDate', ascending=False).head(recent_window)
                     top_sim = sim_df.sort_values('Similarity', ascending=False).head(20)
