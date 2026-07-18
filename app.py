@@ -276,22 +276,29 @@ def load_full_data():
     }, inplace=True)
     fight_totals = fight_totals.merge(opp_days, on=['FightID','Opponent'], how='left')
 
-    # ---------- Prev7Rec (last 7 non‑NC fights win rate) ----------
+    # ---------- Prev7Wins / Prev7Losses (last 7 non‑NC fights) ----------
     def prev7_record(group):
         group = group.sort_values('FightDate')
-        rec_series = pd.Series(np.nan, index=group.index)
+        wins = []
+        losses = []
         for i in group.index:
             prev = group.loc[:i-1]
-            prev_valid = prev[prev['Win?'].isin(['Yes','No'])]
+            prev_valid = prev[prev['Win?'].isin(['Yes', 'No'])]   # ignore draws & NC
             last7 = prev_valid.tail(7)
-            if len(last7) > 0:
-                wins = (last7['Win?'] == 'Yes').sum()
-                rec_series.at[i] = wins / len(last7)
-        return rec_series
+            w = (last7['Win?'] == 'Yes').sum()
+            l = (last7['Win?'] == 'No').sum()
+            wins.append(w)
+            losses.append(l)
+        return pd.DataFrame({'Prev7Wins': wins, 'Prev7Losses': losses}, index=group.index)
 
-    fight_totals['Prev7Rec'] = fight_totals.groupby('Fighter', group_keys=False).apply(prev7_record).reset_index(level=0, drop=True)
-    opp_rec = fight_totals[['FightID','Fighter','Prev7Rec']].copy()
-    opp_rec.rename(columns={'Fighter':'Opponent', 'Prev7Rec':'Opponent_Prev7Rec'}, inplace=True)
+    rec_df = fight_totals.groupby('Fighter', group_keys=False).apply(prev7_record)
+    fight_totals = fight_totals.join(rec_df)
+
+    # Opponent versions
+    opp_rec = fight_totals[['FightID','Fighter','Prev7Wins','Prev7Losses']].copy()
+    opp_rec.rename(columns={'Fighter':'Opponent',
+                            'Prev7Wins':'Opponent_Prev7Wins',
+                            'Prev7Losses':'Opponent_Prev7Losses'}, inplace=True)
     fight_totals = fight_totals.merge(opp_rec, on=['FightID','Opponent'], how='left')
 
     # DIFFERENTIALS (Fighter − Opponent)
@@ -320,7 +327,8 @@ def load_full_data():
         ('CareerAvg_Def_DS_Acc', 'Opponent_CareerAvg_Def_DS_Acc'),
         ('CareerAvg_Def_DSL_per_KD', 'Opponent_CareerAvg_Def_DSL_per_KD'),
         ('CareerAvg_Def_Ctrl_per_TD', 'Opponent_CareerAvg_Def_Ctrl_per_TD'),
-        ('Prev7Rec', 'Opponent_Prev7Rec'),
+        ('Prev7Wins', 'Opponent_Prev7Wins'),
+        ('Prev7Losses', 'Opponent_Prev7Losses'),
     ]
     for f_col, o_col in diff_pairs:
         if f_col in fight_totals.columns and o_col in fight_totals.columns:
@@ -479,7 +487,7 @@ for col in ['EventCountry', 'Country', 'Stance', 'WC', 'Title', 'ScheduledRounds
     if col in all_fights_display.columns:
         all_fights_display[col] = all_fights_display[col].fillna('').astype(str)
 
-# ---------- Sidebar Filters (same as before) ----------
+# ---------- Sidebar Filters (unchanged) ----------
 st.sidebar.title("Filters")
 
 with st.sidebar.expander("General", expanded=True):
@@ -682,10 +690,11 @@ for result, col in zip(['Yes', 'No'], [col1, col2]):
         height_diff_mean = subset['HeightDiff'].mean()
         reach_diff_mean = subset['ReachDiff'].mean()
         win_pct = subset['CareerWinPct'].mean()
-        prev7rec = subset['Prev7Rec'].mean() if 'Prev7Rec' in subset else 0
+        avg_prev_wins = subset['Prev7Wins'].mean() if 'Prev7Wins' in subset else 0
+        avg_prev_losses = subset['Prev7Losses'].mean() if 'Prev7Losses' in subset else 0
 
         st.write(f"**Career Win %:** {win_pct:.1f}%")
-        st.write(f"**Prev 7 Rec:** {prev7rec:.2f}")
+        st.write(f"**Prev 7 Record:** {avg_prev_wins:.0f}‑{avg_prev_losses:.0f}")
         st.write(f"**Career Avg SS:** {avg_ss:.1f} / {avg_ssa:.1f} (Acc: {avg_ss_acc:.1f}%)")
         st.write(f"**Career Avg TD:** {avg_td:.1f} / {avg_tda:.1f}")
         st.write(f"**Career Avg Subs:** {avg_subs:.1f} | Rev: {avg_rev:.1f}")
@@ -713,7 +722,9 @@ if not upcoming_data_unfiltered.empty:
                 st.write(f"**Stance:** {row['Stance']} | **Country:** {row['Country']}")
                 st.write(f"**Fight #:** {row['FightNumber']} | **Opp Fight #:** {row['Opponent_FightNumber']}")
                 st.write(f"**Days Since Prev:** {row['DaysSincePrev']:.0f} days  | **Avg 3‑Fight Gap:** {row['Avg3DaysGap']:.0f} days")
-                st.write(f"**Career Win %:** {row['CareerWinPct']:.1f}% | **Prev7Rec:** {row['Prev7Rec']:.2f}" if pd.notna(row['Prev7Rec']) else f"**Career Win %:** {row['CareerWinPct']:.1f}%")
+                pw = int(row['Prev7Wins']) if pd.notna(row['Prev7Wins']) else 0
+                pl = int(row['Prev7Losses']) if pd.notna(row['Prev7Losses']) else 0
+                st.write(f"**Career Win %:** {row['CareerWinPct']:.1f}% | **Prev 7 Record:** {pw}‑{pl}")
                 st.write(f"**Odds (Fighter/Opp):** {row['FighterOddsBFO']} / {row['OpponentOddsBFO']}")
 
                 st.write("**Career Averages (offence):**")
@@ -800,7 +811,7 @@ st.header("Last 20 Fights")
 last20 = data.sort_values('FightDate', ascending=False).head(20)
 display_cols = ['FightDate','Fighter','Opponent','WC','Win?','Method','Age','Height','Reach',
                 'CareerAvg_SS','CareerAvg_KD','DaysSincePrev','Avg3DaysGap','Title',
-                'FighterOddsBFO','OpponentOddsBFO','Prev7Rec']
+                'FighterOddsBFO','OpponentOddsBFO','Prev7Wins','Prev7Losses']
 if 'CareerAvg_Ctrl' in data.columns: display_cols.append('CareerAvg_Ctrl')
 display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
@@ -812,7 +823,7 @@ core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
         'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev', 'Avg3DaysGap',
         'FightNumber', 'Opponent_FightNumber', 'FighterOddsNum', 'PrevFighterOddsNum',
         'CareerWinPct', 'Opponent_CareerWinPct',
-        'Prev7Rec', 'Opponent_Prev7Rec']
+        'Prev7Wins', 'Opponent_Prev7Wins', 'Prev7Losses', 'Opponent_Prev7Losses']
 career_avg = [c for c in data.columns if c.startswith('CareerAvg_') and not c.startswith('Opponent_CareerAvg_')]
 opp_career_avg = [c for c in data.columns if c.startswith('Opponent_CareerAvg_')]
 diff_cols = [c for c in data.columns if c.endswith('_Diff')]
@@ -1354,7 +1365,7 @@ else:
             'DaysSincePrev', 'Avg3DaysGap',
             'FightNumber', 'Opponent_FightNumber',
             'FighterOddsNum', 'PrevFighterOddsNum',
-            'CareerWinPct', 'Prev7Rec', 'Opponent_Prev7Rec',
+            'CareerWinPct', 'Prev7Wins', 'Prev7Losses', 'Opponent_Prev7Wins', 'Opponent_Prev7Losses',
             'CareerAvg_', 'Opponent_CareerAvg_',
             '_Diff'
         ]
