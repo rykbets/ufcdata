@@ -294,66 +294,50 @@ def load_full_data():
                             'Prev7Losses':'Opponent_Prev7Losses'}, inplace=True)
     fight_totals = fight_totals.merge(opp_rec, on=['FightID','Opponent'], how='left')
 
-    # ---------- COLLEY MATRIX RATINGS (fully vectorized, no loops) ----------
-    # Only historical fights (Win? not NaN)
+       # ---------- COLLEY MATRIX RATINGS (fully vectorized, NO loops) ----------
     hist = fight_totals[fight_totals['Win?'].notna()][['Fighter','Opponent','Win?']].drop_duplicates()
 
-    # Count games per fighter (appearances in either column)
+    # Count games per fighter
     all_fighters = pd.concat([hist['Fighter'], hist['Opponent']])
     n_games = all_fighters.value_counts()
 
-    # Wins and losses for the fighter column (when Fighter is the row's Fighter)
+    # Wins and losses (only from the Fighter column)
     wins = hist[hist['Win?'] == 'Yes'].groupby('Fighter').size()
     losses = hist[hist['Win?'] == 'No'].groupby('Fighter').size()
-
-    # Ensure all fighters have 0 for missing wins/losses
     wins = wins.reindex(n_games.index, fill_value=0)
     losses = losses.reindex(n_games.index, fill_value=0)
 
-    # Build opponent count matrix (how many times each pair fought)
-    # Create an undirected edge list with counts
+    # Build the opponent count matrix (sparse then convert to dense for small N)
     edges = pd.concat([
         hist[['Fighter','Opponent']].rename(columns={'Fighter':'f1','Opponent':'f2'}),
         hist[['Opponent','Fighter']].rename(columns={'Opponent':'f1','Fighter':'f2'})
     ])
     opp_matrix = edges.groupby(['f1','f2']).size().unstack(fill_value=0)
-    # Ensure we have all fighters in both rows and columns
     opp_matrix = opp_matrix.reindex(index=n_games.index, columns=n_games.index, fill_value=0)
 
     fighters_list = n_games.index.tolist()
     N = len(fighters_list)
+
     if N == 0:
         fight_totals['FighterColleyRating'] = 0.5
         fight_totals['OpponentColleyRating'] = 0.5
         fight_totals['ColleyRating_Diff'] = 0.0
     else:
-        f_to_idx = {f: i for i, f in enumerate(fighters_list)}
-        C = np.zeros((N, N))
-        b = np.zeros(N)
+        # Build C and b purely with numpy
+        C = -opp_matrix.values.astype(np.float64)            # off‑diagonal: -count of fights
+        np.fill_diagonal(C, 2 + n_games.values)              # diagonal: 2 + games
+        b = 1 + (wins.values - losses.values) / 2.0
 
-        # Fill the Colley matrix
-        for f in fighters_list:
-            i = f_to_idx[f]
-            C[i, i] = 2 + n_games[f]
-            b[i] = 1 + (wins[f] - losses[f]) / 2
-
-        for f1 in fighters_list:
-            i = f_to_idx[f1]
-            for f2, cnt in opp_matrix.loc[f1].items():
-                if cnt > 0 and f2 in f_to_idx:
-                    j = f_to_idx[f2]
-                    C[i, j] = -cnt
-
-        # Solve the linear system
+        # Solve (add tiny ridge for stability)
         try:
-            final_ratings = np.linalg.solve(C + np.eye(N)*1e-6, b)
+            ratings = np.linalg.solve(C + np.eye(N)*1e-6, b)
         except np.linalg.LinAlgError:
-            final_ratings = np.linalg.lstsq(C, b, rcond=None)[0]
+            ratings = np.linalg.lstsq(C, b, rcond=None)[0]
 
-        rating_map = {f: r for f, r in zip(fighters_list, final_ratings)}
-        default_rating = np.median(final_ratings) if len(final_ratings) > 0 else 0.5
+        rating_map = dict(zip(fighters_list, ratings))
+        default_rating = float(np.median(ratings))
 
-        # Vectorized assignment to all rows
+        # Assign to all rows with .map() – fast
         fight_totals['FighterColleyRating'] = fight_totals['Fighter'].map(rating_map).fillna(default_rating)
         fight_totals['OpponentColleyRating'] = fight_totals['Opponent'].map(rating_map).fillna(default_rating)
         fight_totals['ColleyRating_Diff'] = fight_totals['FighterColleyRating'] - fight_totals['OpponentColleyRating']
