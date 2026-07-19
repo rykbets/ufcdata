@@ -295,104 +295,68 @@ def load_full_data():
                             'Prev7Losses':'Opponent_Prev7Losses'}, inplace=True)
     fight_totals = fight_totals.merge(opp_rec, on=['FightID','Opponent'], how='left')
 
-    # ---------- COLLEY MATRIX RATINGS (sparse, time‑aware) ----------
-    # All fights sorted by date (historical only)
-    all_fights_sorted = fight_totals[fight_totals['Win?'].isin(['Yes','No'])].copy()
-    all_fights_sorted = all_fights_sorted[['FightID','FightDate','Fighter','Opponent','Win?']].drop_duplicates()
-    all_fights_sorted = all_fights_sorted.sort_values('FightDate')
+    # ---------- FINAL COLLEY RATING (sparse, one‑shot) ----------
+    hist = fight_totals[fight_totals['Win?'].isin(['Yes','No'])][['Fighter','Opponent','Win?']].drop_duplicates()
 
-    # Dictionaries for counts
-    n_games = {}
-    wins = {}
-    losses = {}
-    opp_counts = {}          # opp_counts[f1][f2] = number of fights
+    from collections import defaultdict
+    from scipy.sparse import lil_matrix, csr_matrix, eye as sparse_eye
+    from scipy.sparse.linalg import spsolve
 
-    # current ratings (after processing a date) – start with default
-    current_ratings = {}
-    default_rating = 0.5
+    n_games = defaultdict(int)
+    wins = defaultdict(int)
+    losses = defaultdict(int)
+    opp_counts = defaultdict(lambda: defaultdict(int))
 
-    # Store pre‑fight ratings for each FightID
-    pre_ratings = {}
+    # Count from all historical fights (fast)
+    for _, row in hist.iterrows():          # this iterrows is on a deduplicated set, very small
+        f, o, w = row['Fighter'], row['Opponent'], row['Win?']
+        n_games[f] += 1
+        n_games[o] += 1
+        if w == 'Yes':
+            wins[f] += 1
+            losses[o] += 1
+        elif w == 'No':
+            losses[f] += 1
+            wins[o] += 1
+        opp_counts[f][o] += 1
+        opp_counts[o][f] += 1
 
-    # Helper to solve Colley given current counts (sparse version)
-    def solve_colley_sparse(n_games, wins, losses, opp_counts, fighters_list):
-        N = len(fighters_list)
+    fighters_list = sorted([f for f, n in n_games.items() if n > 0])
+    N = len(fighters_list)
+    if N == 0:
+        fight_totals['FighterColleyRating'] = 0.5
+        fight_totals['OpponentColleyRating'] = 0.5
+        fight_totals['ColleyRating_Diff'] = 0.0
+    else:
         f_to_idx = {f: i for i, f in enumerate(fighters_list)}
         C = lil_matrix((N, N), dtype=np.float64)
         b = np.zeros(N)
+
         for f in fighters_list:
             i = f_to_idx[f]
-            C[i, i] = 2 + n_games.get(f, 0)
-            b[i] = 1 + (wins.get(f, 0) - losses.get(f, 0)) / 2.0
-            for opp, cnt in opp_counts.get(f, {}).items():
-                if opp in f_to_idx:
-                    j = f_to_idx[opp]
+            C[i, i] = 2 + n_games[f]
+            b[i] = 1 + (wins[f] - losses[f]) / 2.0
+            for opp, cnt in opp_counts[f].items():
+                j = f_to_idx.get(opp, -1)
+                if j >= 0:
                     C[i, j] = -cnt
-        # Convert to CSR and solve
-        C_csr = C.tocsr()
-        # Add tiny ridge on diagonal for stability
-        C_csr = C_csr + sparse_eye(N, dtype=np.float64, format='csr') * 1e-6
+
+        C_csr = C.tocsr() + sparse_eye(N, dtype=np.float64, format='csr') * 1e-6
         ratings = spsolve(C_csr, b)
-        return dict(zip(fighters_list, ratings))
 
-    # Iterate over dates
-    for date, group in all_fights_sorted.groupby('FightDate'):
-        # --- Pre‑fight ratings for this date's fights ---
-        for _, row in group.iterrows():
-            fid = row['FightID']
-            f = row['Fighter']
-            o = row['Opponent']
-            f_rating = current_ratings.get(f, default_rating)
-            o_rating = current_ratings.get(o, default_rating)
-            pre_ratings[fid] = (f_rating, o_rating)
+        rating_map = dict(zip(fighters_list, ratings))
+        default_rating = float(np.median(ratings))
 
-        # --- Update records with this date's fights ---
-        for _, row in group.iterrows():
-            f = row['Fighter']
-            o = row['Opponent']
-            w = row['Win?']
-            # Update game counts
-            n_games[f] = n_games.get(f, 0) + 1
-            n_games[o] = n_games.get(o, 0) + 1
-            if w == 'Yes':
-                wins[f] = wins.get(f, 0) + 1
-                losses[o] = losses.get(o, 0) + 1
-            elif w == 'No':
-                losses[f] = losses.get(f, 0) + 1
-                wins[o] = wins.get(o, 0) + 1
-            # Draw: no win/loss change
-            # Update opponent counts (both directions)
-            opp_counts.setdefault(f, {}).setdefault(o, 0)
-            opp_counts[f][o] += 1
-            opp_counts.setdefault(o, {}).setdefault(f, 0)
-            opp_counts[o][f] += 1
-
-        # --- Re‑solve Colley for all fighters with at least one fight ---
-        fighters_with_games = [f for f, n in n_games.items() if n > 0]
-        if fighters_with_games:
-            current_ratings = solve_colley_sparse(n_games, wins, losses, opp_counts, fighters_with_games)
-        # (if no fighters yet, keep default)
-
-    # Now assign pre‑fight ratings to every row in fight_totals
-    fighter_ratings = []
-    opp_ratings = []
-    # For upcoming fights (no FightID in pre_ratings), use the final current ratings
-    for _, row in fight_totals.iterrows():
-        fid = row['FightID']
-        if fid in pre_ratings:
-            fr, opr = pre_ratings[fid]
-        else:
-            # upcoming fight – use the latest rating after all history
-            f = row['Fighter']
-            o = row['Opponent']
-            fr = current_ratings.get(f, default_rating)
-            opr = current_ratings.get(o, default_rating)
-        fighter_ratings.append(fr)
-        opp_ratings.append(opr)
-
-    fight_totals['FighterColleyRating'] = fighter_ratings
-    fight_totals['OpponentColleyRating'] = opp_ratings
-    fight_totals['ColleyRating_Diff'] = fight_totals['FighterColleyRating'] - fight_totals['OpponentColleyRating']
+        # Vectorized assignment – NO iterrows over fight_totals
+        fight_totals['FighterColleyRating'] = (
+            fight_totals['Fighter'].map(rating_map).fillna(default_rating)
+        )
+        fight_totals['OpponentColleyRating'] = (
+            fight_totals['Opponent'].map(rating_map).fillna(default_rating)
+        )
+        fight_totals['ColleyRating_Diff'] = (
+            fight_totals['FighterColleyRating'] - fight_totals['OpponentColleyRating']
+        )
     # DIFFERENTIALS (add Colley diff)
     diff_pairs = [
         ('CareerAvg_SS', 'Opponent_CareerAvg_SS'),
