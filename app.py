@@ -294,7 +294,7 @@ def load_full_data():
                             'Prev7Losses':'Opponent_Prev7Losses'}, inplace=True)
     fight_totals = fight_totals.merge(opp_rec, on=['FightID','Opponent'], how='left')
 
-       # ---------- COLLEY MATRIX RATINGS (final only, not time‑dependent) ----------
+    # ---------- COLLEY MATRIX RATINGS (final only, vectorized) ----------
     hist_fights = fight_totals[fight_totals['Win?'].notna()][['Fighter','Opponent','Win?']].drop_duplicates()
 
     from collections import defaultdict
@@ -315,48 +315,43 @@ def load_full_data():
         elif w == 'No':
             losses[f] += 1
             wins[o] += 1
-        # Draw: no change to win/loss
         opp_counts[f][o] += 1
         opp_counts[o][f] += 1
 
     fighters_list = sorted([f for f, n in n_games.items() if n > 0])
     N = len(fighters_list)
-    f_to_idx = {f: i for i, f in enumerate(fighters_list)}
-    C = np.zeros((N, N))
-    b = np.zeros(N)
+    if N == 0:
+        fight_totals['FighterColleyRating'] = 0.5
+        fight_totals['OpponentColleyRating'] = 0.5
+        fight_totals['ColleyRating_Diff'] = 0.0
+    else:
+        f_to_idx = {f: i for i, f in enumerate(fighters_list)}
+        C = np.zeros((N, N))
+        b = np.zeros(N)
 
-    for i, f in enumerate(fighters_list):
-        C[i, i] = 2 + n_games[f]
-        b[i] = 1 + (wins[f] - losses[f]) / 2
+        for i, f in enumerate(fighters_list):
+            C[i, i] = 2 + n_games[f]
+            b[i] = 1 + (wins[f] - losses[f]) / 2
 
-    for f1 in fighters_list:
-        i = f_to_idx[f1]
-        for f2, cnt in opp_counts[f1].items():
-            if f2 in f_to_idx:
-                j = f_to_idx[f2]
-                C[i, j] = -cnt
+        for f1 in fighters_list:
+            i = f_to_idx[f1]
+            for f2, cnt in opp_counts[f1].items():
+                if f2 in f_to_idx:
+                    j = f_to_idx[f2]
+                    C[i, j] = -cnt
 
-    # Solve final system (add small ridge for numerical stability)
-    try:
-        final_ratings = np.linalg.solve(C + np.eye(N)*1e-6, b)
-    except np.linalg.LinAlgError:
-        final_ratings = np.linalg.lstsq(C, b, rcond=None)[0]
+        try:
+            final_ratings = np.linalg.solve(C + np.eye(N)*1e-6, b)
+        except np.linalg.LinAlgError:
+            final_ratings = np.linalg.lstsq(C, b, rcond=None)[0]
 
-    rating_map = {f: r for f, r in zip(fighters_list, final_ratings)}
-    default_rating = np.median(final_ratings) if len(final_ratings) > 0 else 0.5
+        rating_map = {f: r for f, r in zip(fighters_list, final_ratings)}
+        default_rating = np.median(final_ratings) if len(final_ratings) > 0 else 0.5
 
-    # Assign the same final rating to every row (pre‑fight for upcoming, same for historical)
-    fighter_ratings = []
-    opp_ratings = []
-    for idx, row in fight_totals.iterrows():
-        f = row['Fighter']
-        o = row['Opponent']
-        fighter_ratings.append(rating_map.get(f, default_rating))
-        opp_ratings.append(rating_map.get(o, default_rating))
-
-    fight_totals['FighterColleyRating'] = fighter_ratings
-    fight_totals['OpponentColleyRating'] = opp_ratings
-    fight_totals['ColleyRating_Diff'] = fight_totals['FighterColleyRating'] - fight_totals['OpponentColleyRating']
+        # Vectorized assignment – NO iterrows!
+        fight_totals['FighterColleyRating'] = fight_totals['Fighter'].map(rating_map).fillna(default_rating)
+        fight_totals['OpponentColleyRating'] = fight_totals['Opponent'].map(rating_map).fillna(default_rating)
+        fight_totals['ColleyRating_Diff'] = fight_totals['FighterColleyRating'] - fight_totals['OpponentColleyRating']
 
     # DIFFERENTIALS (add Colley diff)
     diff_pairs = [
