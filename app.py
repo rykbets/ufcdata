@@ -294,31 +294,33 @@ def load_full_data():
                             'Prev7Losses':'Opponent_Prev7Losses'}, inplace=True)
     fight_totals = fight_totals.merge(opp_rec, on=['FightID','Opponent'], how='left')
 
-    # ---------- COLLEY MATRIX RATINGS (final only, vectorized) ----------
-    hist_fights = fight_totals[fight_totals['Win?'].notna()][['Fighter','Opponent','Win?']].drop_duplicates()
+    # ---------- COLLEY MATRIX RATINGS (fully vectorized, no loops) ----------
+    # Only historical fights (Win? not NaN)
+    hist = fight_totals[fight_totals['Win?'].notna()][['Fighter','Opponent','Win?']].drop_duplicates()
 
-    from collections import defaultdict
-    n_games = defaultdict(int)
-    wins = defaultdict(int)
-    losses = defaultdict(int)
-    opp_counts = defaultdict(lambda: defaultdict(int))
+    # Count games per fighter (appearances in either column)
+    all_fighters = pd.concat([hist['Fighter'], hist['Opponent']])
+    n_games = all_fighters.value_counts()
 
-    for _, row in hist_fights.iterrows():
-        f = row['Fighter']
-        o = row['Opponent']
-        w = row['Win?']
-        n_games[f] += 1
-        n_games[o] += 1
-        if w == 'Yes':
-            wins[f] += 1
-            losses[o] += 1
-        elif w == 'No':
-            losses[f] += 1
-            wins[o] += 1
-        opp_counts[f][o] += 1
-        opp_counts[o][f] += 1
+    # Wins and losses for the fighter column (when Fighter is the row's Fighter)
+    wins = hist[hist['Win?'] == 'Yes'].groupby('Fighter').size()
+    losses = hist[hist['Win?'] == 'No'].groupby('Fighter').size()
 
-    fighters_list = sorted([f for f, n in n_games.items() if n > 0])
+    # Ensure all fighters have 0 for missing wins/losses
+    wins = wins.reindex(n_games.index, fill_value=0)
+    losses = losses.reindex(n_games.index, fill_value=0)
+
+    # Build opponent count matrix (how many times each pair fought)
+    # Create an undirected edge list with counts
+    edges = pd.concat([
+        hist[['Fighter','Opponent']].rename(columns={'Fighter':'f1','Opponent':'f2'}),
+        hist[['Opponent','Fighter']].rename(columns={'Opponent':'f1','Fighter':'f2'})
+    ])
+    opp_matrix = edges.groupby(['f1','f2']).size().unstack(fill_value=0)
+    # Ensure we have all fighters in both rows and columns
+    opp_matrix = opp_matrix.reindex(index=n_games.index, columns=n_games.index, fill_value=0)
+
+    fighters_list = n_games.index.tolist()
     N = len(fighters_list)
     if N == 0:
         fight_totals['FighterColleyRating'] = 0.5
@@ -329,17 +331,20 @@ def load_full_data():
         C = np.zeros((N, N))
         b = np.zeros(N)
 
-        for i, f in enumerate(fighters_list):
+        # Fill the Colley matrix
+        for f in fighters_list:
+            i = f_to_idx[f]
             C[i, i] = 2 + n_games[f]
             b[i] = 1 + (wins[f] - losses[f]) / 2
 
         for f1 in fighters_list:
             i = f_to_idx[f1]
-            for f2, cnt in opp_counts[f1].items():
-                if f2 in f_to_idx:
+            for f2, cnt in opp_matrix.loc[f1].items():
+                if cnt > 0 and f2 in f_to_idx:
                     j = f_to_idx[f2]
                     C[i, j] = -cnt
 
+        # Solve the linear system
         try:
             final_ratings = np.linalg.solve(C + np.eye(N)*1e-6, b)
         except np.linalg.LinAlgError:
@@ -348,11 +353,10 @@ def load_full_data():
         rating_map = {f: r for f, r in zip(fighters_list, final_ratings)}
         default_rating = np.median(final_ratings) if len(final_ratings) > 0 else 0.5
 
-        # Vectorized assignment – NO iterrows!
+        # Vectorized assignment to all rows
         fight_totals['FighterColleyRating'] = fight_totals['Fighter'].map(rating_map).fillna(default_rating)
         fight_totals['OpponentColleyRating'] = fight_totals['Opponent'].map(rating_map).fillna(default_rating)
         fight_totals['ColleyRating_Diff'] = fight_totals['FighterColleyRating'] - fight_totals['OpponentColleyRating']
-
     # DIFFERENTIALS (add Colley diff)
     diff_pairs = [
         ('CareerAvg_SS', 'Opponent_CareerAvg_SS'),
