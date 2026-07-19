@@ -294,109 +294,69 @@ def load_full_data():
                             'Prev7Losses':'Opponent_Prev7Losses'}, inplace=True)
     fight_totals = fight_totals.merge(opp_rec, on=['FightID','Opponent'], how='left')
 
-    # ---------- COLLEY MATRIX RATINGS ----------
-    # Prepare unique fights sorted by date (only historical, non‑upcoming)
-    hist_fights = fight_totals[fight_totals['Win?'].notna()][['FightID','Fighter','Opponent','Win?','FightDate']].drop_duplicates()
-    hist_fights = hist_fights.sort_values('FightDate')
+       # ---------- COLLEY MATRIX RATINGS (final only, not time‑dependent) ----------
+    hist_fights = fight_totals[fight_totals['Win?'].notna()][['Fighter','Opponent','Win?']].drop_duplicates()
 
-    # Dictionaries for counts
     from collections import defaultdict
     n_games = defaultdict(int)
     wins = defaultdict(int)
     losses = defaultdict(int)
-    opp_counts = defaultdict(lambda: defaultdict(int))  # opp_counts[f1][f2] = number of fights
+    opp_counts = defaultdict(lambda: defaultdict(int))
 
-    current_ratings = {}  # after each date
-    rating_log = {}       # date -> {fighter: rating}
-    pre_ratings = {}      # FightID -> (fighter_rating, opp_rating)
+    for _, row in hist_fights.iterrows():
+        f = row['Fighter']
+        o = row['Opponent']
+        w = row['Win?']
+        n_games[f] += 1
+        n_games[o] += 1
+        if w == 'Yes':
+            wins[f] += 1
+            losses[o] += 1
+        elif w == 'No':
+            losses[f] += 1
+            wins[o] += 1
+        # Draw: no change to win/loss
+        opp_counts[f][o] += 1
+        opp_counts[o][f] += 1
 
-    default_rating = 0.5
+    fighters_list = sorted([f for f, n in n_games.items() if n > 0])
+    N = len(fighters_list)
+    f_to_idx = {f: i for i, f in enumerate(fighters_list)}
+    C = np.zeros((N, N))
+    b = np.zeros(N)
 
-    for date, group in hist_fights.groupby('FightDate'):
-        # Pre‑fight ratings for fights on this date
-        for _, row in group.iterrows():
-            fid = row['FightID']
-            f = row['Fighter']
-            o = row['Opponent']
-            f_rating = current_ratings.get(f, default_rating)
-            o_rating = current_ratings.get(o, default_rating)
-            pre_ratings[fid] = (f_rating, o_rating)
+    for i, f in enumerate(fighters_list):
+        C[i, i] = 2 + n_games[f]
+        b[i] = 1 + (wins[f] - losses[f]) / 2
 
-        # Update records with this date's fights
-        for _, row in group.iterrows():
-            f = row['Fighter']
-            o = row['Opponent']
-            w = row['Win?']
-            n_games[f] += 1
-            n_games[o] += 1
-            if w == 'Yes':
-                wins[f] += 1
-                losses[o] += 1
-            elif w == 'No':
-                losses[f] += 1
-                wins[o] += 1
-            # Draw: no win/loss, just game counts
-            opp_counts[f][o] += 1
-            opp_counts[o][f] += 1
+    for f1 in fighters_list:
+        i = f_to_idx[f1]
+        for f2, cnt in opp_counts[f1].items():
+            if f2 in f_to_idx:
+                j = f_to_idx[f2]
+                C[i, j] = -cnt
 
-        # Build Colley system for all fighters with games
-        fighters_list = sorted([f for f, n in n_games.items() if n > 0])
-        if not fighters_list:
-            continue
-        N = len(fighters_list)
-        f_to_idx = {f: i for i, f in enumerate(fighters_list)}
-        C = np.zeros((N, N))
-        b = np.zeros(N)
+    # Solve final system (add small ridge for numerical stability)
+    try:
+        final_ratings = np.linalg.solve(C + np.eye(N)*1e-6, b)
+    except np.linalg.LinAlgError:
+        final_ratings = np.linalg.lstsq(C, b, rcond=None)[0]
 
-        for i, f in enumerate(fighters_list):
-            C[i, i] = 2 + n_games[f]
-            b[i] = 1 + (wins[f] - losses[f]) / 2
+    rating_map = {f: r for f, r in zip(fighters_list, final_ratings)}
+    default_rating = np.median(final_ratings) if len(final_ratings) > 0 else 0.5
 
-        for f1 in fighters_list:
-            i = f_to_idx[f1]
-            for f2, cnt in opp_counts[f1].items():
-                if f2 in f_to_idx:
-                    j = f_to_idx[f2]
-                    C[i, j] = -cnt
-
-        # Solve linear system (add small ridge for safety)
-        try:
-            ratings = np.linalg.solve(C + np.eye(N)*1e-6, b)
-        except np.linalg.LinAlgError:
-            ratings = np.linalg.lstsq(C, b, rcond=None)[0]
-
-        # Update current ratings
-        for f, r in zip(fighters_list, ratings):
-            current_ratings[f] = r
-        # Store for this date (optional)
-        rating_log[date] = current_ratings.copy()
-
-    # Assign pre‑fight ratings to fight_totals
+    # Assign the same final rating to every row (pre‑fight for upcoming, same for historical)
     fighter_ratings = []
     opp_ratings = []
     for idx, row in fight_totals.iterrows():
-        fid = row['FightID']
-        if fid in pre_ratings:
-            fr, opr = pre_ratings[fid]
-            fighter_ratings.append(fr)
-            opp_ratings.append(opr)
-        else:
-            # upcoming fight – use current (latest) ratings
-            f = row['Fighter']
-            o = row['Opponent']
-            fr = current_ratings.get(f, default_rating)
-            opr = current_ratings.get(o, default_rating)
-            fighter_ratings.append(fr)
-            opp_ratings.append(opr)
+        f = row['Fighter']
+        o = row['Opponent']
+        fighter_ratings.append(rating_map.get(f, default_rating))
+        opp_ratings.append(rating_map.get(o, default_rating))
 
     fight_totals['FighterColleyRating'] = fighter_ratings
     fight_totals['OpponentColleyRating'] = opp_ratings
     fight_totals['ColleyRating_Diff'] = fight_totals['FighterColleyRating'] - fight_totals['OpponentColleyRating']
-
-    # Also keep current rating for each fighter (after all history)
-    # This will be used as a feature for upcoming fights (already included above)
-    # We'll add a column 'CurrentFighterColleyRating' but it's the same as FighterColleyRating for upcoming rows.
-    # For historical rows, it's pre‑fight. No need for extra column.
 
     # DIFFERENTIALS (add Colley diff)
     diff_pairs = [
