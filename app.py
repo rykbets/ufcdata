@@ -16,7 +16,8 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.model_selection import cross_val_predict
 from scipy.spatial.distance import cdist
-
+from scipy.sparse import lil_matrix, csr_matrix, eye as sparse_eye
+from scipy.sparse.linalg import spsolve
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
 MAIN_FILE_ID      = "1eWDGGS8qQdLWvS_dgJ-HqObsr4ie9RcD"
