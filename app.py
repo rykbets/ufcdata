@@ -24,7 +24,7 @@ st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 # ============================================================
 MAIN_FILE_ID            = "1eWDGGS8qQdLWvS_dgJ-HqObsr4ie9RcD"
 UPCOMING_FILE_ID        = "1mUyNR2WLHQjC8IuvG7RA6LoXPjJq3aZ1"
-COLLEY_RATINGS_FILE_ID  = "18ILSj_Fdm2aCqyBtjuXdMlAWMwLGo2au"   # ← replace with your actual ID
+COLLEY_RATINGS_FILE_ID  = "1qjjJ_7Lm5nq9ZtqBwXEtQe-iWeN_XveM"   # ← replace with your actual ID
 
 # ---------- Cached data loader ----------
 @st.cache_data
