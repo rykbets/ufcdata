@@ -16,13 +16,15 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.model_selection import cross_val_predict
 from scipy.spatial.distance import cdist
-from scipy.sparse import coo_matrix, csr_matrix, eye as sparse_eye
-from scipy.sparse.linalg import spsolve
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
-MAIN_FILE_ID      = "1eWDGGS8qQdLWvS_dgJ-HqObsr4ie9RcD"
-UPCOMING_FILE_ID  = "1mUyNR2WLHQjC8IuvG7RA6LoXPjJq3aZ1"
+# ============================================================
+# 🔑 GOOGLE DRIVE FILE IDS – CHANGE THE COLLEY ID TO YOURS
+# ============================================================
+MAIN_FILE_ID            = "1eWDGGS8qQdLWvS_dgJ-HqObsr4ie9RcD"
+UPCOMING_FILE_ID        = "1mUyNR2WLHQjC8IuvG7RA6LoXPjJq3aZ1"
+COLLEY_RATINGS_FILE_ID  = "18ILSj_Fdm2aCqyBtjuXdMlAWMwLGo2au"   # <-- replace with your actual ID
 
 # ---------- Cached data loader ----------
 @st.cache_data
@@ -60,6 +62,7 @@ def load_full_data():
                 df_up = df_up[df.columns]
                 df = pd.concat([df, df_up], ignore_index=True)
 
+    # ---------- Preprocessing ----------
     df['FightDate'] = pd.to_datetime(df['FightID'].str[:10])
 
     for col in ['FighterOddsBFO', 'OpponentOddsBFO']:
@@ -118,15 +121,21 @@ def load_full_data():
 
     # Odds parsing
     def parse_american_odds(odds_val):
-        if pd.isna(odds_val): return np.nan
-        if isinstance(odds_val, (int, float, np.integer, np.floating)): return int(odds_val)
+        if pd.isna(odds_val):
+            return np.nan
+        if isinstance(odds_val, (int, float, np.integer, np.floating)):
+            return int(odds_val)
         if isinstance(odds_val, str):
             s = odds_val.strip()
-            if s == '': return np.nan
-            try: return int(s.replace('+',''))
+            if s == '':
+                return np.nan
+            try:
+                return int(s.replace('+',''))
             except:
-                try: return int(float(s.replace('+','')))
-                except: return np.nan
+                try:
+                    return int(float(s.replace('+','')))
+                except:
+                    return np.nan
         return np.nan
 
     if 'FighterOddsBFO' in fight_totals.columns:
@@ -290,79 +299,28 @@ def load_full_data():
                             'Prev7Losses':'Opponent_Prev7Losses'}, inplace=True)
     fight_totals = fight_totals.merge(opp_rec, on=['FightID','Opponent'], how='left')
 
-    # ---------- COLLEY MATRIX RATINGS (fully vectorized, instant) ----------
-    # Use only historical fights (Win/Loss), ignore draws and NC for Colley
-    hist_colley = fight_totals[fight_totals['Win?'].isin(['Yes','No'])][['Fighter','Opponent','Win?']].drop_duplicates()
+    # ---------- LOAD PRECOMPUTED COLLEY RATINGS ----------
+    if COLLEY_RATINGS_FILE_ID.strip() and COLLEY_RATINGS_FILE_ID != "YOUR_COLLEY_RATINGS_FILE_ID_HERE":
+        gdown.download(f"https://drive.google.com/uc?id={COLLEY_RATINGS_FILE_ID}", "colley_ratings.csv", quiet=True)
+        ratings_df = pd.read_csv("colley_ratings.csv")
+        # Merge fighter rating
+        fight_totals = fight_totals.merge(ratings_df, on='Fighter', how='left')
+        fight_totals.rename(columns={'ColleyRating': 'FighterColleyRating'}, inplace=True)
+        # Merge opponent rating
+        opp_ratings = ratings_df.rename(columns={'Fighter': 'Opponent', 'ColleyRating': 'OpponentColleyRating'})
+        fight_totals = fight_totals.merge(opp_ratings, on='Opponent', how='left')
+        # Fill missing
+        default_rating = fight_totals['FighterColleyRating'].median() if not fight_totals['FighterColleyRating'].isna().all() else 0.5
+        fight_totals['FighterColleyRating'].fillna(default_rating, inplace=True)
+        fight_totals['OpponentColleyRating'].fillna(default_rating, inplace=True)
+        fight_totals['ColleyRating_Diff'] = fight_totals['FighterColleyRating'] - fight_totals['OpponentColleyRating']
+    else:
+        # If no ratings file, create placeholder columns
+        fight_totals['FighterColleyRating'] = 0.5
+        fight_totals['OpponentColleyRating'] = 0.5
+        fight_totals['ColleyRating_Diff'] = 0.0
 
-    # 1. Count games, wins, losses
-    games = pd.concat([hist_colley['Fighter'], hist_colley['Opponent']]).value_counts()
-    wins  = hist_colley[hist_colley['Win?'] == 'Yes'].groupby('Fighter').size()
-    losses = hist_colley[hist_colley['Win?'] == 'No'].groupby('Fighter').size()
-    # Align with all fighters
-    all_fighter_list = games.index
-    wins = wins.reindex(all_fighter_list, fill_value=0)
-    losses = losses.reindex(all_fighter_list, fill_value=0)
-
-    # 2. Build opponent co‑occurrence matrix using crosstab (sparse)
-    # Create a directed edge list (both directions)
-    edges = pd.concat([
-        hist_colley[['Fighter','Opponent']].rename(columns={'Fighter':'f1','Opponent':'f2'}),
-        hist_colley[['Opponent','Fighter']].rename(columns={'Opponent':'f1','Fighter':'f2'})
-    ])
-    opp_counts = pd.crosstab(edges['f1'], edges['f2'], dropna=False)
-    # Ensure index/columns contain all fighters
-    opp_counts = opp_counts.reindex(index=all_fighter_list, columns=all_fighter_list, fill_value=0)
-
-    # 3. Map fighters to integer indices
-    fighter_to_idx = {f: i for i, f in enumerate(all_fighter_list)}
-    idx_to_fighter = {i: f for f, i in fighter_to_idx.items()}
-    N = len(all_fighter_list)
-
-    # 4. Build Colley matrix C (sparse) and vector b
-    # C = 2I + diag(games) - A, where A_ij = number of fights between i and j
-    # We'll construct COO format.
-    row = []
-    col = []
-    data = []
-    b = np.ones(N) + (wins.values - losses.values) / 2.0
-
-    for f in all_fighter_list:
-        i = fighter_to_idx[f]
-        # diagonal
-        row.append(i)
-        col.append(i)
-        data.append(2 + games[f])
-
-    # off‑diagonal: subtract counts from opp_counts
-    for f1 in all_fighter_list:
-        i = fighter_to_idx[f1]
-        # get non‑zero opponents
-        row_vals = opp_counts.loc[f1]
-        for f2, cnt in row_vals.items():
-            if cnt > 0 and f2 in fighter_to_idx:
-                j = fighter_to_idx[f2]
-                row.append(i)
-                col.append(j)
-                data.append(-cnt)
-
-    C_coo = coo_matrix((data, (row, col)), shape=(N, N))
-    C_csr = C_coo.tocsr()
-    # Add tiny ridge
-    C_csr = C_csr + sparse_eye(N, format='csr') * 1e-6
-
-    # 5. Solve
-    ratings = spsolve(C_csr, b)
-
-    # 6. Map ratings to fighters
-    rating_map = {f: ratings[i] for f, i in fighter_to_idx.items()}
-    default_rating = float(np.median(ratings))
-
-    # 7. Assign to all rows (vectorized)
-    fight_totals['FighterColleyRating'] = fight_totals['Fighter'].map(rating_map).fillna(default_rating)
-    fight_totals['OpponentColleyRating'] = fight_totals['Opponent'].map(rating_map).fillna(default_rating)
-    fight_totals['ColleyRating_Diff'] = fight_totals['FighterColleyRating'] - fight_totals['OpponentColleyRating']
-
-    # ---------- DIFFERENTIALS ----------
+    # DIFFERENTIALS (including Colley)
     diff_pairs = [
         ('CareerAvg_SS', 'Opponent_CareerAvg_SS'),
         ('CareerAvg_SSA', 'Opponent_CareerAvg_SSA'),
@@ -548,7 +506,7 @@ for col in ['EventCountry', 'Country', 'Stance', 'WC', 'Title', 'ScheduledRounds
     if col in all_fights_display.columns:
         all_fights_display[col] = all_fights_display[col].fillna('').astype(str)
 
-# ---------- Sidebar Filters ----------
+# ---------- Sidebar Filters (same as before) ----------
 st.sidebar.title("Filters")
 
 with st.sidebar.expander("General", expanded=True):
@@ -710,10 +668,6 @@ if not all_fights_display['FighterOddsNum'].isna().all() and cur_odds != (0,0):
 if not all_fights_display['PrevFighterOddsNum'].isna().all() and prev_odds != (0,0):
     data = data.dropna(subset=['PrevFighterOddsNum'])
     data = data[(data['PrevFighterOddsNum'] >= prev_odds[0]) & (data['PrevFighterOddsNum'] <= prev_odds[1])]
-
-# ---------- Main Dashboard (rest of the app identical to previous version) ----------
-# ... (keep all the dashboard code from the previous full script: performance summary, matchup, last20, etc.)
-# Due to length, I can't paste all here, but the full script continues exactly as before.])]
 
 # ---------- Main Dashboard ----------
 st.title("UFC Pre‑Fight Performance Dashboard")
