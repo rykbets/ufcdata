@@ -19,9 +19,6 @@ from scipy.spatial.distance import cdist
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
-# ============================================================
-# 🔑 YOUR GOOGLE DRIVE FILE IDS
-# ============================================================
 MAIN_FILE_ID      = "1eWDGGS8qQdLWvS_dgJ-HqObsr4ie9RcD"
 UPCOMING_FILE_ID  = "1mUyNR2WLHQjC8IuvG7RA6LoXPjJq3aZ1"
 
@@ -61,7 +58,6 @@ def load_full_data():
                 df_up = df_up[df.columns]
                 df = pd.concat([df, df_up], ignore_index=True)
 
-    # ---------- Preprocessing ----------
     df['FightDate'] = pd.to_datetime(df['FightID'].str[:10])
 
     for col in ['FighterOddsBFO', 'OpponentOddsBFO']:
@@ -158,7 +154,7 @@ def load_full_data():
     pairs['ReachDiff'] = pairs['Reach'] - pairs['Reach_opp']
     fight_totals = pairs.copy()
 
-    # ---------- Career averages (cumulative sums of raw stats only) ----------
+    # ---------- Career averages ----------
     career_stat_cols = ['SS','SSA','TS','TSA','TD','TDA','Subs','Reversals','KD','DSL','DSA']
     if 'Ctrl' in fight_totals.columns:
         career_stat_cols.append('Ctrl')
@@ -180,7 +176,6 @@ def load_full_data():
                 stats_df[f'prev_cum_{col}'] / stats_df['prev_fights_count'].replace(0, np.nan)
             )
 
-    # Career win %
     stats_df['cum_wins'] = stats_df.groupby('Fighter')['Win?'].apply(
         lambda x: (x == 'Yes').cumsum()
     ).reset_index(level=0, drop=True)
@@ -193,13 +188,12 @@ def load_full_data():
             fight_totals.drop(columns=col, inplace=True)
     fight_totals = fight_totals.merge(stats_df[merge_cols], on=['FightID','Fighter'], how='left')
 
-    # Forward‑fill career averages
     avg_cols_off = [f'CareerAvg_{c}' for c in career_stat_cols] + ['CareerWinPct']
     for col in avg_cols_off:
         if col in fight_totals.columns:
             fight_totals[col] = fight_totals.groupby('Fighter')[col].ffill().bfill()
 
-    # ---------- DERIVED CAREER RATIOS (from career averages) ----------
+    # ---------- DERIVED CAREER RATIOS ----------
     fight_totals['CareerAvg_TS_Acc'] = (fight_totals['CareerAvg_TS'] / fight_totals['CareerAvg_TSA'].replace(0, np.nan)) * 100
     fight_totals['CareerAvg_TD_Acc'] = (fight_totals['CareerAvg_TD'] / fight_totals['CareerAvg_TDA'].replace(0, np.nan)) * 100
     fight_totals['CareerAvg_DS_Acc'] = (fight_totals['CareerAvg_DSL'] / fight_totals['CareerAvg_DSA'].replace(0, np.nan)) * 100
@@ -232,11 +226,11 @@ def load_full_data():
         fight_totals['CareerAvg_Def_DSL_per_KD'] = fight_totals['CareerAvg_Def_DSL'] / fight_totals['CareerAvg_Def_KD'].replace(0, np.nan)
         fight_totals['CareerAvg_Def_Ctrl_per_TD'] = fight_totals['CareerAvg_Def_Ctrl'] / fight_totals['CareerAvg_Def_TD'].replace(0, np.nan)
 
-    # ---------- Opponent career averages (including defense) ----------
+    # ---------- Opponent career averages ----------
     avg_cols_ext = (
         [f'CareerAvg_{c}' for c in career_stat_cols] +
         ['CareerWinPct'] +
-        def_avg_cols  # CareerAvg_Def_* columns already created
+        def_avg_cols
     )
     opp_career = fight_totals[['FightID','Fighter'] + avg_cols_ext].copy()
     opp_career.rename(columns={'Fighter':'Opponent',
@@ -276,14 +270,14 @@ def load_full_data():
     }, inplace=True)
     fight_totals = fight_totals.merge(opp_days, on=['FightID','Opponent'], how='left')
 
-    # ---------- Prev7Wins / Prev7Losses (last 7 non‑NC fights) ----------
+    # ---------- Prev7Wins / Prev7Losses ----------
     def prev7_record(group):
         group = group.sort_values('FightDate')
         wins = []
         losses = []
         for i in group.index:
             prev = group.loc[:i-1]
-            prev_valid = prev[prev['Win?'].isin(['Yes', 'No'])]   # ignore draws & NC
+            prev_valid = prev[prev['Win?'].isin(['Yes', 'No'])]
             last7 = prev_valid.tail(7)
             w = (last7['Win?'] == 'Yes').sum()
             l = (last7['Win?'] == 'No').sum()
@@ -294,14 +288,117 @@ def load_full_data():
     rec_df = fight_totals.groupby('Fighter', group_keys=False).apply(prev7_record)
     fight_totals = fight_totals.join(rec_df)
 
-    # Opponent versions
     opp_rec = fight_totals[['FightID','Fighter','Prev7Wins','Prev7Losses']].copy()
     opp_rec.rename(columns={'Fighter':'Opponent',
                             'Prev7Wins':'Opponent_Prev7Wins',
                             'Prev7Losses':'Opponent_Prev7Losses'}, inplace=True)
     fight_totals = fight_totals.merge(opp_rec, on=['FightID','Opponent'], how='left')
 
-    # DIFFERENTIALS (Fighter − Opponent)
+    # ---------- COLLEY MATRIX RATINGS ----------
+    # Prepare unique fights sorted by date (only historical, non‑upcoming)
+    hist_fights = fight_totals[fight_totals['Win?'].notna()][['FightID','Fighter','Opponent','Win?','FightDate']].drop_duplicates()
+    hist_fights = hist_fights.sort_values('FightDate')
+
+    # Dictionaries for counts
+    from collections import defaultdict
+    n_games = defaultdict(int)
+    wins = defaultdict(int)
+    losses = defaultdict(int)
+    opp_counts = defaultdict(lambda: defaultdict(int))  # opp_counts[f1][f2] = number of fights
+
+    current_ratings = {}  # after each date
+    rating_log = {}       # date -> {fighter: rating}
+    pre_ratings = {}      # FightID -> (fighter_rating, opp_rating)
+
+    default_rating = 0.5
+
+    for date, group in hist_fights.groupby('FightDate'):
+        # Pre‑fight ratings for fights on this date
+        for _, row in group.iterrows():
+            fid = row['FightID']
+            f = row['Fighter']
+            o = row['Opponent']
+            f_rating = current_ratings.get(f, default_rating)
+            o_rating = current_ratings.get(o, default_rating)
+            pre_ratings[fid] = (f_rating, o_rating)
+
+        # Update records with this date's fights
+        for _, row in group.iterrows():
+            f = row['Fighter']
+            o = row['Opponent']
+            w = row['Win?']
+            n_games[f] += 1
+            n_games[o] += 1
+            if w == 'Yes':
+                wins[f] += 1
+                losses[o] += 1
+            elif w == 'No':
+                losses[f] += 1
+                wins[o] += 1
+            # Draw: no win/loss, just game counts
+            opp_counts[f][o] += 1
+            opp_counts[o][f] += 1
+
+        # Build Colley system for all fighters with games
+        fighters_list = sorted([f for f, n in n_games.items() if n > 0])
+        if not fighters_list:
+            continue
+        N = len(fighters_list)
+        f_to_idx = {f: i for i, f in enumerate(fighters_list)}
+        C = np.zeros((N, N))
+        b = np.zeros(N)
+
+        for i, f in enumerate(fighters_list):
+            C[i, i] = 2 + n_games[f]
+            b[i] = 1 + (wins[f] - losses[f]) / 2
+
+        for f1 in fighters_list:
+            i = f_to_idx[f1]
+            for f2, cnt in opp_counts[f1].items():
+                if f2 in f_to_idx:
+                    j = f_to_idx[f2]
+                    C[i, j] = -cnt
+
+        # Solve linear system (add small ridge for safety)
+        try:
+            ratings = np.linalg.solve(C + np.eye(N)*1e-6, b)
+        except np.linalg.LinAlgError:
+            ratings = np.linalg.lstsq(C, b, rcond=None)[0]
+
+        # Update current ratings
+        for f, r in zip(fighters_list, ratings):
+            current_ratings[f] = r
+        # Store for this date (optional)
+        rating_log[date] = current_ratings.copy()
+
+    # Assign pre‑fight ratings to fight_totals
+    fighter_ratings = []
+    opp_ratings = []
+    for idx, row in fight_totals.iterrows():
+        fid = row['FightID']
+        if fid in pre_ratings:
+            fr, opr = pre_ratings[fid]
+            fighter_ratings.append(fr)
+            opp_ratings.append(opr)
+        else:
+            # upcoming fight – use current (latest) ratings
+            f = row['Fighter']
+            o = row['Opponent']
+            fr = current_ratings.get(f, default_rating)
+            opr = current_ratings.get(o, default_rating)
+            fighter_ratings.append(fr)
+            opp_ratings.append(opr)
+
+    fight_totals['FighterColleyRating'] = fighter_ratings
+    fight_totals['OpponentColleyRating'] = opp_ratings
+    fight_totals['ColleyRating_Diff'] = fight_totals['FighterColleyRating'] - fight_totals['OpponentColleyRating']
+
+    # Also keep current rating for each fighter (after all history)
+    # This will be used as a feature for upcoming fights (already included above)
+    # We'll add a column 'CurrentFighterColleyRating' but it's the same as FighterColleyRating for upcoming rows.
+    # For historical rows, it's pre‑fight. No need for extra column.
+
+    # DIFFERENTIALS (add Colley diff)
     diff_pairs = [
         ('CareerAvg_SS', 'Opponent_CareerAvg_SS'),
         ('CareerAvg_SSA', 'Opponent_CareerAvg_SSA'),
@@ -329,12 +426,13 @@ def load_full_data():
         ('CareerAvg_Def_Ctrl_per_TD', 'Opponent_CareerAvg_Def_Ctrl_per_TD'),
         ('Prev7Wins', 'Opponent_Prev7Wins'),
         ('Prev7Losses', 'Opponent_Prev7Losses'),
+        # Colley diff already computed
     ]
     for f_col, o_col in diff_pairs:
         if f_col in fight_totals.columns and o_col in fight_totals.columns:
             fight_totals[f'{f_col}_Diff'] = fight_totals[f_col] - fight_totals[o_col]
 
-    # Career SS accuracy (already computed above)
+    # Career SS accuracy
     if 'CareerAvg_SS' in fight_totals.columns and 'CareerAvg_SSA' in fight_totals.columns:
         fight_totals['CareerAvg_SS_Acc'] = (
             (fight_totals['CareerAvg_SS'] / fight_totals['CareerAvg_SSA'].replace(0, np.nan)) * 100
@@ -342,7 +440,7 @@ def load_full_data():
 
     fight_totals['prev_fights_count'] = fight_totals['FightNumber'] - 1
 
-    # Previous fight stats (shifts) – unchanged
+    # Previous fight stats (shifts)
     for shift in [1,2,3]:
         for col in ['Win?','Method','Round','WC','Title'] + agg_cols + ['AgeDiff','HeightDiff','ReachDiff']:
             fight_totals[f'Prev{shift}_{col}'] = fight_totals.groupby('Fighter')[col].shift(shift)
@@ -487,7 +585,7 @@ for col in ['EventCountry', 'Country', 'Stance', 'WC', 'Title', 'ScheduledRounds
     if col in all_fights_display.columns:
         all_fights_display[col] = all_fights_display[col].fillna('').astype(str)
 
-# ---------- Sidebar Filters (unchanged) ----------
+# ---------- Sidebar Filters ----------
 st.sidebar.title("Filters")
 
 with st.sidebar.expander("General", expanded=True):
@@ -725,6 +823,7 @@ if not upcoming_data_unfiltered.empty:
                 pw = int(row['Prev7Wins']) if pd.notna(row['Prev7Wins']) else 0
                 pl = int(row['Prev7Losses']) if pd.notna(row['Prev7Losses']) else 0
                 st.write(f"**Career Win %:** {row['CareerWinPct']:.1f}% | **Prev 7 Record:** {pw}‑{pl}")
+                st.write(f"**Colley Rating:** {row['FighterColleyRating']:.4f}" if pd.notna(row['FighterColleyRating']) else "**Colley Rating:** N/A")
                 st.write(f"**Odds (Fighter/Opp):** {row['FighterOddsBFO']} / {row['OpponentOddsBFO']}")
 
                 st.write("**Career Averages (offence):**")
@@ -811,7 +910,7 @@ st.header("Last 20 Fights")
 last20 = data.sort_values('FightDate', ascending=False).head(20)
 display_cols = ['FightDate','Fighter','Opponent','WC','Win?','Method','Age','Height','Reach',
                 'CareerAvg_SS','CareerAvg_KD','DaysSincePrev','Avg3DaysGap','Title',
-                'FighterOddsBFO','OpponentOddsBFO','Prev7Wins','Prev7Losses']
+                'FighterOddsBFO','OpponentOddsBFO','Prev7Wins','Prev7Losses','FighterColleyRating']
 if 'CareerAvg_Ctrl' in data.columns: display_cols.append('CareerAvg_Ctrl')
 display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
@@ -823,7 +922,8 @@ core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
         'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev', 'Avg3DaysGap',
         'FightNumber', 'Opponent_FightNumber', 'FighterOddsNum', 'PrevFighterOddsNum',
         'CareerWinPct', 'Opponent_CareerWinPct',
-        'Prev7Wins', 'Opponent_Prev7Wins', 'Prev7Losses', 'Opponent_Prev7Losses']
+        'Prev7Wins', 'Opponent_Prev7Wins', 'Prev7Losses', 'Opponent_Prev7Losses',
+        'FighterColleyRating', 'OpponentColleyRating', 'ColleyRating_Diff']
 career_avg = [c for c in data.columns if c.startswith('CareerAvg_') and not c.startswith('Opponent_CareerAvg_')]
 opp_career_avg = [c for c in data.columns if c.startswith('Opponent_CareerAvg_')]
 diff_cols = [c for c in data.columns if c.endswith('_Diff')]
@@ -1366,6 +1466,7 @@ else:
             'FightNumber', 'Opponent_FightNumber',
             'FighterOddsNum', 'PrevFighterOddsNum',
             'CareerWinPct', 'Prev7Wins', 'Prev7Losses', 'Opponent_Prev7Wins', 'Opponent_Prev7Losses',
+            'FighterColleyRating', 'OpponentColleyRating', 'ColleyRating_Diff',
             'CareerAvg_', 'Opponent_CareerAvg_',
             '_Diff'
         ]
