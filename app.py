@@ -1108,7 +1108,7 @@ else:
         st.warning("No categorical features available after filtering.")
 
 # =========================================================================
-# SPIDER CHART (similarity only, no LR/KNN models)
+# SPIDER CHART – SIMILARITY ONLY (NO LR/KNN MODELS)
 # =========================================================================
 st.header("Fight Similarity & Comparison (Independent Filters)")
 st.subheader("Spider Chart Filters (fighter data only)")
@@ -1125,9 +1125,8 @@ with col_sp2:
     spider_hometown = st.selectbox("Hometown", ["All", "Yes", "No"], key="spider_home")
     spider_new_wc = st.checkbox("New Weight Class", key="spider_new_wc")
     spider_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
-    # No skip_nc needed here because we only use historical fights for similarity
 
-# For previous outcomes in the spider chart we'll use the raw columns (no skip NC)
+# Previous outcomes for spider (use raw columns, no skip NC)
 spider_prev1_col = 'Prev1_Outcome_raw'
 spider_prev2_col = 'Prev2_Outcome_raw'
 spider_prev3_col = 'Prev3_Outcome_raw'
@@ -1182,7 +1181,7 @@ filtered_spider = spider_data[mask]
 surviving_spider_fight_ids = filtered_spider['FightID'].unique()
 spider_data = original_data[original_data['FightID'].isin(surviving_spider_fight_ids)]
 
-# ---- Now similarity analysis ----
+# ---- Similarity analysis ----
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
 spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
 
@@ -1197,7 +1196,6 @@ else:
         st.warning("No upcoming fight has both fighters after spider filters.")
     else:
         # Let user select variables for similarity
-        # We'll use the same numerical_features list but filtered to those present in original_data
         numeric_cols = [c for c in spider_data.columns if pd.api.types.is_numeric_dtype(spider_data[c])]
         clean_cols = [c for c in numeric_cols if not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')]
         wanted_keys = [
@@ -1216,8 +1214,7 @@ else:
         else:
             selected_vars = st.multiselect("Select variables for similarity", spider_vars, default=spider_vars[:5], max_selections=8, key="spider_vars")
         if selected_vars:
-            # Prepare data for similarity: use historical fights and upcoming fights
-            # Standardize the selected variables using the historical data
+            # Prepare data: use historical fights that have all selected variables
             hist_sub = spider_hist[selected_vars].dropna()
             if len(hist_sub) < 2:
                 st.warning("Not enough historical data to compute similarity.")
@@ -1225,7 +1222,6 @@ else:
                 scaler_sim = StandardScaler()
                 scaler_sim.fit(hist_sub)
                 
-                # For each upcoming fight, compute similarity to historical fights
                 upcoming_ids = spider_upcoming['FightID'].unique()
                 selected_fight_spider = st.selectbox("Choose an upcoming fight for similarity", upcoming_ids)
                 if selected_fight_spider:
@@ -1234,8 +1230,7 @@ else:
                     f2 = fight_rows.iloc[1]
                     st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
                     
-                    # Compute similarity for f1 (you can also choose f2)
-                    # We'll use the same approach as the main app: for each variable, use f1's value (or 0 if missing)
+                    # Build feature vector for f1 (choose the first fighter)
                     up_vals = []
                     for var in selected_vars:
                         raw = f1[var]
@@ -1247,37 +1242,34 @@ else:
                     up_vec = np.array([up_vals], dtype=np.float64)
                     up_scaled = scaler_sim.transform(up_vec)
                     
-                    # Scale the historical data
+                    # Scale historical data
                     hist_scaled = scaler_sim.transform(hist_sub)
                     
-                    # Compute Euclidean distances
+                    # Compute distances
                     dists = cdist(up_scaled, hist_scaled, 'euclidean').flatten()
-                    # Normalize to similarity score (0-100)
                     max_dist = dists.max() if dists.max() > 0 else 1.0
                     sim_scores = 100 * (1 - dists / max_dist)
                     
-                    # Get historical fight outcomes for the similar fights
+                    # Build similarity dataframe
                     sim_df = spider_hist.loc[hist_sub.index, ['FightDate', 'Fighter', 'Opponent', 'Win?']].copy()
                     sim_df['Similarity'] = sim_scores.round(1)
                     sim_df = sim_df.sort_values('Similarity', ascending=False)
                     
-                    # Show histogram of similarity scores and win rate for >=90 similarity
+                    # Show histogram
                     st.subheader("Similarity Distribution")
                     fig_hist = px.histogram(sim_df, x='Similarity', nbins=20, title="Similarity Scores of Historical Fights")
                     st.plotly_chart(fig_hist, use_container_width=True)
                     
-                    # Win rate for fights with similarity >= 90
+                    # Win rate for fights with similarity >= 90 (as a metric)
                     high_sim = sim_df[sim_df['Similarity'] >= 90]
                     if len(high_sim) > 0:
                         wins_high = (high_sim['Win?'] == 'Yes').sum()
                         win_rate_high = wins_high / len(high_sim) * 100
-                        st.subheader(f"Win Rate for Similarity ≥ 90%")
-                        st.metric("Fights with similarity ≥ 90", len(high_sim))
-                        st.metric("Win Rate", f"{win_rate_high:.1f}%")
-                        st.dataframe(high_sim.head(20))
+                        st.metric("Win Rate for Similarity ≥ 90%", f"{win_rate_high:.1f}%", delta=f"{len(high_sim)} fights")
                     else:
                         st.write("No historical fights with similarity ≥ 90%.")
                     
-                    # Show top 20 most similar fights
-                    st.subheader("Top 20 Most Similar Historical Fights")
-                    st.dataframe(sim_df.head(20))
+                    # Show top N similar fights (slider for N)
+                    n_top = st.slider("Number of top similar fights to show", 5, 100, 50, step=5)
+                    st.subheader(f"Top {n_top} Most Similar Historical Fights")
+                    st.dataframe(sim_df.head(n_top))
