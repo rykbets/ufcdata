@@ -746,7 +746,7 @@ if len(three_d_features) >= 3:
         st.session_state.y_lr = y_lr
         st.session_state.z_lr = z_lr
         train_models_on_filtered()
-        st.experimental_rerun()
+        st.rerun()
 
     if x_lr and y_lr and z_lr:
         plot_data = data[[x_lr, y_lr, z_lr, 'DetailedResult', 'Fight']].copy()
@@ -870,7 +870,7 @@ if len(three_d_features) >= 3:
         st.session_state.y_knn = y_knn
         st.session_state.z_knn = z_knn
         train_models_on_filtered()
-        st.experimental_rerun()
+        st.rerun()
 
     if x_knn and y_knn and z_knn:
         plot_data_knn = data[[x_knn, y_knn, z_knn, 'DetailedResult', 'Fight']].copy()
@@ -920,7 +920,7 @@ if len(three_d_features) >= 3:
         if k_knn != st.session_state.knn_model_k:
             st.session_state.knn_model_k = k_knn
             train_models_on_filtered()
-            st.experimental_rerun()
+            st.rerun()
 
         if st.session_state.calibrated_knn is not None:
             st.write("KNN model trained with current settings.")
