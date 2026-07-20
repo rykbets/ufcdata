@@ -18,10 +18,7 @@ from scipy.spatial.distance import cdist
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
-# ============================================================
-# 🔑 ONLY THIS ID IS NEEDED – the Parquet must contain all columns
-# ============================================================
-PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace with your actual Parquet ID
+PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace with your Parquet ID
 
 @st.cache_data
 def load_data():
@@ -31,7 +28,6 @@ def load_data():
 
 data = load_data()
 
-# Helper for dynamic gap slider ranges
 def get_diff_range(df, col_name):
     if col_name in df.columns:
         vals = df[col_name].dropna()
@@ -140,7 +136,7 @@ with st.sidebar.expander("Previous Outcomes", expanded=False):
     opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career)
     opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career)
 
-# ---------- Rating Gap Filters (NOW APPLIED GLOBALLY) ----------
+# ---------- Rating Gap Filters (applied globally) ----------
 with st.sidebar.expander("Rating Gap Filters", expanded=False):
     st.caption("Enable any rating gap to restrict the data. Only fights within ALL selected ranges are kept.")
     rating_systems = ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay','WeightedMasseyDecay']
@@ -221,7 +217,6 @@ if not data['PrevFighterOddsNum'].isna().all() and prev_odds != (0,0):
     filtered = filtered.dropna(subset=['PrevFighterOddsNum'])
     filtered = filtered[(filtered['PrevFighterOddsNum'] >= prev_odds[0]) & (filtered['PrevFighterOddsNum'] <= prev_odds[1])]
 
-# ===== APPLY RATING GAP FILTERS GLOBALLY =====
 for sys, (enabled, gap_range) in gap_filters.items():
     if enabled:
         diff_col = f'{sys}_Diff'
@@ -229,7 +224,7 @@ for sys, (enabled, gap_range) in gap_filters.items():
             gap_min, gap_max = gap_range
             filtered = filtered[(filtered[diff_col] >= gap_min) & (filtered[diff_col] <= gap_max)]
 
-data = filtered   # from this point onward, 'data' is fully filtered
+data = filtered   # fully filtered data
 
 # ---------- Dashboard ----------
 st.title("UFC Pre‑Fight Performance Dashboard")
@@ -284,19 +279,13 @@ for result, col in zip(['Yes', 'No'], [col1, col2]):
             st.write(f"**Career Avg Ctrl Time:** {avg_ctrl:.0f}s | CTR/TD: {ctrtd:.1f}s")
         st.write(f"**Avg Age Diff:** {age_diff_mean:.1f} | **Avg Height Diff:** {height_diff_mean:.1f} in | **Avg Reach Diff:** {reach_diff_mean:.1f} in")
 
-# ---------- Rating Gap Status (informational) ----------
+# ---------- Rating Gap Status ----------
 st.header("Rating Gap Filters")
 active_gaps = [sys for sys, (enabled, _) in gap_filters.items() if enabled]
 if active_gaps:
     st.success(f"Data restricted to fights satisfying: {', '.join(active_gaps)}")
 else:
     st.info("No rating gap filters active – showing all fights.")
-
-# The rest of the dashboard (matchup, last20, LR/KNN, spider, feature importance) follows exactly as before,
-# using the fully filtered 'data'.
-
-# ... (include all the remaining sections from the previous full script: Matchup, Last 20, LR, KNN, Spider, Feature Importance)
-# I'll omit the rest to keep this response concise, but you can copy them from any earlier working version.
 
 # ---------- Matchup area ----------
 st.header("Upcoming Fight Matchup")
@@ -544,7 +533,6 @@ if len(three_d_features) >= 3:
                 else:
                     train_means[col2] = 0
 
-            # ----- LR Win Probability Estimate (restored) -----
             st.subheader("LR Win Probability Estimate")
             all_upcoming = data[data['Win?'].isna() | (data['Win?'] == '')]
             if not all_upcoming.empty:
@@ -582,9 +570,6 @@ if len(three_d_features) >= 3:
                             st.metric("LR shrunken", f"{shrunk_prob:.1%}")
             else:
                 st.write("No upcoming fights available.")
-
-    # --- LR 3‑Variable Combination Builder (Brier) ---
-    # ... (keep your existing combination builder code unchanged)
 
     # --- LR 3‑Variable Combination Builder (Brier) ---
     st.subheader("LR 3‑Variable Combinations (Brier)")
@@ -737,7 +722,6 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # ----- KNN Win Probability Estimate (restored) -----
             st.subheader("KNN Win Probability Estimate")
             all_upcoming = data[data['Win?'].isna() | (data['Win?'] == '')]
             if not all_upcoming.empty:
@@ -774,9 +758,6 @@ if len(three_d_features) >= 3:
                             st.metric("KNN shrunken", f"{shrunk_prob:.1%}")
             else:
                 st.write("No upcoming fights available.")
-
-    # --- KNN 3‑Variable Combination Builder (IN‑SAMPLE) ---
-    # ... (keep your existing combo builder unchanged)
 
     # --- KNN 3‑Variable Combination Builder (IN‑SAMPLE) ---
     st.subheader("KNN 3‑Variable Combinations (Brier, In‑Sample)")
@@ -845,67 +826,34 @@ else:
 # FEATURE IMPORTANCE CHARTS (Numerical & Categorical)
 # =========================================================================
 st.header("Top 20 Feature Importance (Current Filter Set)")
-
-# Only historical fights from the already filtered data
 hist_imp = data[data['Win?'].isin(['Yes', 'No'])].copy()
 if len(hist_imp) < 10:
     st.warning("Too few historical fights after filtering to compute importance.")
 else:
     hist_imp['Target'] = (hist_imp['Win?'] == 'Yes').astype(int)
 
-    # --- Numerical feature importance ---
-    # Build the list of eligible numerical features directly from the current filtered data,
-    # using the same rules as `numerical_features` but completely fresh.
-    core_cols = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
-                 'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev', 'Avg3DaysGap',
-                 'FightNumber', 'Opponent_FightNumber', 'FighterOddsNum', 'PrevFighterOddsNum',
-                 'CareerWinPct', 'Opponent_CareerWinPct',
-                 'Prev7Wins', 'Opponent_Prev7Wins', 'Prev7Losses', 'Opponent_Prev7Losses',
-                 'FighterColleyOrig', 'OpponentColleyOrig', 'ColleyOrig_Diff',
-                 'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecay_Diff',
-                 'FighterMasseyOrig', 'OpponentMasseyOrig', 'MasseyOrig_Diff',
-                 'FighterMasseyDecay', 'OpponentMasseyDecay', 'MasseyDecay_Diff',
-                 'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecay_Diff']
-    career_avg_cols = [c for c in data.columns if c.startswith('CareerAvg_') and not c.startswith('Opponent_CareerAvg_')]
-    opp_career_avg_cols = [c for c in data.columns if c.startswith('Opponent_CareerAvg_')]
-    diff_cols = [c for c in data.columns if c.endswith('_Diff')]
-
-    eligible = list(dict.fromkeys(
-        c for c in core_cols + career_avg_cols + opp_career_avg_cols + diff_cols
-        if c in data.columns
-        and not re.match(r'Prev\d+_', c)
-        and not c.startswith('Opponent_Prev')
-        and data[c].nunique(dropna=True) >= 2
-    ))
-
+    # Numerical – use eligible features directly from filtered data
+    eligible = [c for c in numerical_features if c in hist_imp.columns]
     if eligible:
         X_num = hist_imp[eligible].dropna()
         if len(X_num) > 10 and X_num.shape[1] > 0:
-            # Show how many fights are being used
-            st.caption(f"Computing importance on **{len(X_num)}** historical fights (after applying all sidebar filters).")
+            st.caption(f"Computing importance on **{len(X_num)}** historical fights.")
             imputer = SimpleImputer(strategy='median')
             X_imp = imputer.fit_transform(X_num)
             y_num = hist_imp.loc[X_num.index, 'Target']
             mi = mutual_info_classif(X_imp, y_num, discrete_features=False, random_state=42)
-            mi_df_num = pd.DataFrame({
-                'Feature': eligible,
-                'Mutual Information': mi
-            }).sort_values('Mutual Information', ascending=False).head(20)
-
-            # Use a dynamic chart key based on the current data hash to force a fresh render
-            chart_key = f"num_importance_{hash(str(data.shape))}"
+            mi_df_num = pd.DataFrame({'Feature': eligible, 'Mutual Information': mi}).sort_values('Mutual Information', ascending=False).head(20)
             fig_num = px.bar(mi_df_num, x='Mutual Information', y='Feature', orientation='h',
                              title="Top 20 Numerical Features by Mutual Information with Win/Loss")
-            st.plotly_chart(fig_num, use_container_width=True, key=chart_key)
+            st.plotly_chart(fig_num, use_container_width=True)
         else:
             st.warning("Not enough complete rows for numerical importance.")
     else:
         st.warning("No numerical features available after filtering.")
 
-    # --- Categorical feature importance (separate) ---
+    # Categorical
     st.subheader("Categorical Feature Importance with Win/Loss")
-    potential_cat_cols = ['WC','Stance','Country','EventCountry','Title',
-                          'ScheduledRounds','HometownFighter','Opponent_Hometown']
+    potential_cat_cols = ['WC','Stance','Country','EventCountry','Title','ScheduledRounds','HometownFighter','Opponent_Hometown']
     categorical_cols = [c for c in potential_cat_cols if c in hist_imp.columns and hist_imp[c].nunique(dropna=True) > 1]
     if categorical_cols:
         scores = {}
@@ -916,15 +864,11 @@ else:
             codes, _ = pd.factorize(sub[col])
             scores[col] = mutual_info_score(codes, sub['Target'])
         if scores:
-            cat_mi_df = pd.DataFrame({
-                'Feature': list(scores.keys()),
-                'Mutual Information': list(scores.values())
-            }).sort_values('Mutual Information', ascending=False).head(20)
-            cat_chart_key = f"cat_importance_{hash(str(data.shape))}"
+            cat_mi_df = pd.DataFrame({'Feature': list(scores.keys()), 'Mutual Information': list(scores.values())}).sort_values('Mutual Information', ascending=False).head(20)
             fig_cat = px.bar(cat_mi_df, x='Mutual Information', y='Feature', orientation='h',
                              title="Top Categorical Features by Mutual Information with Win/Loss",
                              color_discrete_sequence=['#636efa'])
-            st.plotly_chart(fig_cat, use_container_width=True, key=cat_chart_key)
+            st.plotly_chart(fig_cat, use_container_width=True)
         else:
             st.warning("No categorical column had enough variation.")
     else:
