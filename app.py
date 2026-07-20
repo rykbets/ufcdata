@@ -33,11 +33,12 @@ original_data = data.copy()
 
 # ---------- Helper functions ----------
 def get_diff_range(df, col_name):
-    if col_name in df.columns:
-        vals = df[col_name].dropna()
-        if len(vals) > 0:
-            return float(vals.min()), float(vals.max())
-    return -1.0, 1.0
+    if col_name not in df.columns:
+        return -1.0, 1.0
+    vals = df[col_name].dropna()
+    if len(vals) == 0:
+        return -1.0, 1.0
+    return float(vals.min()), float(vals.max())
 
 def get_first_col(df, col_name):
     if col_name not in df.columns:
@@ -52,84 +53,190 @@ def normalize_title_col(series):
         return pd.Series('', index=series.index)
     return series.astype(str).str.strip().str.lower()
 
-# ---------- Sidebar Filters ----------
+# ---------- Define expected columns (new feature list) ----------
+adjperf_cols = [c for c in data.columns if c.startswith('adjperf_')]
+new_features = [
+    'Age', 'AgeDiff', 'HeightDiff', 'ReachDiff',
+    'DaysSincePrev', 'DaysSincePrev_diff', 'Avg3DaysGap_diff',
+    'FightNumber', 'FightNumber_diff',
+    'FighterOddsNum', 'PrevFighterOddsNum',
+    'CareerWinPct_diff', 'Prev7WinPct',
+    'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecayDiff',
+    'FighterMasseyDecay', 'OpponentMasseyDecay', 'MasseyDecayDiff',
+    'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecayDiff'
+]
+for col in adjperf_cols:
+    new_features.append(col)
+    new_features.append(f'Opponent_{col}')
+    new_features.append(f'{col}_diff')
+# Keep only existing
+new_features = [c for c in new_features if c in data.columns]
+
+# For three_d_features, use numeric columns from new_features with variance
+three_d_features = [c for c in new_features if data[c].nunique(dropna=True) >= 2 and np.issubdtype(data[c].dtype, np.number)]
+
+# ---------- Sidebar Filters with existence checks ----------
 st.sidebar.title("Filters")
 with st.sidebar.expander("General", expanded=True):
-    wc = st.multiselect("Weight Class", sorted(data['WC'].dropna().unique()))
-    stance = st.multiselect("Stance", sorted(data['Stance'].dropna().unique()))
-    country = st.multiselect("Country", sorted(data['Country'].dropna().unique()))
-    sched_rounds = st.multiselect("Scheduled Rounds", sorted(data['ScheduledRounds'].dropna().unique()))
-    title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"])
-    hometown = st.selectbox("Hometown", ["All", "Yes", "No"])
-    opp_hometown = st.selectbox("Opp Hometown", ["All", "Yes", "No"])
-    event_country = st.multiselect("Event Country", sorted(data['EventCountry'].dropna().unique()))
+    if 'WC' in data.columns:
+        wc = st.multiselect("Weight Class", sorted(data['WC'].dropna().unique()))
+    else:
+        wc = []
+    if 'Stance' in data.columns:
+        stance = st.multiselect("Stance", sorted(data['Stance'].dropna().unique()))
+    else:
+        stance = []
+    if 'Country' in data.columns:
+        country = st.multiselect("Country", sorted(data['Country'].dropna().unique()))
+    else:
+        country = []
+    if 'ScheduledRounds' in data.columns:
+        sched_rounds = st.multiselect("Scheduled Rounds", sorted(data['ScheduledRounds'].dropna().unique()))
+    else:
+        sched_rounds = []
+    if 'Title' in data.columns:
+        title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"])
+    else:
+        title_fight = "All"
+    if 'HometownFighter' in data.columns:
+        hometown = st.selectbox("Hometown", ["All", "Yes", "No"])
+    else:
+        hometown = "All"
+    if 'Opponent_Hometown' in data.columns:
+        opp_hometown = st.selectbox("Opp Hometown", ["All", "Yes", "No"])
+    else:
+        opp_hometown = "All"
+    if 'EventCountry' in data.columns:
+        event_country = st.multiselect("Event Country", sorted(data['EventCountry'].dropna().unique()))
+    else:
+        event_country = []
 
 with st.sidebar.expander("Fight Numbers", expanded=False):
-    fn_min = st.number_input("Min Fight #", value=1, min_value=1, max_value=int(data['FightNumber'].max()))
-    fn_max = st.number_input("Max Fight #", value=int(data['FightNumber'].max()))
-    ofn_min = st.number_input("Opp Min Fight #", value=1)
-    ofn_max = st.number_input("Opp Max Fight #", value=int(data['Opponent_FightNumber'].max()))
+    if 'FightNumber' in data.columns:
+        fn_min = st.number_input("Min Fight #", value=1, min_value=1, max_value=int(data['FightNumber'].max()))
+        fn_max = st.number_input("Max Fight #", value=int(data['FightNumber'].max()))
+    else:
+        fn_min, fn_max = 1, 1000
+    if 'Opponent_FightNumber' in data.columns:
+        ofn_min = st.number_input("Opp Min Fight #", value=1)
+        ofn_max = st.number_input("Opp Max Fight #", value=int(data['Opponent_FightNumber'].max()))
+    else:
+        ofn_min, ofn_max = 1, 1000
 
 with st.sidebar.expander("Career Win % Diff", expanded=False):
-    cwp_min = st.slider("Min Career Win % Diff", -100, 100, -100, step=5)
-    cwp_max = st.slider("Max Career Win % Diff", -100, 100, 100, step=5)
+    if 'CareerWinPct_diff' in data.columns:
+        cwp_min = st.slider("Min Career Win % Diff", -100, 100, -100, step=5)
+        cwp_max = st.slider("Max Career Win % Diff", -100, 100, 100, step=5)
+    else:
+        cwp_min, cwp_max = -100, 100
 
 with st.sidebar.expander("Physical Attributes", expanded=False):
-    age = st.slider("Age", int(data['Age'].min()), int(data['Age'].max()), (int(data['Age'].min()), int(data['Age'].max())))
-    age_diff = st.slider("Age Diff", int(data['AgeDiff'].min()), int(data['AgeDiff'].max()), (int(data['AgeDiff'].min()), int(data['AgeDiff'].max())))
-    height_diff = st.slider("Height Diff (in)", int(data['HeightDiff'].min()), int(data['HeightDiff'].max()), (int(data['HeightDiff'].min()), int(data['HeightDiff'].max())))
-    reach_diff = st.slider("Reach Diff (in)", int(data['ReachDiff'].min()), int(data['ReachDiff'].max()), (int(data['ReachDiff'].min()), int(data['ReachDiff'].max())))
+    if 'Age' in data.columns:
+        age = st.slider("Age", int(data['Age'].min()), int(data['Age'].max()), (int(data['Age'].min()), int(data['Age'].max())))
+    else:
+        age = (0, 100)
+    if 'AgeDiff' in data.columns:
+        age_diff = st.slider("Age Diff", int(data['AgeDiff'].min()), int(data['AgeDiff'].max()), (int(data['AgeDiff'].min()), int(data['AgeDiff'].max())))
+    else:
+        age_diff = (-100, 100)
+    if 'HeightDiff' in data.columns:
+        height_diff = st.slider("Height Diff (in)", int(data['HeightDiff'].min()), int(data['HeightDiff'].max()), (int(data['HeightDiff'].min()), int(data['HeightDiff'].max())))
+    else:
+        height_diff = (-50, 50)
+    if 'ReachDiff' in data.columns:
+        reach_diff = st.slider("Reach Diff (in)", int(data['ReachDiff'].min()), int(data['ReachDiff'].max()), (int(data['ReachDiff'].min()), int(data['ReachDiff'].max())))
+    else:
+        reach_diff = (-50, 50)
 
 with st.sidebar.expander("Days & Gaps", expanded=False):
-    days = st.slider("Days Since Prev", int(data['DaysSincePrev'].min()), int(data['DaysSincePrev'].max()), (int(data['DaysSincePrev'].min()), int(data['DaysSincePrev'].max())))
-    days_diff = st.slider("Days Since Prev Diff", int(data['DaysSincePrev_diff'].min()), int(data['DaysSincePrev_diff'].max()), (int(data['DaysSincePrev_diff'].min()), int(data['DaysSincePrev_diff'].max())))
-    avg3_diff = st.slider("Avg3DaysGap Diff", int(data['Avg3DaysGap_diff'].min()), int(data['Avg3DaysGap_diff'].max()), (int(data['Avg3DaysGap_diff'].min()), int(data['Avg3DaysGap_diff'].max())))
+    if 'DaysSincePrev' in data.columns:
+        days = st.slider("Days Since Prev", int(data['DaysSincePrev'].min()), int(data['DaysSincePrev'].max()), (int(data['DaysSincePrev'].min()), int(data['DaysSincePrev'].max())))
+    else:
+        days = (0, 1000)
+    if 'DaysSincePrev_diff' in data.columns:
+        days_diff = st.slider("Days Since Prev Diff", int(data['DaysSincePrev_diff'].min()), int(data['DaysSincePrev_diff'].max()), (int(data['DaysSincePrev_diff'].min()), int(data['DaysSincePrev_diff'].max())))
+    else:
+        days_diff = (-1000, 1000)
+    if 'Avg3DaysGap_diff' in data.columns:
+        avg3_diff = st.slider("Avg3DaysGap Diff", int(data['Avg3DaysGap_diff'].min()), int(data['Avg3DaysGap_diff'].max()), (int(data['Avg3DaysGap_diff'].min()), int(data['Avg3DaysGap_diff'].max())))
+    else:
+        avg3_diff = (-1000, 1000)
 
 with st.sidebar.expander("Odds", expanded=False):
-    cur_odds = st.slider("Fighter Odds", int(data['FighterOddsNum'].min()), int(data['FighterOddsNum'].max()), (int(data['FighterOddsNum'].min()), int(data['FighterOddsNum'].max())), step=10)
-    prev_odds = st.slider("Prev Fighter Odds", int(data['PrevFighterOddsNum'].min()), int(data['PrevFighterOddsNum'].max()), (int(data['PrevFighterOddsNum'].min()), int(data['PrevFighterOddsNum'].max())), step=10)
+    if 'FighterOddsNum' in data.columns:
+        cur_odds = st.slider("Fighter Odds", int(data['FighterOddsNum'].min()), int(data['FighterOddsNum'].max()), (int(data['FighterOddsNum'].min()), int(data['FighterOddsNum'].max())), step=10)
+    else:
+        cur_odds = (-1000, 1000)
+    if 'PrevFighterOddsNum' in data.columns:
+        prev_odds = st.slider("Prev Fighter Odds", int(data['PrevFighterOddsNum'].min()), int(data['PrevFighterOddsNum'].max()), (int(data['PrevFighterOddsNum'].min()), int(data['PrevFighterOddsNum'].max())), step=10)
+    else:
+        prev_odds = (-1000, 1000)
 
-new_wc = st.sidebar.checkbox("New Weight Class")
+new_wc = st.sidebar.checkbox("New Weight Class") if 'IsNewWeightClass' in data.columns else False
 prev_title = st.sidebar.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"])
 opp_prev_title = st.sidebar.selectbox("Opp Prev Fight Was Title?", ["All", "Yes", "No"])
 
 # ---------- Apply main filters ----------
 filtered = data.copy()
-if wc: filtered = filtered[filtered['WC'].isin(wc)]
-if stance: filtered = filtered[filtered['Stance'].isin(stance)]
-if country: filtered = filtered[filtered['Country'].isin(country)]
-if sched_rounds: filtered = filtered[filtered['ScheduledRounds'].isin(sched_rounds)]
-if title_fight != "All": filtered = filtered[filtered['Title'] == title_fight]
-if hometown != "All": filtered = filtered[filtered['HometownFighter'] == hometown]
-if opp_hometown != "All": filtered = filtered[filtered['Opponent_Hometown'] == opp_hometown]
-if event_country: filtered = filtered[filtered['EventCountry'].isin(event_country)]
-if new_wc: filtered = filtered[filtered['IsNewWeightClass'] == True]
-# Title filters (row-wise)
-filtered['Prev1_Title_clean'] = normalize_title_col(filtered.get('Prev1_Title', None))
-if prev_title != "All":
-    filtered = filtered[filtered['Prev1_Title_clean'] == prev_title.lower()]
+
+if wc and 'WC' in filtered.columns: filtered = filtered[filtered['WC'].isin(wc)]
+if stance and 'Stance' in filtered.columns: filtered = filtered[filtered['Stance'].isin(stance)]
+if country and 'Country' in filtered.columns: filtered = filtered[filtered['Country'].isin(country)]
+if sched_rounds and 'ScheduledRounds' in filtered.columns: filtered = filtered[filtered['ScheduledRounds'].isin(sched_rounds)]
+if title_fight != "All" and 'Title' in filtered.columns: filtered = filtered[filtered['Title'] == title_fight]
+if hometown != "All" and 'HometownFighter' in filtered.columns: filtered = filtered[filtered['HometownFighter'] == hometown]
+if opp_hometown != "All" and 'Opponent_Hometown' in filtered.columns: filtered = filtered[filtered['Opponent_Hometown'] == opp_hometown]
+if event_country and 'EventCountry' in filtered.columns: filtered = filtered[filtered['EventCountry'].isin(event_country)]
+if new_wc and 'IsNewWeightClass' in filtered.columns: filtered = filtered[filtered['IsNewWeightClass'] == True]
+
+# Title filters (row-wise) – only if columns exist
+if 'Prev1_Title' in filtered.columns:
+    filtered['Prev1_Title_clean'] = normalize_title_col(filtered['Prev1_Title'])
+    if prev_title != "All":
+        filtered = filtered[filtered['Prev1_Title_clean'] == prev_title.lower()]
 if 'Opponent_Prev1_Title' in filtered.columns:
     filtered['Opp_Prev1_Title_clean'] = normalize_title_col(filtered['Opponent_Prev1_Title'])
     if opp_prev_title != "All":
         filtered = filtered[filtered['Opp_Prev1_Title_clean'] == opp_prev_title.lower()]
 
-# Numeric filters
-filtered = filtered[(filtered['FightNumber'] >= fn_min) & (filtered['FightNumber'] <= fn_max)]
-filtered = filtered[(filtered['Opponent_FightNumber'] >= ofn_min) & (filtered['Opponent_FightNumber'] <= ofn_max)]
-filtered = filtered[(filtered['Age'] >= age[0]) & (filtered['Age'] <= age[1])]
-filtered = filtered[(filtered['AgeDiff'] >= age_diff[0]) & (filtered['AgeDiff'] <= age_diff[1])]
-filtered = filtered[(filtered['HeightDiff'] >= height_diff[0]) & (filtered['HeightDiff'] <= height_diff[1])]
-filtered = filtered[(filtered['ReachDiff'] >= reach_diff[0]) & (filtered['ReachDiff'] <= reach_diff[1])]
-filtered = filtered[(filtered['DaysSincePrev'] >= days[0]) & (filtered['DaysSincePrev'] <= days[1])]
-filtered = filtered[(filtered['DaysSincePrev_diff'] >= days_diff[0]) & (filtered['DaysSincePrev_diff'] <= days_diff[1])]
-filtered = filtered[(filtered['Avg3DaysGap_diff'] >= avg3_diff[0]) & (filtered['Avg3DaysGap_diff'] <= avg3_diff[1])]
-filtered = filtered[(filtered['CareerWinPct_diff'] >= cwp_min) & (filtered['CareerWinPct_diff'] <= cwp_max)]
-filtered = filtered[(filtered['FighterOddsNum'] >= cur_odds[0]) & (filtered['FighterOddsNum'] <= cur_odds[1])]
-filtered = filtered[(filtered['PrevFighterOddsNum'] >= prev_odds[0]) & (filtered['PrevFighterOddsNum'] <= prev_odds[1])]
+# Numeric filters – check each column
+if 'FightNumber' in filtered.columns:
+    filtered = filtered[(filtered['FightNumber'] >= fn_min) & (filtered['FightNumber'] <= fn_max)]
+if 'Opponent_FightNumber' in filtered.columns:
+    filtered = filtered[(filtered['Opponent_FightNumber'] >= ofn_min) & (filtered['Opponent_FightNumber'] <= ofn_max)]
+if 'Age' in filtered.columns:
+    filtered = filtered[(filtered['Age'] >= age[0]) & (filtered['Age'] <= age[1])]
+if 'AgeDiff' in filtered.columns:
+    filtered = filtered[(filtered['AgeDiff'] >= age_diff[0]) & (filtered['AgeDiff'] <= age_diff[1])]
+if 'HeightDiff' in filtered.columns:
+    filtered = filtered[(filtered['HeightDiff'] >= height_diff[0]) & (filtered['HeightDiff'] <= height_diff[1])]
+if 'ReachDiff' in filtered.columns:
+    filtered = filtered[(filtered['ReachDiff'] >= reach_diff[0]) & (filtered['ReachDiff'] <= reach_diff[1])]
+if 'DaysSincePrev' in filtered.columns:
+    filtered = filtered[(filtered['DaysSincePrev'] >= days[0]) & (filtered['DaysSincePrev'] <= days[1])]
+if 'DaysSincePrev_diff' in filtered.columns:
+    filtered = filtered[(filtered['DaysSincePrev_diff'] >= days_diff[0]) & (filtered['DaysSincePrev_diff'] <= days_diff[1])]
+if 'Avg3DaysGap_diff' in filtered.columns:
+    filtered = filtered[(filtered['Avg3DaysGap_diff'] >= avg3_diff[0]) & (filtered['Avg3DaysGap_diff'] <= avg3_diff[1])]
+if 'CareerWinPct_diff' in filtered.columns:
+    filtered = filtered[(filtered['CareerWinPct_diff'] >= cwp_min) & (filtered['CareerWinPct_diff'] <= cwp_max)]
+if 'FighterOddsNum' in filtered.columns:
+    filtered = filtered[(filtered['FighterOddsNum'] >= cur_odds[0]) & (filtered['FighterOddsNum'] <= cur_odds[1])]
+if 'PrevFighterOddsNum' in filtered.columns:
+    filtered = filtered[(filtered['PrevFighterOddsNum'] >= prev_odds[0]) & (filtered['PrevFighterOddsNum'] <= prev_odds[1])]
 
 data = filtered
 surviving_fight_ids = data['FightID'].unique()
 matchup_data = original_data[original_data['FightID'].isin(surviving_fight_ids)]
+
+# =========================================================================
+# The rest of the dashboard uses data and new_features/three_d_features
+# We'll keep the same structure as before but with dynamic column checks.
+# =========================================================================
+# Continue with common definitions, model training, performance summary, etc.
+# I'll include the complete dashboard from the previous version, but with all column checks.
+# Since this is long, I'll provide the remaining code in the next response.
+# However, the key error is fixed by checking column existence before using them in filters.
 
 # =========================================================================
 # Define the new feature list (exactly as requested)
