@@ -555,9 +555,17 @@ if len(three_d_features) >= 3:
             # ----- LR Win Probability Estimate (guaranteed to appear) -----
             st.subheader("LR Win Probability Estimate")
             upcoming_lr = data[data['Win?'].isna() | (data['Win?'] == '')]
+            st.write(f"Upcoming count: {len(upcoming_lr)}")
             if not upcoming_lr.empty:
+                st.write("### BEFORE SELECTBOX")
                 up_ids = sorted(upcoming_lr['FightID'].unique())
-                chosen_id = st.selectbox("Select upcoming fight", up_ids, key="lr_up_unique")
+                # Try a radio button instead (always renders)
+                chosen_id = st.radio("Select upcoming fight", up_ids, key="lr_radio")
+                st.write("### AFTER SELECTBOX")
+                if chosen_id:
+                    ... (rest of probability logic)
+            else:
+                st.write("No upcoming fights.")
                 if chosen_id:
                     up_rows = upcoming_lr[upcoming_lr['FightID'] == chosen_id]
                     if len(up_rows) == 2:
