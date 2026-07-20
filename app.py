@@ -4,6 +4,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import re
+import os
 import gdown
 import itertools
 from sklearn.linear_model import LogisticRegression
@@ -19,20 +20,53 @@ from scipy.spatial.distance import cdist
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
 # ============================================================
-# 🔑 ONLY THIS ID IS NEEDED – the Parquet must include upcoming fights
+# 🔑 YOUR FILE IDs – replace with your actual IDs
 # ============================================================
-PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace with the ID of all_fights.parquet
+PARQUET_FILE_ID   = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"        # all_fights.parquet (from Colab)
+UPCOMING_FILE_ID  = "1mUyNR2WLHQjC8IuvG7RA6LoXPjJq3aZ1"   # upcoming.csv
 
-# ---------- Cached data loader (Parquet only) ----------
+# ---------- Cached data loader ----------
 @st.cache_data
 def load_data():
+    # 1. Load the main Parquet file (historical fights + ratings)
     gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
     data = pd.read_parquet("data.parquet")
-    # Ensure upcoming fights are present – if not, show a clear message
-    if len(data[data['Win?'].isna()]) == 0:
-        st.error("⚠️ This Parquet file does not contain upcoming fights. "
-                 "Please re-run the Colab script that merges upcoming.csv and generates the complete Parquet.")
-        st.stop()
+
+    # 2. Download and merge upcoming fights (exactly like the original app)
+    if UPCOMING_FILE_ID.strip():
+        gdown.download(f"https://drive.google.com/uc?id={UPCOMING_FILE_ID}", "upcoming.csv", quiet=True)
+        if os.path.exists("upcoming.csv"):
+            df_up = pd.read_csv("upcoming.csv")
+            if 'FightDate' not in df_up.columns:
+                df_up['FightDate'] = df_up['FightID'].str[:10]
+
+            def canonical_fightid(fid):
+                if not isinstance(fid, str) or ' - ' not in fid:
+                    return fid
+                parts = fid.split(' - ')
+                if len(parts) != 2:
+                    return fid
+                date_part, names_part = parts
+                names = names_part.split(' vs ')
+                if len(names) != 2:
+                    return fid
+                sorted_names = ' vs '.join(sorted([n.strip() for n in names], key=str.lower))
+                return f"{date_part} - {sorted_names}"
+
+            # Remove any upcoming fights that might already be in the main data
+            main_canonical = set(data['FightID'].apply(canonical_fightid).unique())
+            df_up = df_up[~df_up['FightID'].apply(canonical_fightid).isin(main_canonical)]
+
+            if not df_up.empty:
+                # Make sure upcoming rows have the same columns as `data`
+                for col in data.columns:
+                    if col not in df_up.columns:
+                        df_up[col] = '' if data[col].dtype == object else 0
+                df_up = df_up[data.columns]   # enforce column order
+                data = pd.concat([data, df_up], ignore_index=True)
+                # Remove any duplicate rows (shouldn't happen, but safe)
+                data = data.drop_duplicates(subset=['FightID','Fighter'])
+
     return data
 
 data = load_data()
@@ -202,7 +236,7 @@ if not data['PrevFighterOddsNum'].isna().all() and prev_odds != (0,0):
 
 data = filtered   # keep the name consistent
 
-# ---------- Dashboard (same as before) ----------
+# ---------- Dashboard (everything below is your existing code) ----------
 st.title("UFC Pre‑Fight Performance Dashboard")
 
 if len(data) == 0:
