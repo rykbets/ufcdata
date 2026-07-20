@@ -833,7 +833,6 @@ else:
 
     importance_features = [c for c in numerical_features
                            if not c.startswith('Opponent_')
-                           and not c.endswith('_Diff')
                            and not re.match(r'Prev\d+_', c)
                            and c in hist_imp.columns]
     if importance_features:
