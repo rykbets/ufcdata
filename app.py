@@ -554,22 +554,34 @@ if len(three_d_features) >= 3:
 
             # ----- LR Win Probability Estimate (guaranteed to appear) -----
             st.subheader("LR Win Probability Estimate")
-            upcoming_lr = data[data['Win?'].isna() | (data['Win?'] == '')]
+            
+            # Apply gap filters to a temporary copy (only for upcoming fight selection)
+            temp_data = data.copy()
+            for sys, (enabled, gap_range) in gap_filters.items():
+                if enabled:
+                    diff_col = f'{sys}_Diff'
+                    if diff_col in temp_data.columns:
+                        gap_min, gap_max = gap_range
+                        # Apply gap only to historical rows; keep all upcoming rows (will be filtered later)
+                        mask = (
+                            ((temp_data[diff_col] >= gap_min) & (temp_data[diff_col] <= gap_max))
+                            | (temp_data['Win?'].isna() | (temp_data['Win?'] == ''))
+                        )
+                        temp_data = temp_data[mask]
+            
+            upcoming_lr = temp_data[temp_data['Win?'].isna() | (temp_data['Win?'] == '')]
+            # Keep only fights with exactly 2 rows (both fighters present)
+            fight_counts = upcoming_lr.groupby('FightID').size()
+            valid_ids = fight_counts[fight_counts == 2].index
+            upcoming_lr = upcoming_lr[upcoming_lr['FightID'].isin(valid_ids)]
+            
             if not upcoming_lr.empty:
                 up_ids = sorted(upcoming_lr['FightID'].unique())
                 chosen_id = st.radio("Select upcoming fight", up_ids, key="lr_radio")
                 if chosen_id:
                     up_rows = upcoming_lr[upcoming_lr['FightID'] == chosen_id]
-                    st.write(f"Selected fight rows: {len(up_rows)}")
                     if len(up_rows) == 2:
                         fighter_row = up_rows.iloc[0]
-                        st.write(f"Fighter: {fighter_row['Fighter']}")
-                        # diagnostic: print the three feature values
-                        raw_x = fighter_row[x_lr]
-                        raw_y = fighter_row[y_lr]
-                        raw_z = fighter_row[z_lr]
-                        st.write(f"Feature values: {raw_x}, {raw_y}, {raw_z}")
-                        # impute if needed
                         def safe_val(col):
                             try:
                                 val = fighter_row[col]
@@ -581,15 +593,18 @@ if len(three_d_features) >= 3:
                         v3 = safe_val(z_lr)
                         up_arr = np.array([[v1, v2, v3]])
                         prob_lr = lr_model.predict_proba(up_arr)[0, 1]
-                        st.write(f"LR win prob: {prob_lr:.1%}")
                         if recent_count > 0:
                             shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
                         else:
                             shrunk_recent = overall_wr
                         shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
-                        st.write(f"LR shrunken: {shrunk_prob:.1%}")
+                        col_p1, col_p2 = st.columns(2)
+                        with col_p1:
+                            st.metric("LR win prob", f"{prob_lr:.1%}")
+                        with col_p2:
+                            st.metric("LR shrunken", f"{shrunk_prob:.1%}")
             else:
-                st.write("No upcoming fights available.")
+                st.write("No upcoming fights available after applying gap filters.")
 
     # --- LR 3‑Variable Combination Builder (Brier) ---
     st.subheader("LR 3‑Variable Combinations (Brier)")
