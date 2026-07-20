@@ -1146,9 +1146,11 @@ with st.expander("Previous Outcomes (Spider)"):
     spider_career2 = st.multiselect("Career F2", all_outcomes_career_spider, key="spider_career2")
     spider_career3 = st.multiselect("Career F3", all_outcomes_career_spider, key="spider_career3")
 
-# Start with original_data for spider
+# ---- Start with original_data ----
 spider_data = original_data.copy()
 mask = pd.Series(True, index=spider_data.index)
+
+# Apply general filters (row-wise)
 if spider_wc: mask &= spider_data['WC'].isin(spider_wc)
 if spider_stance: mask &= spider_data['Stance'].isin(spider_stance)
 if spider_country: mask &= spider_data['Country'].isin(spider_country)
@@ -1157,9 +1159,8 @@ if spider_title_fight != "All": mask &= spider_data['Title'] == spider_title_fig
 if spider_hometown != "All": mask &= spider_data['HometownFighter'] == spider_hometown
 if spider_event_country: mask &= spider_data['EventCountry'].isin(spider_event_country)
 if spider_new_wc: mask &= spider_data['IsNewWeightClass'] == True
-spider_data['Prev1_Title_clean'] = normalize_title_col(spider_data.get('Prev1_Title', None))
-if spider_prev_title != "All":
-    mask &= spider_data['Prev1_Title_clean'] == spider_prev_title.lower()
+
+# Previous outcome filters (row-wise)
 if spider_prev1: mask &= spider_data[spider_prev1_col].isin(spider_prev1)
 if spider_prev2: mask &= spider_data[spider_prev2_col].isin(spider_prev2)
 if spider_prev3: mask &= spider_data[spider_prev3_col].isin(spider_prev3)
@@ -1167,14 +1168,29 @@ if spider_career1: mask &= spider_data[spider_career1_col].isin(spider_career1)
 if spider_career2: mask &= spider_data[spider_career2_col].isin(spider_career2)
 if spider_career3: mask &= spider_data[spider_career3_col].isin(spider_career3)
 
-spider_data = spider_data[mask]
-valid_fight_ids = spider_data['FightID'].unique()
-spider_data = spider_data[spider_data['FightID'].isin(valid_fight_ids)]
+# Apply the "Prev Title" filter at the FIGHT level (keep if at least one fighter matches)
+spider_data['Prev1_Title_clean'] = normalize_title_col(spider_data.get('Prev1_Title', None))
+if spider_prev_title != "All":
+    # Find FightIDs where at least one fighter matches
+    fighter_mask = spider_data['Prev1_Title_clean'] == spider_prev_title.lower()
+    matching_fight_ids = spider_data.loc[fighter_mask, 'FightID'].unique()
+    # Keep only rows for those FightIDs (regardless of whether they individually matched)
+    mask &= spider_data['FightID'].isin(matching_fight_ids)
+
+# Apply all masks to get the filtered set (may have incomplete rows)
+filtered_spider = spider_data[mask]
+
+# Now, for the FightIDs that survived, pull BOTH rows from original_data to guarantee pairs
+surviving_spider_fight_ids = filtered_spider['FightID'].unique()
+spider_data = original_data[original_data['FightID'].isin(surviving_spider_fight_ids)]
+
+# Proceed with the rest of the spider chart (unchanged)
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
 
 if spider_upcoming.empty:
     st.write("No upcoming fights after spider filters.")
 else:
+    # ... rest of spider chart remains the same ...
     fight_counts = spider_upcoming.groupby('FightID').size()
     complete_ids = fight_counts[fight_counts == 2].index
     spider_upcoming = spider_upcoming[spider_upcoming['FightID'].isin(complete_ids)]
