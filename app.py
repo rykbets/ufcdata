@@ -18,7 +18,7 @@ from scipy.spatial.distance import cdist
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
-PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace with your Parquet file ID from Colab
+PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace with your Parquet ID from Colab
 
 @st.cache_data
 def load_data():
@@ -135,7 +135,7 @@ with st.sidebar.expander("Previous Outcomes", expanded=False):
     opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career)
 
 with st.sidebar.expander("Rating Gap Analysis", expanded=False):
-    rating_system = st.selectbox("Rating system", ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay'], key="gap_system")
+    rating_system = st.selectbox("Rating system", ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay','WeightedMasseyDecay'], key="gap_system")
     gap_range = st.slider("Rating gap range", min_value=0.0, max_value=1.0, value=(0.0, 0.05), step=0.01, key="gap_range")
 
 # ---------- Apply filters ----------
@@ -196,7 +196,7 @@ if not data['PrevFighterOddsNum'].isna().all() and prev_odds != (0,0):
     filtered = filtered.dropna(subset=['PrevFighterOddsNum'])
     filtered = filtered[(filtered['PrevFighterOddsNum'] >= prev_odds[0]) & (filtered['PrevFighterOddsNum'] <= prev_odds[1])]
 
-data = filtered   # keep the name consistent
+data = filtered
 
 # ---------- Dashboard ----------
 st.title("UFC Pre‑Fight Performance Dashboard")
@@ -294,7 +294,7 @@ if not upcoming_data_unfiltered.empty:
                 pw = int(row['Prev7Wins']) if pd.notna(row['Prev7Wins']) else 0
                 pl = int(row['Prev7Losses']) if pd.notna(row['Prev7Losses']) else 0
                 st.write(f"**Career Win %:** {row['CareerWinPct']:.1f}% | **Prev 7 Record:** {pw}‑{pl}")
-                st.write(f"**Ratings:** CO {row['FighterColleyOrig']:.4f} / CD {row['FighterColleyDecay']:.4f} / MO {row['FighterMasseyOrig']:.4f} / MD {row['FighterMasseyDecay']:.4f}")
+                st.write(f"**Ratings:** CO {row['FighterColleyOrig']:.4f} / CD {row['FighterColleyDecay']:.4f} / MO {row['FighterMasseyOrig']:.4f} / MD {row['FighterMasseyDecay']:.4f} / WMD {row['FighterWeightedMasseyDecay']:.4f}")
                 st.write(f"**Odds (Fighter/Opp):** {row['FighterOddsBFO']} / {row['OpponentOddsBFO']}")
 
                 st.write("**Career Averages (offence):**")
@@ -382,7 +382,7 @@ last20 = data.sort_values('FightDate', ascending=False).head(20)
 display_cols = ['FightDate','Fighter','Opponent','WC','Win?','Method','Age','Height','Reach',
                 'CareerAvg_SS','CareerAvg_KD','DaysSincePrev','Avg3DaysGap','Title',
                 'FighterOddsBFO','OpponentOddsBFO','Prev7Wins','Prev7Losses',
-                'FighterColleyOrig','FighterColleyDecay','FighterMasseyOrig','FighterMasseyDecay']
+                'FighterColleyOrig','FighterColleyDecay','FighterMasseyOrig','FighterMasseyDecay','FighterWeightedMasseyDecay']
 if 'CareerAvg_Ctrl' in data.columns: display_cols.append('CareerAvg_Ctrl')
 display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
@@ -398,7 +398,8 @@ core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
         'FighterColleyOrig', 'OpponentColleyOrig', 'ColleyOrig_Diff',
         'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecay_Diff',
         'FighterMasseyOrig', 'OpponentMasseyOrig', 'MasseyOrig_Diff',
-        'FighterMasseyDecay', 'OpponentMasseyDecay', 'MasseyDecay_Diff']
+        'FighterMasseyDecay', 'OpponentMasseyDecay', 'MasseyDecay_Diff',
+        'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecay_Diff']   # NEW
 career_avg = [c for c in data.columns if c.startswith('CareerAvg_') and not c.startswith('Opponent_CareerAvg_')]
 opp_career_avg = [c for c in data.columns if c.startswith('Opponent_CareerAvg_')]
 diff_cols = [c for c in data.columns if c.endswith('_Diff')]
@@ -937,7 +938,7 @@ else:
             'FightNumber', 'Opponent_FightNumber',
             'FighterOddsNum', 'PrevFighterOddsNum',
             'CareerWinPct', 'Prev7Wins', 'Prev7Losses', 'Opponent_Prev7Wins', 'Opponent_Prev7Losses',
-            'FighterColley', 'OpponentColley', 'FighterMassey', 'OpponentMassey',
+            'FighterColley', 'OpponentColley', 'FighterMassey', 'OpponentMassey', 'FighterWeightedMassey', 'OpponentWeightedMassey',
             'CareerAvg_', 'Opponent_CareerAvg_',
             '_Diff'
         ]
