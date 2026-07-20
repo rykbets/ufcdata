@@ -15,16 +15,20 @@ from sklearn.metrics import log_loss, brier_score_loss, mutual_info_score
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.model_selection import cross_val_predict
 from scipy.spatial.distance import cdist
+import os
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard (Adjusted)", layout="wide")
 
 # ============================================================
-# 🔑 YOUR PARQUET FILE ID – replace with your actual ID
+# Load data: try local Parquet first, then fallback to Drive
 # ============================================================
-PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"   # adjust to your new Parquet ID
-
 @st.cache_data
 def load_data():
+    # Try local file first (for Streamlit Cloud with uploaded file)
+    if os.path.exists("all_fights_adjperf.parquet"):
+        return pd.read_parquet("all_fights_adjperf.parquet")
+    # Otherwise try Drive download (you need to set your file ID)
+    PARQUET_FILE_ID = "YOUR_NEW_FILE_ID_HERE"   # replace with your actual ID
     gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
     return pd.read_parquet("data.parquet")
 
@@ -33,7 +37,6 @@ original_data = data.copy()
 
 # ---------- Helper functions ----------
 def safe_col(df, col):
-    """Return column if exists, else None"""
     return col if col in df.columns else None
 
 def get_diff_range(df, col_name):
@@ -57,7 +60,7 @@ def normalize_title_col(series):
         return pd.Series('', index=series.index)
     return series.astype(str).str.strip().str.lower()
 
-# ---------- Define available features ----------
+# ---------- Define available features – include ALL adjperf columns ----------
 adjperf_cols = [c for c in data.columns if c.startswith('adjperf_')]
 new_features = [
     'Age', 'AgeDiff', 'HeightDiff', 'ReachDiff',
@@ -69,17 +72,25 @@ new_features = [
     'FighterMasseyDecay', 'OpponentMasseyDecay', 'MasseyDecayDiff',
     'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecayDiff'
 ]
+# Add ALL adjperf columns (fighter, opponent, diff)
 for col in adjperf_cols:
-    new_features.append(col)
-    new_features.append(f'Opponent_{col}')
-    new_features.append(f'{col}_diff')
+    new_features.append(col)                 # fighter adjperf
+    opp_col = f'Opponent_{col}'
+    if opp_col in data.columns:
+        new_features.append(opp_col)
+    diff_col = f'{col}_diff'
+    if diff_col in data.columns:
+        new_features.append(diff_col)
+
 # Keep only existing
 new_features = [c for c in new_features if c in data.columns]
 
 # For 3D features, use numeric columns from new_features with variance
 three_d_features = [c for c in new_features if data[c].nunique(dropna=True) >= 2 and np.issubdtype(data[c].dtype, np.number)]
 
-# ---------- Sidebar Filters with existence checks ----------
+# =========================================================================
+# Sidebar Filters (with existence checks – same as before)
+# =========================================================================
 st.sidebar.title("Filters")
 with st.sidebar.expander("General", expanded=True):
     wc = st.multiselect("Weight Class", sorted(data['WC'].dropna().unique())) if 'WC' in data.columns else []
@@ -238,10 +249,10 @@ if 'knn_train_status' not in st.session_state:
     st.session_state.knn_train_status = "Not trained"
 if 'selected_fight_row' not in st.session_state:
     st.session_state.selected_fight_row = None
-
-# Store feature names to avoid mismatch
 if 'lr_feature_names' not in st.session_state:
     st.session_state.lr_feature_names = []
+if 'knn_feature_names' not in st.session_state:
+    st.session_state.knn_feature_names = []
 
 # Set default features
 if len(three_d_features) >= 3:
@@ -274,7 +285,7 @@ if len(full_hist) > 0:
     st.session_state.recent_count = len(recent)
 
 # =========================================================================
-# TRAIN MODELS ON FILTERED DATA (store feature names)
+# TRAIN MODELS ON FILTERED DATA
 # =========================================================================
 def train_models_on_filtered():
     x_lr = st.session_state.x_lr
@@ -408,7 +419,7 @@ if cols_to_show:
                     st.write(f"**{feat}:** {subset[feat].mean():.2f}")
 
 # =========================================================================
-# UPCOMING FIGHT MATCHUP (with column guards)
+# UPCOMING FIGHT MATCHUP (with ALL adjperf diffs displayed)
 # =========================================================================
 st.header("Upcoming Fight Matchup")
 
@@ -437,26 +448,27 @@ if not upcoming_display.empty:
 
             def show_fighter_stats(row, label):
                 st.subheader(label)
-                # Only show columns that exist
-                if 'Age' in row: st.write(f"**Age:** {row['Age']}")
-                if 'AgeDiff' in row: st.write(f"**AgeDiff:** {row['AgeDiff']:.1f}")
-                if 'HeightDiff' in row: st.write(f"**HeightDiff:** {row['HeightDiff']:.1f} in")
-                if 'ReachDiff' in row: st.write(f"**ReachDiff:** {row['ReachDiff']:.1f} in")
-                if 'DaysSincePrev' in row: st.write(f"**DaysSincePrev:** {row['DaysSincePrev']:.0f}")
-                if 'DaysSincePrev_diff' in row: st.write(f"**DaysSincePrev_diff:** {row['DaysSincePrev_diff']:.0f}")
-                if 'Avg3DaysGap_diff' in row: st.write(f"**Avg3DaysGap_diff:** {row['Avg3DaysGap_diff']:.0f}")
-                if 'CareerWinPct_diff' in row: st.write(f"**CareerWinPct_diff:** {row['CareerWinPct_diff']:.1%}")
-                if 'Prev7WinPct' in row: st.write(f"**Prev7WinPct:** {row['Prev7WinPct']:.1%}")
-                if 'FighterOddsNum' in row: st.write(f"**FighterOddsNum:** {row['FighterOddsNum']:.0f}")
-                if 'PrevFighterOddsNum' in row: st.write(f"**PrevFighterOddsNum:** {row['PrevFighterOddsNum']:.0f}")
-                if 'ColleyDecayDiff' in row: st.write(f"**ColleyDecayDiff:** {row['ColleyDecayDiff']:.3f}")
-                if 'MasseyDecayDiff' in row: st.write(f"**MasseyDecayDiff:** {row['MasseyDecayDiff']:.3f}")
-                if 'WeightedMasseyDecayDiff' in row: st.write(f"**WeightedMasseyDecayDiff:** {row['WeightedMasseyDecayDiff']:.3f}")
-                # Show some adjperf diffs
-                key_stats = ['adjperf_KD', 'adjperf_SS', 'adjperf_TD', 'adjperf_Subs', 'adjperf_Ctrl']
-                for ks in key_stats:
-                    if f'{ks}_diff' in row:
-                        st.write(f"**{ks}_diff:** {row[f'{ks}_diff']:.2f}")
+                # Basic info (only columns that exist)
+                basic_cols = ['Age', 'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev',
+                              'DaysSincePrev_diff', 'Avg3DaysGap_diff', 'CareerWinPct_diff',
+                              'Prev7WinPct', 'FighterOddsNum', 'PrevFighterOddsNum',
+                              'ColleyDecayDiff', 'MasseyDecayDiff', 'WeightedMasseyDecayDiff']
+                for col in basic_cols:
+                    if col in row:
+                        st.write(f"**{col}:** {row[col]:.2f}" if isinstance(row[col], (int, float)) else f"**{col}:** {row[col]}")
+                st.write("---")
+                # ---- Show ALL adjperf diffs ----
+                st.write("**Adjusted Performance Diffs (fighter - opponent)**")
+                adjperf_diffs = [c for c in row.index if c.endswith('_diff') and c.startswith('adjperf_')]
+                if adjperf_diffs:
+                    diff_data = {}
+                    for c in adjperf_diffs:
+                        diff_data[c] = row[c]
+                    diff_df = pd.DataFrame([diff_data]).T
+                    diff_df.columns = ['Value']
+                    st.dataframe(diff_df, use_container_width=True)
+                else:
+                    st.write("No adjperf diff columns found.")
                 st.write("---")
 
             colA, colB = st.columns(2)
@@ -467,7 +479,7 @@ if not upcoming_display.empty:
 
             st.subheader(f"Model Win Probabilities for {f1_row['Fighter']}")
 
-            # LR – use stored feature names
+            # LR
             lr_model = st.session_state.lr_model
             lr_feats = st.session_state.lr_feature_names
             if lr_model is not None and len(lr_feats) == 3:
@@ -496,13 +508,13 @@ if not upcoming_display.empty:
                 except Exception as e:
                     st.error(f"LR probability error: {e}")
             else:
-                st.info("LR model not trained or feature mismatch. Check status above.")
+                st.info("LR model not trained or feature mismatch.")
 
-            # KNN – use stored feature names
+            # KNN
             calibrated_knn = st.session_state.calibrated_knn
             scaler = st.session_state.scaler
             X_train = st.session_state.X_train
-            knn_feats = st.session_state.get('knn_feature_names', [])
+            knn_feats = st.session_state.knn_feature_names
             if calibrated_knn is not None and scaler is not None and len(knn_feats) == 3 and X_train is not None:
                 means_knn = X_train.mean(axis=0) if X_train is not None else np.zeros(3)
                 vals_knn = []
@@ -530,7 +542,7 @@ if not upcoming_display.empty:
                 except Exception as e:
                     st.error(f"KNN probability error: {e}")
             else:
-                st.info("KNN model not trained or feature mismatch. Check status above.")
+                st.info("KNN model not trained or feature mismatch.")
         else:
             st.warning(f"Expected 2 rows for this fight, but got {len(fight_rows)}. Check data.")
 else:
@@ -744,7 +756,7 @@ if len(three_d_features) >= 3:
                 if st.session_state.selected_fight_row is not None:
                     f1_row = st.session_state.selected_fight_row
                     st.subheader(f"Predicted KNN Win Probability for {f1_row['Fighter']} (using current features)")
-                    knn_feats = st.session_state.get('knn_feature_names', [])
+                    knn_feats = st.session_state.knn_feature_names
                     if len(knn_feats) == 3:
                         means_knn = X_knn.mean(axis=0)
                         vals_knn = []
@@ -856,13 +868,11 @@ else:
 # =========================================================================
 st.header("Last 20 Fights")
 last20 = data.sort_values('FightDate', ascending=False).head(20)
-# Show a subset of columns
 display_cols = ['FightDate','Fighter','Opponent','Win?','Method']
-# Add key new features if they exist
 for col in ['AgeDiff','HeightDiff','ReachDiff','CareerWinPct_diff','Prev7WinPct','ColleyDecayDiff','MasseyDecayDiff','WeightedMasseyDecayDiff']:
     if col in last20.columns:
         display_cols.append(col)
-# Add adjperf diffs
+# Add a few adjperf diffs
 for ks in ['adjperf_KD', 'adjperf_SS', 'adjperf_TD']:
     if f'{ks}_diff' in last20.columns:
         display_cols.append(f'{ks}_diff')
