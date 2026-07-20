@@ -519,139 +519,65 @@ def train_models_on_filtered():
 # Train models now (after filters applied)
 train_models_on_filtered()
 
-# =========================================================================
-# UPCOMING FIGHT MATCHUP
-# =========================================================================
 st.header("Upcoming Fight Matchup")
 
 # Show training status
 if st.session_state.lr_train_status and "error" not in st.session_state.lr_train_status.lower():
-    st.success(f"LR: {st.session_state.lr_train_status}")
+    st.success(f"✅ LR: {st.session_state.lr_train_status}")
 else:
-    st.error(f"LR: {st.session_state.lr_train_status}")
+    st.error(f"❌ LR: {st.session_state.lr_train_status}")
 if st.session_state.knn_train_status and "error" not in st.session_state.knn_train_status.lower():
-    st.success(f"KNN: {st.session_state.knn_train_status}")
+    st.success(f"✅ KNN: {st.session_state.knn_train_status}")
 else:
-    st.error(f"KNN: {st.session_state.knn_train_status}")
+    st.error(f"❌ KNN: {st.session_state.knn_train_status}")
 
 upcoming_data = data[data['Win?'].isna() | (data['Win?'] == '')]
-st.write(f"**Number of upcoming fights after filters:** {len(upcoming_data)}")
+st.write(f"**Upcoming rows after filters:** {len(upcoming_data)}")
+st.write(f"**Unique FightIDs:** {sorted(upcoming_data['FightID'].unique())}")
 
 if not upcoming_data.empty:
     upcoming_fight_ids = sorted(upcoming_data['FightID'].unique())
     selected_fight = st.selectbox("Choose an upcoming fight", upcoming_fight_ids)
     if selected_fight:
         fight_rows = upcoming_data[upcoming_data['FightID'] == selected_fight]
+        st.write(f"**Rows for selected fight:** {len(fight_rows)}")
         if len(fight_rows) == 2:
             f1_row = fight_rows.iloc[0]
             f2_row = fight_rows.iloc[1]
             st.write(f"### {f1_row['Fighter']} vs {f2_row['Fighter']}")
 
-            def show_fighter_stats(row, label):
-                st.subheader(label)
-                st.write(f"**Age:** {row['Age']}  | **Height:** {row['Height']} in | **Reach:** {row['Reach']} in")
-                st.write(f"**Stance:** {row['Stance']} | **Country:** {row['Country']}")
-                st.write(f"**Fight #:** {row['FightNumber']} | **Opp Fight #:** {row['Opponent_FightNumber']}")
-                st.write(f"**Days Since Prev:** {row['DaysSincePrev']:.0f} days  | **Avg 3‑Fight Gap:** {row['Avg3DaysGap']:.0f} days")
-                pw = int(row['Prev7Wins']) if pd.notna(row['Prev7Wins']) else 0
-                pl = int(row['Prev7Losses']) if pd.notna(row['Prev7Losses']) else 0
-                st.write(f"**Career Win %:** {row['CareerWinPct']:.1f}% | **Prev 7 Record:** {pw}‑{pl}")
-                st.write(f"**Ratings:** CO {row['FighterColleyOrig']:.4f} / CD {row['FighterColleyDecay']:.4f} / MO {row['FighterMasseyOrig']:.4f} / MD {row['FighterMasseyDecay']:.4f} / WMD {row['FighterWeightedMasseyDecay']:.4f}")
-                st.write(f"**Odds (Fighter/Opp):** {row['FighterOddsBFO']} / {row['OpponentOddsBFO']}")
+            # Show fighter stats (simplified)
+            st.write(f"**{f1_row['Fighter']}** Age: {f1_row['Age']}, Height: {f1_row['Height']}, Reach: {f1_row['Reach']}")
+            st.write(f"**{f2_row['Fighter']}** Age: {f2_row['Age']}, Height: {f2_row['Height']}, Reach: {f2_row['Reach']}")
 
-                st.write("**Career Averages (offence):**")
-                avg_items = []
-                for col_name in ['CareerAvg_SS','CareerAvg_SSA','CareerAvg_KD','CareerAvg_TD','CareerAvg_TDA',
-                                 'CareerAvg_Subs','CareerAvg_Reversals','CareerAvg_Ctrl','CareerAvg_DSL']:
-                    if col_name in row:
-                        val = row[col_name]
-                        avg_items.append(f"{col_name.replace('CareerAvg_','')}: {val:.1f}" if pd.notna(val) else f"{col_name.replace('CareerAvg_','')}: --")
-                if 'CareerAvg_TS_Acc' in row and pd.notna(row['CareerAvg_TS_Acc']):
-                    avg_items.append(f"TS Acc: {row['CareerAvg_TS_Acc']:.1f}%")
-                if 'CareerAvg_TD_Acc' in row and pd.notna(row['CareerAvg_TD_Acc']):
-                    avg_items.append(f"TD Acc: {row['CareerAvg_TD_Acc']:.1f}%")
-                if 'CareerAvg_DSL_per_KD' in row and pd.notna(row['CareerAvg_DSL_per_KD']):
-                    avg_items.append(f"DSL/KD: {row['CareerAvg_DSL_per_KD']:.2f}")
-                if 'CareerAvg_Ctrl_per_TD' in row and pd.notna(row['CareerAvg_Ctrl_per_TD']):
-                    avg_items.append(f"Ctrl/TD: {row['CareerAvg_Ctrl_per_TD']:.1f}s")
-                st.write(" · ".join(avg_items) if avg_items else "No career data")
-
-                st.write("**Defensive Averages (opponents' stats against):**")
-                def_items = []
-                for col_name in ['CareerAvg_Def_TS_Acc','CareerAvg_Def_TD_Acc','CareerAvg_Def_DS_Acc',
-                                 'CareerAvg_Def_DSL_per_KD','CareerAvg_Def_Ctrl_per_TD']:
-                    if col_name in row and pd.notna(row[col_name]):
-                        def_items.append(f"{col_name.replace('CareerAvg_Def_','')}: {row[col_name]:.1f}")
-                st.write(" · ".join(def_items) if def_items else "No defensive data")
-
-                st.write("**Current Bout Differences:**")
-                diff_items = []
-                for diff_col2, unit in [('AgeDiff','yrs'),('HeightDiff','in'),('ReachDiff','in')]:
-                    if diff_col2 in row:
-                        diff_items.append(f"{diff_col2}: {row[diff_col2]:+.1f} {unit}" if pd.notna(row[diff_col2]) else f"{diff_col2}: --")
-                st.write(" · ".join(diff_items) if diff_items else "N/A")
-
-                st.write("**Previous Outcomes (Fighter):**")
-                prev_outs = []
-                for shift, col2 in [(1, prev1_col), (2, prev2_col), (3, prev3_col)]:
-                    val = row[col2] if pd.notna(row[col2]) else '--'
-                    prev_outs.append(f"Prev {shift}: {val}")
-                st.write(" · ".join(prev_outs))
-
-                st.write("**Career Milestones (Fighter):**")
-                career_outs = []
-                for shift, col2 in [(1, career1_col), (2, career2_col), (3, career3_col)]:
-                    val = row[col2] if pd.notna(row[col2]) else '--'
-                    career_outs.append(f"F{shift}: {val}")
-                st.write(" · ".join(career_outs))
-
-                st.write("**Opponent Previous Outcomes:**")
-                opp_prev_outs = []
-                for shift in [1,2,3]:
-                    raw_col = f'Opponent_Prev{shift}_Outcome_raw'
-                    if raw_col in row:
-                        use_col = f'Opponent_Prev{shift}_Outcome_skipNC' if skip_nc else raw_col
-                        val = row[use_col] if use_col in row and pd.notna(row[use_col]) else '--'
-                        opp_prev_outs.append(f"Prev {shift}: {val}")
-                st.write(" · ".join(opp_prev_outs) if opp_prev_outs else "N/A")
-
-                st.write("**Opponent Career Milestones:**")
-                opp_career_outs = []
-                for shift in [1,2,3]:
-                    col2 = f'Opponent_Career{shift}_Outcome_skipNC' if skip_nc else f'Opponent_Career{shift}_Outcome_raw'
-                    val = row[col2] if col2 in row and pd.notna(row[col2]) else '--'
-                    opp_career_outs.append(f"F{shift}: {val}")
-                st.write(" · ".join(opp_career_outs) if opp_career_outs else "N/A")
-
-                st.write("**Title History:**")
-                f_title = row.get('Prev1_Title', '--')
-                if pd.isna(f_title):
-                    f_title = '--'
-                o_title = row.get('Opponent_Prev1_Title', '--')
-                if pd.isna(o_title):
-                    o_title = '--'
-                st.write(f"Fighter's last fight was a title fight? {f_title}  |  Opponent's last fight was a title fight? {o_title}")
-                st.write("---")
-
-            colA, colB = st.columns(2)
-            with colA:
-                show_fighter_stats(f1_row, f1_row['Fighter'])
-            with colB:
-                show_fighter_stats(f2_row, f2_row['Fighter'])
-
+            # ------------------------------------------------------------------
+            # MODEL PROBABILITIES – with debug output
+            # ------------------------------------------------------------------
             st.subheader(f"Model Win Probabilities for {f1_row['Fighter']}")
 
+            # LR
             lr_model = st.session_state.lr_model
-            if lr_model is not None and st.session_state.x_lr is not None:
+            x_lr = st.session_state.x_lr
+            y_lr = st.session_state.y_lr
+            z_lr = st.session_state.z_lr
+            st.write(f"**LR features:** {x_lr}, {y_lr}, {z_lr}")
+
+            if lr_model is not None and x_lr is not None:
                 def safe_val(row, col):
                     try:
                         val = row[col]
-                        return val if pd.notna(val) else 0.0
-                    except:
+                        if pd.isna(val):
+                            st.write(f"⚠️ Warning: {col} is NaN, using 0.0")
+                            return 0.0
+                        return float(val)
+                    except Exception as e:
+                        st.write(f"⚠️ Error reading {col}: {e}")
                         return 0.0
-                v1 = safe_val(f1_row, st.session_state.x_lr)
-                v2 = safe_val(f1_row, st.session_state.y_lr)
-                v3 = safe_val(f1_row, st.session_state.z_lr)
+                v1 = safe_val(f1_row, x_lr)
+                v2 = safe_val(f1_row, y_lr)
+                v3 = safe_val(f1_row, z_lr)
+                st.write(f"**Feature values for {f1_row['Fighter']}:** {x_lr}={v1}, {y_lr}={v2}, {z_lr}={v3}")
+
                 try:
                     prob_lr = lr_model.predict_proba(np.array([[v1, v2, v3]]))[0, 1]
                     overall_wr = st.session_state.overall_wr
@@ -664,23 +590,30 @@ if not upcoming_data.empty:
                     shrunk_lr = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
                     st.write(f"**LR win probability:** {prob_lr:.1%}  |  **shrunken:** {shrunk_lr:.1%}")
                 except Exception as e:
-                    st.error(f"LR probability error: {e}")
+                    st.error(f"LR prediction error: {e}")
             else:
-                st.info("LR model not trained. Check status above.")
+                st.info("LR model not trained or features missing.")
 
+            # KNN
             calibrated_knn = st.session_state.calibrated_knn
             scaler = st.session_state.scaler
             X_train = st.session_state.X_train
-            if calibrated_knn is not None and scaler is not None and st.session_state.x_knn is not None:
+            x_knn = st.session_state.x_knn
+            y_knn = st.session_state.y_knn
+            z_knn = st.session_state.z_knn
+            st.write(f"**KNN features:** {x_knn}, {y_knn}, {z_knn}")
+
+            if calibrated_knn is not None and scaler is not None and x_knn is not None:
                 means_knn = X_train.mean(axis=0) if X_train is not None else np.zeros(3)
                 vals_knn = []
-                for i, col_name in enumerate([st.session_state.x_knn, st.session_state.y_knn, st.session_state.z_knn]):
+                for i, col_name in enumerate([x_knn, y_knn, z_knn]):
                     raw = get_first_col(pd.DataFrame(f1_row).T, col_name)[0]
                     try:
                         v = float(raw) if pd.notna(raw) else means_knn[i]
                     except:
                         v = means_knn[i]
                     vals_knn.append(v)
+                st.write(f"**KNN feature values:** {vals_knn}")
                 try:
                     up_arr = np.array([vals_knn], dtype=np.float64)
                     up_scaled = scaler.transform(up_arr)
@@ -696,12 +629,13 @@ if not upcoming_data.empty:
                     shrunk_knn = (prior_weight * (shrunk_recent / 100) + prob_knn) / (prior_weight + 1)
                     st.write(f"**KNN win probability:** {prob_knn:.1%}  |  **shrunken:** {shrunk_knn:.1%}")
                 except Exception as e:
-                    st.error(f"KNN probability error: {e}")
+                    st.error(f"KNN prediction error: {e}")
             else:
-                st.info("KNN model not trained. Check status above.")
+                st.info("KNN model not trained or features missing.")
+        else:
+            st.warning(f"Expected 2 rows for this fight, but got {len(fight_rows)}. Check your data.")
 else:
     st.write("No upcoming fights match the current filters.")
-
 # =========================================================================
 # The rest of the script (3D plots, last fights, feature importance, spider) stays exactly as before
 # =========================================================================
