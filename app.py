@@ -238,7 +238,60 @@ for sys, (enabled, gap_range) in gap_filters.items():
 
 data = filtered
 
-# Initialize global variables (will be set by scatterplots)
+# =========================================================================
+# COMMON DEFINITIONS (must be here, before any use)
+# =========================================================================
+core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
+        'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev', 'Avg3DaysGap',
+        'FightNumber', 'Opponent_FightNumber', 'FighterOddsNum', 'PrevFighterOddsNum',
+        'CareerWinPct', 'Opponent_CareerWinPct',
+        'Prev7Wins', 'Opponent_Prev7Wins', 'Prev7Losses', 'Opponent_Prev7Losses',
+        'FighterColleyOrig', 'OpponentColleyOrig', 'ColleyOrig_Diff',
+        'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecay_Diff',
+        'FighterMasseyOrig', 'OpponentMasseyOrig', 'MasseyOrig_Diff',
+        'FighterMasseyDecay', 'OpponentMasseyDecay', 'MasseyDecay_Diff',
+        'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecay_Diff']
+career_avg = [c for c in data.columns if c.startswith('CareerAvg_') and not c.startswith('Opponent_CareerAvg_')]
+opp_career_avg = [c for c in data.columns if c.startswith('Opponent_CareerAvg_')]
+diff_cols = [c for c in data.columns if c.endswith('_Diff')]
+numerical_features = list(dict.fromkeys(
+    c for c in core + career_avg + opp_career_avg + diff_cols
+    if c in data.columns and not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')
+    and data[c].nunique(dropna=True) >= 2
+))
+
+def detailed_result(row):
+    win_raw = row.get('Win?')
+    if win_raw is None or pd.isna(win_raw) or str(win_raw).strip().lower() in ('', 'none', 'nan'):
+        return 'Upcoming'
+    win_val = str(win_raw).strip()
+    method = str(row.get('Method', '')).strip().lower()
+    if 'dq' in method or 'disqualif' in method:
+        return 'Win by DQ' if win_val == 'Yes' else 'Loss by DQ'
+    if win_val in ('No Contest', 'NC'):
+        return 'No Contest'
+    if win_val == 'Draw':
+        return 'Draw'
+    if win_val == 'Yes':
+        return 'Win'
+    if win_val == 'No':
+        return 'Loss'
+    return 'Upcoming'
+
+data['DetailedResult'] = data.apply(detailed_result, axis=1)
+data['Fight'] = data['Fighter'].astype(str) + ' vs ' + data['Opponent'].astype(str)
+
+color_map = {
+    'Win': 'green',
+    'Loss': 'red',
+    'Win by DQ': 'limegreen',
+    'Loss by DQ': 'darkred',
+    'No Contest': 'purple',
+    'Upcoming': 'blue',
+    'Draw': 'gray'
+}
+
+# Initialize model variables globally
 lr_model = None
 calibrated_knn = None
 scaler = None
@@ -250,8 +303,9 @@ recent_count = 0
 x_lr = y_lr = z_lr = None
 x_knn = y_knn = z_knn = None
 
-# ---------- Performance Summary ----------
+# ---------- Dashboard ----------
 st.title("UFC Pre‑Fight Performance Dashboard")
+
 if len(data) == 0:
     st.warning("No data matches the selected filters.")
     st.stop()
@@ -331,6 +385,10 @@ if conditions:
     colg3.metric("Win Rate", f"{win_rate_gap:.1f}%")
 else:
     st.info("Enable one or more rating gap filters to see the combined effect.")
+
+# ---------- Bayesian Shrinkage Sliders ----------
+prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight_global")
+recent_window = st.sidebar.slider("Recent fights window", 1, 100, 50, key="recent_win_global")
 
 # =========================================================================
 # 3D LR WIN/LOSS PREDICTION + COMBO BUILDER
@@ -767,62 +825,6 @@ display_cols = ['FightDate','Fighter','Opponent','WC','Win?','Method','Age','Hei
 if 'CareerAvg_Ctrl' in data.columns: display_cols.append('CareerAvg_Ctrl')
 display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
-
-# =========================================================================
-# COMMON DEFINITIONS (placed after because 'data' is needed)
-# =========================================================================
-core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
-        'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev', 'Avg3DaysGap',
-        'FightNumber', 'Opponent_FightNumber', 'FighterOddsNum', 'PrevFighterOddsNum',
-        'CareerWinPct', 'Opponent_CareerWinPct',
-        'Prev7Wins', 'Opponent_Prev7Wins', 'Prev7Losses', 'Opponent_Prev7Losses',
-        'FighterColleyOrig', 'OpponentColleyOrig', 'ColleyOrig_Diff',
-        'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecay_Diff',
-        'FighterMasseyOrig', 'OpponentMasseyOrig', 'MasseyOrig_Diff',
-        'FighterMasseyDecay', 'OpponentMasseyDecay', 'MasseyDecay_Diff',
-        'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecay_Diff']
-career_avg = [c for c in data.columns if c.startswith('CareerAvg_') and not c.startswith('Opponent_CareerAvg_')]
-opp_career_avg = [c for c in data.columns if c.startswith('Opponent_CareerAvg_')]
-diff_cols = [c for c in data.columns if c.endswith('_Diff')]
-numerical_features = list(dict.fromkeys(
-    c for c in core + career_avg + opp_career_avg + diff_cols
-    if c in data.columns and not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')
-    and data[c].nunique(dropna=True) >= 2
-))
-
-def detailed_result(row):
-    win_raw = row.get('Win?')
-    if win_raw is None or pd.isna(win_raw) or str(win_raw).strip().lower() in ('', 'none', 'nan'):
-        return 'Upcoming'
-    win_val = str(win_raw).strip()
-    method = str(row.get('Method', '')).strip().lower()
-    if 'dq' in method or 'disqualif' in method:
-        return 'Win by DQ' if win_val == 'Yes' else 'Loss by DQ'
-    if win_val in ('No Contest', 'NC'):
-        return 'No Contest'
-    if win_val == 'Draw':
-        return 'Draw'
-    if win_val == 'Yes':
-        return 'Win'
-    if win_val == 'No':
-        return 'Loss'
-    return 'Upcoming'
-
-data['DetailedResult'] = data.apply(detailed_result, axis=1)
-data['Fight'] = data['Fighter'].astype(str) + ' vs ' + data['Opponent'].astype(str)
-
-color_map = {
-    'Win': 'green',
-    'Loss': 'red',
-    'Win by DQ': 'limegreen',
-    'Loss by DQ': 'darkred',
-    'No Contest': 'purple',
-    'Upcoming': 'blue',
-    'Draw': 'gray'
-}
-
-prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight_global")
-recent_window = st.sidebar.slider("Recent fights window", 1, 100, 50, key="recent_win_global")
 
 # =========================================================================
 # FEATURE IMPORTANCE CHARTS (Numerical & Categorical)
