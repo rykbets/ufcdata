@@ -554,6 +554,9 @@ if len(three_d_features) >= 3:
                     train_means[col2] = 0
 
             # ----- LR Win Probability Estimate -----
+            # Debug line to confirm upcoming rows exist
+            upcoming_debug = data[data['Win?'].isna() | (data['Win?'] == '')]
+            st.write(f"### DEBUG (LR): upcoming rows in data = {len(upcoming_debug)}")
             st.subheader("LR Win Probability Estimate")
             upcoming = data[data['Win?'].isna() | (data['Win?'] == '')]
             if not upcoming.empty:
@@ -744,6 +747,8 @@ if len(three_d_features) >= 3:
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
             # ----- KNN Win Probability Estimate -----
+            upcoming_debug = data[data['Win?'].isna() | (data['Win?'] == '')]
+            st.write(f"### DEBUG (KNN): upcoming rows in data = {len(upcoming_debug)}")
             st.subheader("KNN Win Probability Estimate")
             upcoming = data[data['Win?'].isna() | (data['Win?'] == '')]
             if not upcoming.empty:
