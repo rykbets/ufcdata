@@ -175,7 +175,7 @@ with st.sidebar.expander("Rating Gap Analysis", expanded=False):
         else:
             gap_filters[sys] = (False, None)
 
-# ---------- Apply filters (row-wise) ----------
+# ---------- Apply filters ----------
 filtered = data.copy()
 
 if wc: filtered = filtered[filtered['WC'].isin(wc)]
@@ -336,7 +336,7 @@ if 'lr_train_status' not in st.session_state:
 if 'knn_train_status' not in st.session_state:
     st.session_state.knn_train_status = "Not trained"
 if 'selected_fight_row' not in st.session_state:
-    st.session_state.selected_fight_row = None  # will store the selected fighter's row for probability display
+    st.session_state.selected_fight_row = None
 
 # Set default features to Age, Height, Reach
 default_lr = ['Age', 'Height', 'Reach']
@@ -542,7 +542,7 @@ else:
     st.info("Enable one or more rating gap filters to see the combined effect.")
 
 # =========================================================================
-# UPCOMING FIGHT MATCHUP (shows probabilities for the default features)
+# UPCOMING FIGHT MATCHUP
 # =========================================================================
 st.header("Upcoming Fight Matchup")
 
@@ -567,7 +567,6 @@ if not upcoming_display.empty:
         if len(fight_rows) == 2:
             f1_row = fight_rows.iloc[0]
             f2_row = fight_rows.iloc[1]
-            # Store the selected fighter's row for later use in scatter sections
             st.session_state.selected_fight_row = f1_row
             st.write(f"### {f1_row['Fighter']} vs {f2_row['Fighter']}")
 
@@ -1110,18 +1109,18 @@ else:
         st.warning("No categorical features available after filtering.")
 
 # =========================================================================
-# SPIDER CHART (independent filters, unchanged)
+# SPIDER CHART (independent filters, using original_data)
 # =========================================================================
 st.header("Fight Similarity & Comparison (Independent Filters)")
 st.subheader("Spider Chart Filters (fighter data only)")
 
 col_sp1, col_sp2 = st.columns(2)
 with col_sp1:
-    spider_wc = st.multiselect("Weight Class", sorted(data['WC'].dropna().unique()), key="spider_wc")
-    spider_stance = st.multiselect("Stance", sorted(data['Stance'].dropna().unique()), key="spider_stance")
-    spider_country = st.multiselect("Country", sorted(data['Country'].dropna().unique()), key="spider_country")
-    spider_sched_rounds = st.multiselect("Scheduled Rounds", sorted(data['ScheduledRounds'].dropna().unique()), key="spider_sched")
-    spider_event_country = st.multiselect("Event Country", sorted(data['EventCountry'].dropna().unique()), key="spider_eventc")
+    spider_wc = st.multiselect("Weight Class", sorted(original_data['WC'].dropna().unique()), key="spider_wc")
+    spider_stance = st.multiselect("Stance", sorted(original_data['Stance'].dropna().unique()), key="spider_stance")
+    spider_country = st.multiselect("Country", sorted(original_data['Country'].dropna().unique()), key="spider_country")
+    spider_sched_rounds = st.multiselect("Scheduled Rounds", sorted(original_data['ScheduledRounds'].dropna().unique()), key="spider_sched")
+    spider_event_country = st.multiselect("Event Country", sorted(original_data['EventCountry'].dropna().unique()), key="spider_eventc")
 with col_sp2:
     spider_title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"], key="spider_title")
     spider_hometown = st.selectbox("Hometown", ["All", "Yes", "No"], key="spider_home")
@@ -1136,8 +1135,8 @@ else:
     spider_prev1_col = 'Prev1_Outcome_raw'; spider_prev2_col = 'Prev2_Outcome_raw'; spider_prev3_col = 'Prev3_Outcome_raw'
     spider_career1_col = 'Career1_Outcome_raw'; spider_career2_col = 'Career2_Outcome_raw'; spider_career3_col = 'Career3_Outcome_raw'
 
-all_outcomes_raw_spider = sorted(data[spider_prev1_col].dropna().unique())
-all_outcomes_career_spider = sorted(data[spider_career1_col].dropna().unique())
+all_outcomes_raw_spider = sorted(original_data[spider_prev1_col].dropna().unique())
+all_outcomes_career_spider = sorted(original_data[spider_career1_col].dropna().unique())
 
 with st.expander("Previous Outcomes (Spider)"):
     spider_prev1 = st.multiselect("Prev Fight 1", all_outcomes_raw_spider, key="spider_prev1")
@@ -1147,7 +1146,8 @@ with st.expander("Previous Outcomes (Spider)"):
     spider_career2 = st.multiselect("Career F2", all_outcomes_career_spider, key="spider_career2")
     spider_career3 = st.multiselect("Career F3", all_outcomes_career_spider, key="spider_career3")
 
-spider_data = data.copy()
+# Start with original_data for spider
+spider_data = original_data.copy()
 mask = pd.Series(True, index=spider_data.index)
 if spider_wc: mask &= spider_data['WC'].isin(spider_wc)
 if spider_stance: mask &= spider_data['Stance'].isin(spider_stance)
@@ -1167,7 +1167,8 @@ if spider_career1: mask &= spider_data[spider_career1_col].isin(spider_career1)
 if spider_career2: mask &= spider_data[spider_career2_col].isin(spider_career2)
 if spider_career3: mask &= spider_data[spider_career3_col].isin(spider_career3)
 
-valid_fight_ids = spider_data.loc[mask, 'FightID'].unique()
+spider_data = spider_data[mask]
+valid_fight_ids = spider_data['FightID'].unique()
 spider_data = spider_data[spider_data['FightID'].isin(valid_fight_ids)]
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
 
