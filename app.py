@@ -193,7 +193,6 @@ filtered['Prev1_Title_clean'] = normalize_title_col(filtered.get('Prev1_Title', 
 if 'Opponent_Prev1_Title' in filtered.columns:
     filtered['Opp_Prev1_Title_clean'] = normalize_title_col(filtered['Opponent_Prev1_Title'])
 
-# Keep FightIDs where at least one fighter passes the condition
 if prev_title != "All":
     fighter_mask = filtered['Prev1_Title_clean'] == prev_title.lower()
     matching_fight_ids = filtered.loc[fighter_mask, 'FightID'].unique()
@@ -330,6 +329,8 @@ if 'scaler' not in st.session_state:
     st.session_state.scaler = None
 if 'X_train' not in st.session_state:
     st.session_state.X_train = None
+if 'y_train_knn' not in st.session_state:
+    st.session_state.y_train_knn = None
 if 'overall_wr' not in st.session_state:
     st.session_state.overall_wr = 0.0
 if 'recent_wr' not in st.session_state:
@@ -370,7 +371,7 @@ if len(full_hist) > 0:
     st.session_state.recent_count = len(recent)
 
 # =========================================================================
-# TRAIN MODELS ON FILTERED DATA
+# TRAIN MODELS ON FILTERED DATA (store training targets for metrics)
 # =========================================================================
 def train_models_on_filtered():
     x_lr = st.session_state.x_lr
@@ -385,15 +386,18 @@ def train_models_on_filtered():
     if x_lr is None or y_lr is None or z_lr is None:
         st.session_state.lr_model = None
         st.session_state.lr_train_status = "LR features not set."
+        st.session_state.y_train_lr = None
     else:
         hist = data[data['Win?'].isin(['Yes','No'])].copy()
         sub = hist[[x_lr, y_lr, z_lr, 'Win?']].dropna()
         if len(sub) < 10:
             st.session_state.lr_model = None
             st.session_state.lr_train_status = f"LR: only {len(sub)} rows (need ≥10)."
+            st.session_state.y_train_lr = None
         elif sub['Win?'].nunique() < 2:
             st.session_state.lr_model = None
             st.session_state.lr_train_status = "LR: need both Win and Loss."
+            st.session_state.y_train_lr = None
         else:
             try:
                 sub['target'] = (sub['Win?'] == 'Yes').astype(int)
@@ -403,14 +407,18 @@ def train_models_on_filtered():
                 lr.fit(X, y)
                 st.session_state.lr_model = lr
                 st.session_state.lr_train_status = f"LR trained on {len(sub)} fights."
+                st.session_state.y_train_lr = y
+                st.session_state.X_train_lr = X
             except Exception as e:
                 st.session_state.lr_model = None
                 st.session_state.lr_train_status = f"LR error: {str(e)}"
+                st.session_state.y_train_lr = None
 
     # KNN
     if x_knn is None or y_knn is None or z_knn is None:
         st.session_state.calibrated_knn = None
         st.session_state.knn_train_status = "KNN features not set."
+        st.session_state.y_train_knn = None
     else:
         hist = data[data['Win?'].isin(['Yes','No'])].copy()
         c1 = get_first_col(hist, x_knn)
@@ -425,9 +433,11 @@ def train_models_on_filtered():
         if len(train_df) < 10:
             st.session_state.calibrated_knn = None
             st.session_state.knn_train_status = f"KNN: only {len(train_df)} rows (need ≥10)."
+            st.session_state.y_train_knn = None
         elif train_df['Win?'].nunique() < 2:
             st.session_state.calibrated_knn = None
             st.session_state.knn_train_status = "KNN: need both Win and Loss."
+            st.session_state.y_train_knn = None
         else:
             try:
                 X = train_df[['f1','f2','f3']].values.astype(np.float64)
@@ -440,10 +450,12 @@ def train_models_on_filtered():
                 st.session_state.calibrated_knn = calibrated
                 st.session_state.scaler = scaler
                 st.session_state.X_train = X
+                st.session_state.y_train_knn = y
                 st.session_state.knn_train_status = f"KNN trained on {len(train_df)} fights."
             except Exception as e:
                 st.session_state.calibrated_knn = None
                 st.session_state.knn_train_status = f"KNN error: {str(e)}"
+                st.session_state.y_train_knn = None
 
 # Train models now
 train_models_on_filtered()
@@ -534,7 +546,7 @@ else:
     st.info("Enable one or more rating gap filters to see the combined effect.")
 
 # =========================================================================
-# UPCOMING FIGHT MATCHUP
+# UPCOMING FIGHT MATCHUP (with model status)
 # =========================================================================
 st.header("Upcoming Fight Matchup")
 
@@ -720,7 +732,7 @@ else:
     st.write("No upcoming fights match the current filters.")
 
 # =========================================================================
-# 3D LR SCATTER & COMBO BUILDER
+# 3D LR SCATTER & COMBO BUILDER (with metrics)
 # =========================================================================
 st.header("3D LR Win/Loss Prediction & Best LR Combinations")
 
@@ -757,6 +769,31 @@ if len(three_d_features) >= 3:
         else:
             st.warning("Not enough data for 3D LR plot.")
 
+        # ---- Display LR metrics ----
+        lr_model = st.session_state.lr_model
+        if lr_model is not None and hasattr(st.session_state, 'y_train_lr') and st.session_state.y_train_lr is not None:
+            X_lr = st.session_state.X_train_lr
+            y_lr_true = st.session_state.y_train_lr
+            if X_lr is not None and len(X_lr) > 0:
+                y_prob_lr = lr_model.predict_proba(X_lr)[:, 1]
+                ll_lr = log_loss(y_lr_true, y_prob_lr)
+                bs_lr = brier_score_loss(y_lr_true, y_prob_lr)
+                overall_wr = st.session_state.overall_wr
+                recent_wr = st.session_state.recent_wr
+                col_m1, col_m2, col_m3 = st.columns(3)
+                with col_m1:
+                    st.metric("LR Log‑loss", f"{ll_lr:.3f}")
+                with col_m2:
+                    st.metric("LR Brier", f"{bs_lr:.3f}")
+                with col_m3:
+                    st.metric("Overall Win%", f"{overall_wr:.1f}%")
+                    st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
+            else:
+                st.info("No training data available for LR metrics.")
+        else:
+            st.info("LR model not trained.")
+
+        # ---- LR combo builder (unchanged) ----
         st.subheader("LR 3‑Variable Combinations (Brier)")
         combo_candidates = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
         importance_features = [c for c in numerical_features
@@ -820,7 +857,7 @@ else:
     st.warning("Not enough numerical features for a 3D LR plot (need at least 3).")
 
 # =========================================================================
-# 3D KNN SCATTER & COMBO BUILDER
+# 3D KNN SCATTER & COMBO BUILDER (with metrics)
 # =========================================================================
 st.header("3D Weighted KNN Win/Loss Prediction (Platt‑scaled) & Best KNN Combinations")
 
@@ -856,6 +893,34 @@ if len(three_d_features) >= 3:
         else:
             st.warning("Not enough data for 3D KNN plot.")
 
+        # ---- Display KNN metrics ----
+        calibrated_knn = st.session_state.calibrated_knn
+        if calibrated_knn is not None and hasattr(st.session_state, 'y_train_knn') and st.session_state.y_train_knn is not None:
+            X_knn = st.session_state.X_train
+            y_knn_true = st.session_state.y_train_knn
+            if X_knn is not None and len(X_knn) > 0:
+                scaler = st.session_state.scaler
+                X_scaled = scaler.transform(X_knn)
+                y_prob_knn = calibrated_knn.predict_proba(X_scaled)[:, 1]
+                y_prob_knn = np.clip(y_prob_knn, 0.1, 0.9)
+                ll_knn = log_loss(y_knn_true, y_prob_knn)
+                bs_knn = brier_score_loss(y_knn_true, y_prob_knn)
+                overall_wr = st.session_state.overall_wr
+                recent_wr = st.session_state.recent_wr
+                col_m1, col_m2, col_m3 = st.columns(3)
+                with col_m1:
+                    st.metric("KNN Log‑loss", f"{ll_knn:.3f}")
+                with col_m2:
+                    st.metric("KNN Brier", f"{bs_knn:.3f}")
+                with col_m3:
+                    st.metric("Overall Win%", f"{overall_wr:.1f}%")
+                    st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
+            else:
+                st.info("No training data available for KNN metrics.")
+        else:
+            st.info("KNN model not trained.")
+
+        # ---- KNN slider and retrain ----
         k_knn = st.slider("KNN neighbors", 1, 20, 5, key="knn_model_k")
         if k_knn != st.session_state.knn_model_k:
             st.session_state.knn_model_k = k_knn
@@ -867,6 +932,7 @@ if len(three_d_features) >= 3:
         else:
             st.info("KNN model not trained. Check status above.")
 
+        # ---- KNN combo builder (unchanged) ----
         st.subheader("KNN 3‑Variable Combinations (Brier, In‑Sample)")
         combo_candidates_knn = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
         if not mi_df.empty:
