@@ -27,7 +27,7 @@ def load_data():
     if os.path.exists("all_fights_adjperf.parquet"):
         return pd.read_parquet("all_fights_adjperf.parquet")
     # Otherwise try Drive download (you need to set your file ID)
-    PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"   # replace with your actual ID
+    PARQUET_FILE_ID = "YOUR_NEW_FILE_ID_HERE"   # replace with your actual ID
     gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
     return pd.read_parquet("data.parquet")
 
@@ -427,7 +427,7 @@ if cols_to_show:
                     st.write(f"**{feat}:** {subset[feat].mean():.2f}")
 
 # =========================================================================
-# UPCOMING FIGHT MATCHUP (with ALL adjperf diffs displayed)
+# UPCOMING FIGHT MATCHUP (removed duplicate adjperf diff table)
 # =========================================================================
 st.header("Upcoming Fight Matchup")
 
@@ -464,18 +464,7 @@ if not upcoming_display.empty:
                     if col in row:
                         st.write(f"**{col}:** {row[col]:.2f}" if isinstance(row[col], (int, float)) else f"**{col}:** {row[col]}")
                 st.write("---")
-                st.write("**Adjusted Performance Diffs (fighter - opponent)**")
-                adjperf_diffs = [c for c in row.index if c.endswith('_diff') and c.startswith('adjperf_')]
-                if adjperf_diffs:
-                    diff_data = {}
-                    for c in adjperf_diffs:
-                        diff_data[c] = row[c]
-                    diff_df = pd.DataFrame([diff_data]).T
-                    diff_df.columns = ['Value']
-                    st.dataframe(diff_df, use_container_width=True)
-                else:
-                    st.write("No adjperf diff columns found.")
-                st.write("---")
+                # No adjperf table here – they are only for model variables
 
             colA, colB = st.columns(2)
             with colA:
@@ -640,14 +629,12 @@ if len(three_d_features) >= 3:
 
         # LR combo builder
         st.subheader("LR 3‑Variable Combinations (Brier)")
-        # Use unique features
         combo_candidates = [c for c in three_d_features if c != 'FighterOddsNum']
         importance_features = [c for c in three_d_features if not c.endswith('_diff') and not c.startswith('Opponent_')]
         @st.cache_data
         def numerical_importance(_data, features):
             hist = _data[_data['Win?'].isin(['Yes','No'])].copy()
             hist['Target'] = (hist['Win?'] == 'Yes').astype(int)
-            # Ensure unique columns
             features = list(dict.fromkeys(features))  # deduplicate
             X = hist[features].dropna()
             y = hist.loc[X.index, 'Target']
@@ -897,7 +884,6 @@ if len(hist_imp) < 10:
     st.warning("Too few historical fights after filtering to compute importance.")
 else:
     hist_imp['Target'] = (hist_imp['Win?'] == 'Yes').astype(int)
-    # Deduplicate eligible columns
     eligible = list(dict.fromkeys([c for c in three_d_features if c in hist_imp.columns]))
     if eligible:
         X_num = hist_imp[eligible].dropna()
@@ -972,7 +958,6 @@ else:
     if spider_upcoming.empty:
         st.warning("No upcoming fight has both fighters after spider filters.")
     else:
-        # Use available features for similarity (exclude IDs and non-numeric)
         sim_features = [c for c in new_features if c in spider_data.columns and c not in ['FightNumber', 'FightNumber_diff']]
         sim_features = [c for c in sim_features if c not in ['Win?', 'Method', 'Round', 'Title']]
         if not sim_features:
