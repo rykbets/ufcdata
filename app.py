@@ -18,7 +18,7 @@ from scipy.spatial.distance import cdist
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
-PARQUET_FILE_ID = "YOUR_PARQUET_FILE_ID"   # ← replace with your actual ID
+PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace with your actual ID
 
 @st.cache_data
 def load_data():
