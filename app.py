@@ -562,7 +562,6 @@ if len(three_d_features) >= 3:
                     diff_col = f'{sys}_Diff'
                     if diff_col in temp_data.columns:
                         gap_min, gap_max = gap_range
-                        # Apply gap only to historical rows; keep all upcoming rows (will be filtered later)
                         mask = (
                             ((temp_data[diff_col] >= gap_min) & (temp_data[diff_col] <= gap_max))
                             | (temp_data['Win?'].isna() | (temp_data['Win?'] == ''))
@@ -570,7 +569,6 @@ if len(three_d_features) >= 3:
                         temp_data = temp_data[mask]
             
             upcoming_lr = temp_data[temp_data['Win?'].isna() | (temp_data['Win?'] == '')]
-            # Keep only fights with exactly 2 rows (both fighters present)
             fight_counts = upcoming_lr.groupby('FightID').size()
             valid_ids = fight_counts[fight_counts == 2].index
             upcoming_lr = upcoming_lr[upcoming_lr['FightID'].isin(valid_ids)]
@@ -582,27 +580,36 @@ if len(three_d_features) >= 3:
                     up_rows = upcoming_lr[upcoming_lr['FightID'] == chosen_id]
                     if len(up_rows) == 2:
                         fighter_row = up_rows.iloc[0]
+            
                         def safe_val(col):
                             try:
                                 val = fighter_row[col]
-                                return val if pd.notna(val) else train_means[col]
+                                return val if pd.notna(val) else train_means.get(col, 0)
                             except:
-                                return train_means[col]
+                                return train_means.get(col, 0)
+            
                         v1 = safe_val(x_lr)
                         v2 = safe_val(y_lr)
                         v3 = safe_val(z_lr)
-                        up_arr = np.array([[v1, v2, v3]])
-                        prob_lr = lr_model.predict_proba(up_arr)[0, 1]
-                        if recent_count > 0:
-                            shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
-                        else:
-                            shrunk_recent = overall_wr
-                        shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
-                        col_p1, col_p2 = st.columns(2)
-                        with col_p1:
-                            st.metric("LR win prob", f"{prob_lr:.1%}")
-                        with col_p2:
-                            st.metric("LR shrunken", f"{shrunk_prob:.1%}")
+            
+                        try:
+                            up_arr = np.array([[v1, v2, v3]])
+                            prob_lr = lr_model.predict_proba(up_arr)[0, 1]
+            
+                            if recent_count > 0:
+                                shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
+                            else:
+                                shrunk_recent = overall_wr
+                            shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
+            
+                            col_p1, col_p2 = st.columns(2)
+                            with col_p1:
+                                st.metric("LR win prob", f"{prob_lr:.1%}")
+                            with col_p2:
+                                st.metric("LR shrunken", f"{shrunk_prob:.1%}")
+                        except Exception as e:
+                            st.error(f"Error computing LR probability: {e}")
+                            st.write(f"Feature values: {v1}, {v2}, {v3}")
             else:
                 st.write("No upcoming fights available after applying gap filters.")
 
@@ -759,10 +766,28 @@ if len(three_d_features) >= 3:
 
             # ----- KNN Win Probability Estimate (guaranteed to appear) -----
             st.subheader("KNN Win Probability Estimate")
-            upcoming_knn = data[data['Win?'].isna() | (data['Win?'] == '')]
+            
+            # Apply gap filters to a temporary copy (same as LR)
+            temp_data = data.copy()
+            for sys, (enabled, gap_range) in gap_filters.items():
+                if enabled:
+                    diff_col = f'{sys}_Diff'
+                    if diff_col in temp_data.columns:
+                        gap_min, gap_max = gap_range
+                        mask = (
+                            ((temp_data[diff_col] >= gap_min) & (temp_data[diff_col] <= gap_max))
+                            | (temp_data['Win?'].isna() | (temp_data['Win?'] == ''))
+                        )
+                        temp_data = temp_data[mask]
+            
+            upcoming_knn = temp_data[temp_data['Win?'].isna() | (temp_data['Win?'] == '')]
+            fight_counts = upcoming_knn.groupby('FightID').size()
+            valid_ids = fight_counts[fight_counts == 2].index
+            upcoming_knn = upcoming_knn[upcoming_knn['FightID'].isin(valid_ids)]
+            
             if not upcoming_knn.empty:
                 up_ids = sorted(upcoming_knn['FightID'].unique())
-                chosen_id = st.selectbox("Select upcoming fight", up_ids, key="knn_up_unique")
+                chosen_id = st.radio("Select upcoming fight", up_ids, key="knn_radio")
                 if chosen_id:
                     up_rows = upcoming_knn[upcoming_knn['FightID'] == chosen_id]
                     if len(up_rows) == 2:
@@ -776,24 +801,29 @@ if len(three_d_features) >= 3:
                             except:
                                 v = means[i]
                             vals.append(v)
-                        up_arr = np.array([vals], dtype=np.float64)
-                        up_scaled = scaler.transform(up_arr)
-                        prob_knn = calibrated_knn.predict_proba(up_scaled)[0, 1]
-                        prob_knn = np.clip(prob_knn, 0.1, 0.9)
-
-                        if recent_count > 0:
-                            shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
-                        else:
-                            shrunk_recent = overall_wr
-                        shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_knn) / (prior_weight + 1)
-
-                        col_p1, col_p2 = st.columns(2)
-                        with col_p1:
-                            st.metric("KNN win prob", f"{prob_knn:.1%}")
-                        with col_p2:
-                            st.metric("KNN shrunken", f"{shrunk_prob:.1%}")
+            
+                        try:
+                            up_arr = np.array([vals], dtype=np.float64)
+                            up_scaled = scaler.transform(up_arr)
+                            prob_knn = calibrated_knn.predict_proba(up_scaled)[0, 1]
+                            prob_knn = np.clip(prob_knn, 0.1, 0.9)
+            
+                            if recent_count > 0:
+                                shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
+                            else:
+                                shrunk_recent = overall_wr
+                            shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_knn) / (prior_weight + 1)
+            
+                            col_p1, col_p2 = st.columns(2)
+                            with col_p1:
+                                st.metric("KNN win prob", f"{prob_knn:.1%}")
+                            with col_p2:
+                                st.metric("KNN shrunken", f"{shrunk_prob:.1%}")
+                        except Exception as e:
+                            st.error(f"Error computing KNN probability: {e}")
+                            st.write(f"Feature values: {vals}")
             else:
-                st.write("No upcoming fights available.")
+                st.write("No upcoming fights available after applying gap filters.")
 
     # --- KNN 3‑Variable Combination Builder (IN‑SAMPLE) ---
     st.subheader("KNN 3‑Variable Combinations (Brier, In‑Sample)")
