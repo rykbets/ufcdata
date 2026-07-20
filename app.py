@@ -21,7 +21,7 @@ st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 # ============================================================
 # 🔑 YOUR PARQUET FILE ID
 # ============================================================
-PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace with your actual ID
+PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace with your actual Parquet ID
 
 @st.cache_data
 def load_data():
@@ -139,9 +139,9 @@ with st.sidebar.expander("Previous Outcomes", expanded=False):
     opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career)
     opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career)
 
-# ---------- Rating Gap Filters (applied globally) ----------
+# ---------- Rating Gap Filters ----------
 with st.sidebar.expander("Rating Gap Filters", expanded=False):
-    st.caption("Enable any rating gap to restrict the data. Only fights within ALL selected ranges are kept.")
+    st.caption("Enable any rating gap to restrict the data.")
     rating_systems = ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay','WeightedMasseyDecay']
     gap_filters = {}
     for sys in rating_systems:
@@ -161,7 +161,7 @@ with st.sidebar.expander("Rating Gap Filters", expanded=False):
         else:
             gap_filters[sys] = (False, None)
 
-# ---------- Apply all filters (including rating gaps) ----------
+# ---------- Apply all filters ----------
 filtered = data.copy()
 
 if wc: filtered = filtered[filtered['WC'].isin(wc)]
@@ -220,6 +220,7 @@ if not data['PrevFighterOddsNum'].isna().all() and prev_odds != (0,0):
     filtered = filtered.dropna(subset=['PrevFighterOddsNum'])
     filtered = filtered[(filtered['PrevFighterOddsNum'] >= prev_odds[0]) & (filtered['PrevFighterOddsNum'] <= prev_odds[1])]
 
+# Apply rating gap filters globally
 for sys, (enabled, gap_range) in gap_filters.items():
     if enabled:
         diff_col = f'{sys}_Diff'
@@ -227,7 +228,7 @@ for sys, (enabled, gap_range) in gap_filters.items():
             gap_min, gap_max = gap_range
             filtered = filtered[(filtered[diff_col] >= gap_min) & (filtered[diff_col] <= gap_max)]
 
-data = filtered   # fully filtered data
+data = filtered
 
 # Debug upcoming count
 upcoming_check = data[data['Win?'].isna() | (data['Win?'] == '')]
@@ -540,7 +541,7 @@ if len(three_d_features) >= 3:
                 else:
                     train_means[col2] = 0
 
-            # ----- LR Win Probability Estimate -----
+            # ===== LR Win Probability Estimate =====
             st.subheader("LR Win Probability Estimate")
             upcoming = data[data['Win?'].isna() | (data['Win?'] == '')]
             if not upcoming.empty:
@@ -730,7 +731,7 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # ----- KNN Win Probability Estimate -----
+            # ===== KNN Win Probability Estimate =====
             st.subheader("KNN Win Probability Estimate")
             upcoming = data[data['Win?'].isna() | (data['Win?'] == '')]
             if not upcoming.empty:
@@ -841,7 +842,6 @@ if len(hist_imp) < 10:
 else:
     hist_imp['Target'] = (hist_imp['Win?'] == 'Yes').astype(int)
 
-    # Numerical – use eligible features directly from filtered data
     eligible = [c for c in numerical_features if c in hist_imp.columns]
     if eligible:
         X_num = hist_imp[eligible].dropna()
@@ -860,7 +860,6 @@ else:
     else:
         st.warning("No numerical features available after filtering.")
 
-    # Categorical
     st.subheader("Categorical Feature Importance with Win/Loss")
     potential_cat_cols = ['WC','Stance','Country','EventCountry','Title','ScheduledRounds','HometownFighter','Opponent_Hometown']
     categorical_cols = [c for c in potential_cat_cols if c in hist_imp.columns and hist_imp[c].nunique(dropna=True) > 1]
@@ -979,14 +978,12 @@ else:
                 X_train = train_spider[selected_vars].values.astype(np.float64)
                 y_train = train_spider['target'].values
 
-                # LR
                 lr_spider = LogisticRegression(max_iter=1000)
                 lr_spider.fit(X_train, y_train)
                 y_prob_lr_in = lr_spider.predict_proba(X_train)[:, 1]
                 ll_lr_spider = log_loss(y_train, y_prob_lr_in)
                 bs_lr_spider = brier_score_loss(y_train, y_prob_lr_in)
 
-                # KNN (Platt)
                 k_spider = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_spider")
                 scaler_knn = StandardScaler()
                 X_scaled = scaler_knn.fit_transform(X_train)
@@ -1013,7 +1010,6 @@ else:
                     f1 = fight_rows.iloc[0]
                     f2 = fight_rows.iloc[1]
 
-                    # Radar
                     radar_vals = []
                     for var in selected_vars:
                         if var.endswith('_Diff') or var in {'AgeDiff','HeightDiff','ReachDiff'}:
@@ -1029,7 +1025,6 @@ else:
                                       title=f"Advantage: {f1['Fighter']} vs {f2['Fighter']}")
                     st.plotly_chart(fig, use_container_width=True)
 
-                    # Predictions
                     means = X_train.mean(axis=0)
                     up_vals = []
                     for i, var in enumerate(selected_vars):
@@ -1067,7 +1062,6 @@ else:
                         st.metric("Overall Win% (filtered)", f"{overall_wr_spider:.1f}%")
                         st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr_spider:.1f}%")
 
-                    # Similarity
                     st.subheader(f"Most Similar Historical Fights (from last {recent_window} fights)")
                     scaler_sim = StandardScaler()
                     X_scaled_sim = scaler_sim.fit_transform(X_train)
