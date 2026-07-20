@@ -846,35 +846,42 @@ else:
 # FEATURE IMPORTANCE CHARTS (Numerical & Categorical)
 # =========================================================================
 st.header("Top 20 Feature Importance (Current Filter Set)")
+
+# Only use historical fights for importance
 hist_imp = data[data['Win?'].isin(['Yes', 'No'])].copy()
 if len(hist_imp) < 10:
     st.warning("Too few historical fights after filtering to compute importance.")
 else:
     hist_imp['Target'] = (hist_imp['Win?'] == 'Yes').astype(int)
 
-    importance_features = [c for c in numerical_features
-                           if not c.startswith('Opponent_')
-                           and not c.endswith('_Diff')
-                           and not re.match(r'Prev\d+_', c)
-                           and c in hist_imp.columns]
-    if importance_features:
-        X_num = hist_imp[importance_features].dropna()
+    # --- Numerical feature importance ---
+    # Use the SAME list of features that are available in the 3D scatterplot (three_d_features)
+    # three_d_features is already defined earlier and contains all eligible numeric columns.
+    # We'll filter out only columns that are not present in hist_imp.
+    num_features = [c for c in three_d_features if c in hist_imp.columns]
+    if num_features:
+        X_num = hist_imp[num_features].dropna()
         if len(X_num) > 10 and X_num.shape[1] > 0:
             imputer = SimpleImputer(strategy='median')
             X_imp = imputer.fit_transform(X_num)
             y_num = hist_imp.loc[X_num.index, 'Target']
             mi = mutual_info_classif(X_imp, y_num, discrete_features=False)
-            mi_df_num = pd.DataFrame({'Feature': importance_features, 'Mutual Information': mi}).sort_values('Mutual Information', ascending=False).head(20)
+            mi_df_num = pd.DataFrame({
+                'Feature': num_features,
+                'Mutual Information': mi
+            }).sort_values('Mutual Information', ascending=False).head(20)
             fig_num = px.bar(mi_df_num, x='Mutual Information', y='Feature', orientation='h',
-                             title="Top 20 Fighter Stats by Mutual Information with Win/Loss")
+                             title="Top 20 Numerical Features by Mutual Information with Win/Loss")
             st.plotly_chart(fig_num, use_container_width=True)
         else:
             st.warning("Not enough complete rows for numerical importance.")
     else:
         st.warning("No numerical features available after filtering.")
 
+    # --- Categorical feature importance (separate) ---
     st.subheader("Categorical Feature Importance with Win/Loss")
-    potential_cat_cols = ['WC','Stance','Country','EventCountry','Title','ScheduledRounds','HometownFighter','Opponent_Hometown']
+    potential_cat_cols = ['WC','Stance','Country','EventCountry','Title',
+                          'ScheduledRounds','HometownFighter','Opponent_Hometown']
     categorical_cols = [c for c in potential_cat_cols if c in hist_imp.columns and hist_imp[c].nunique(dropna=True) > 1]
     if categorical_cols:
         scores = {}
@@ -885,7 +892,10 @@ else:
             codes, _ = pd.factorize(sub[col])
             scores[col] = mutual_info_score(codes, sub['Target'])
         if scores:
-            cat_mi_df = pd.DataFrame({'Feature': list(scores.keys()), 'Mutual Information': list(scores.values())}).sort_values('Mutual Information', ascending=False).head(20)
+            cat_mi_df = pd.DataFrame({
+                'Feature': list(scores.keys()),
+                'Mutual Information': list(scores.values())
+            }).sort_values('Mutual Information', ascending=False).head(20)
             fig_cat = px.bar(cat_mi_df, x='Mutual Information', y='Feature', orientation='h',
                              title="Top Categorical Features by Mutual Information with Win/Loss",
                              color_discrete_sequence=['#636efa'])
@@ -894,7 +904,6 @@ else:
             st.warning("No categorical column had enough variation.")
     else:
         st.warning("No categorical features available after filtering.")
-
 # =========================================================================
 # SPIDER CHART – FIGHTER‑SIDE FILTERS + LR + CALIBRATED KNN + SHRINKAGE + SIMILARITY
 # =========================================================================
