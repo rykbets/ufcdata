@@ -21,7 +21,7 @@ st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 # ============================================================
 # 🔑 ONLY THIS ID IS NEEDED – the Parquet must include upcoming fights
 # ============================================================
-PARQUET_FILE_ID = "YOUR_PARQUET_FILE_ID"   # ← replace with the ID of all_fights.parquet
+PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace with the ID of all_fights.parquet
 
 # ---------- Cached data loader (Parquet only) ----------
 @st.cache_data
