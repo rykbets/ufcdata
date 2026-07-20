@@ -855,7 +855,7 @@ if len(hist_imp) < 10:
 else:
     hist_imp['Target'] = (hist_imp['Win?'] == 'Yes').astype(int)
 
-    # Numerical – use the same features as the 3D scatterplot
+    # Numerical – use the same features as the 3D scatterplot (three_d_features)
     num_features = [c for c in three_d_features if c in hist_imp.columns]
     if num_features:
         X_num = hist_imp[num_features].dropna()
@@ -863,8 +863,12 @@ else:
             imputer = SimpleImputer(strategy='median')
             X_imp = imputer.fit_transform(X_num)
             y_num = hist_imp.loc[X_num.index, 'Target']
-            mi = mutual_info_classif(X_imp, y_num, discrete_features=False)
-            mi_df_num = pd.DataFrame({'Feature': num_features, 'Mutual Information': mi}).sort_values('Mutual Information', ascending=False).head(20)
+            # Fix random_state for reproducibility
+            mi = mutual_info_classif(X_imp, y_num, discrete_features=False, random_state=42)
+            mi_df_num = pd.DataFrame({
+                'Feature': num_features,
+                'Mutual Information': mi
+            }).sort_values('Mutual Information', ascending=False).head(20)
             fig_num = px.bar(mi_df_num, x='Mutual Information', y='Feature', orientation='h',
                              title="Top 20 Numerical Features by Mutual Information with Win/Loss")
             st.plotly_chart(fig_num, use_container_width=True)
