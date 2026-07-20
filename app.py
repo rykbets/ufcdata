@@ -18,15 +18,17 @@ from sklearn.model_selection import cross_val_predict
 from scipy.spatial.distance import cdist
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
+# TEMPORARY – remove after first successful load
+# st.cache_data.clear()
 
 # ============================================================
-# 🔑 YOUR GOOGLE DRIVE FILE IDS – REPLACE THE LAST ONE WITH YOURS
+# 🔑 YOUR GOOGLE DRIVE FILE IDS – replace the last one with your actual ID
 # ============================================================
 MAIN_FILE_ID            = "1eWDGGS8qQdLWvS_dgJ-HqObsr4ie9RcD"
 UPCOMING_FILE_ID        = "1mUyNR2WLHQjC8IuvG7RA6LoXPjJq3aZ1"
-ALL_RATINGS_FILE_ID     = "1lS5Af0gIxMyiK8p-QQYXqA5_sdcVxUab"   # ← replace me
+ALL_RATINGS_FILE_ID     = "1lS5Af0gIxMyiK8p-QQYXqA5_sdcVxUab"   # ← paste your all_ratings.csv ID
 
-# ---------- Cached data loader (full) ----------
+# ---------- Cached data loader (unchanged from your original working version) ----------
 @st.cache_data
 def load_full_data():
     gdown.download(f"https://drive.google.com/uc?id={MAIN_FILE_ID}", "ufc_all_data.csv", quiet=True)
@@ -93,7 +95,7 @@ def load_full_data():
     fight_totals.sort_values(['Fighter','FightDate'], inplace=True)
     fight_totals['FightNumber'] = fight_totals.groupby('Fighter').cumcount() + 1
 
-    # DaysSincePrev, Avg3DaysGap
+    # DaysSincePrev, Avg3DaysGap (vectorised)
     fight_totals['DaysSincePrev'] = fight_totals.groupby('Fighter')['FightDate'].diff().dt.days
     fight_totals['Avg3DaysGap'] = (
         fight_totals.groupby('Fighter')['DaysSincePrev']
@@ -140,7 +142,7 @@ def load_full_data():
     pairs['ReachDiff'] = pairs['Reach'] - pairs['Reach_opp']
     fight_totals = pairs.copy()
 
-    # Career averages
+    # Career averages (fast cumsum)
     career_stat_cols = ['SS','SSA','TS','TSA','TD','TDA','Subs','Reversals','KD','DSL','DSA']
     if 'Ctrl' in fight_totals.columns: career_stat_cols.append('Ctrl')
     for col in career_stat_cols:
@@ -171,8 +173,9 @@ def load_full_data():
     fight_totals['CareerAvg_DSL_per_KD'] = fight_totals['CareerAvg_DSL'] / fight_totals['CareerAvg_KD'].replace(0, np.nan)
     fight_totals['CareerAvg_Ctrl_per_TD'] = fight_totals['CareerAvg_Ctrl'] / fight_totals['CareerAvg_TD'].replace(0, np.nan) if 'CareerAvg_Ctrl' in fight_totals.columns else np.nan
 
-    # Defensive career averages
-    def_cols = ['Def_SS','Def_SSA','Def_TS','Def_TSA','Def_TD','Def_TDA','Def_Subs','Def_Reversals','Def_KD','Def_DSL','Def_DSA','Def_Ctrl']
+    # Defensive career averages (fast)
+    def_cols = ['Def_SS','Def_SSA','Def_TS','Def_TSA','Def_TD','Def_TDA',
+                'Def_Subs','Def_Reversals','Def_KD','Def_DSL','Def_DSA','Def_Ctrl']
     for col in [c for c in def_cols if c in fight_totals.columns]:
         fight_totals[f'cum_{col}'] = fight_totals.groupby('Fighter')[col].cumsum()
         fight_totals[f'prev_cum_{col}'] = fight_totals.groupby('Fighter')[f'cum_{col}'].shift(1).fillna(0)
@@ -188,7 +191,7 @@ def load_full_data():
         fight_totals['CareerAvg_Def_DSL_per_KD'] = fight_totals['CareerAvg_Def_DSL'] / fight_totals['CareerAvg_Def_KD'].replace(0, np.nan)
         fight_totals['CareerAvg_Def_Ctrl_per_TD'] = fight_totals['CareerAvg_Def_Ctrl'] / fight_totals['CareerAvg_Def_TD'].replace(0, np.nan)
 
-    # Opponent career averages
+    # Opponent career averages (merge)
     opp_career = fight_totals[['FightID','Fighter'] + avg_cols].copy()
     opp_career.rename(columns={'Fighter':'Opponent', **{c: f'Opponent_{c}' for c in avg_cols}}, inplace=True)
     fight_totals = fight_totals.merge(opp_career, on=['FightID','Opponent'], how='left')
@@ -205,7 +208,7 @@ def load_full_data():
     opp_days.rename(columns={'Fighter':'Opponent','DaysSincePrev':'Opponent_DaysSincePrev','Avg3DaysGap':'Opponent_Avg3DaysGap'}, inplace=True)
     fight_totals = fight_totals.merge(opp_days, on=['FightID','Opponent'], how='left')
 
-    # Prev7Wins / Prev7Losses
+    # Prev7Wins / Prev7Losses (fast rolling)
     fight_totals['is_win'] = (fight_totals['Win?'] == 'Yes').astype(int)
     fight_totals['is_loss'] = (fight_totals['Win?'] == 'No').astype(int)
     def rolling_last7(group):
@@ -219,8 +222,7 @@ def load_full_data():
         columns={'Fighter':'Opponent','Prev7Wins':'Opponent_Prev7Wins','Prev7Losses':'Opponent_Prev7Losses'})
     fight_totals = fight_totals.merge(opp_prev7, on=['FightID','Opponent'], how='left')
 
-    # ---------- LOAD ALL RATINGS ----------
-    ratings_loaded = False
+    # ---------- LOAD ALL RATINGS (new) ----------
     if ALL_RATINGS_FILE_ID.strip() and ALL_RATINGS_FILE_ID != "YOUR_ALL_RATINGS_FILE_ID":
         try:
             gdown.download(f"https://drive.google.com/uc?id={ALL_RATINGS_FILE_ID}", "all_ratings.csv", quiet=True)
@@ -241,16 +243,15 @@ def load_full_data():
                 f_col, o_col = f'Fighter{system}', f'Opponent{system}'
                 if f_col in fight_totals.columns and o_col in fight_totals.columns:
                     fight_totals[f'{system}_Diff'] = fight_totals[f_col] - fight_totals[o_col]
-            ratings_loaded = True
         except Exception as e:
             st.sidebar.warning(f"Ratings not loaded: {e}")
-    if not ratings_loaded:
+    else:
         for system in ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay']:
             fight_totals[f'Fighter{system}'] = 0.5
             fight_totals[f'Opponent{system}'] = 0.5
             fight_totals[f'{system}_Diff'] = 0.0
 
-    # ---------- OTHER DIFFERENTIALS ----------
+    # ---------- OTHER DIFFERENTIALS (unchanged) ----------
     diff_pairs = [
         ('CareerAvg_SS','Opponent_CareerAvg_SS'), ('CareerAvg_SSA','Opponent_CareerAvg_SSA'),
         ('CareerAvg_TS','Opponent_CareerAvg_TS'), ('CareerAvg_TSA','Opponent_CareerAvg_TSA'),
@@ -284,7 +285,7 @@ def load_full_data():
             fight_totals[f'Prev{shift}_{col}'] = fight_totals.groupby('Fighter')[col].shift(shift)
         fight_totals.rename(columns={f'Prev{shift}_Win?': f'Prev{shift}_Win'}, inplace=True)
 
-    # Outcome classification
+    # Outcome classification helpers (unchanged)
     def extract_round_from_method(method_str):
         if not isinstance(method_str, str): return None
         m = re.search(r'[Rr]ound\s*(\d)', method_str)
@@ -420,7 +421,7 @@ for col in ['EventCountry', 'Country', 'Stance', 'WC', 'Title', 'ScheduledRounds
     if col in all_fights_display.columns:
         all_fights_display[col] = all_fights_display[col].fillna('').astype(str)
 
-# ---------- Sidebar Filters ----------
+# ---------- Sidebar Filters (unchanged) ----------
 st.sidebar.title("Filters")
 
 with st.sidebar.expander("General", expanded=True):
@@ -523,16 +524,16 @@ with st.sidebar.expander("Previous Outcomes", expanded=False):
     opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career)
     opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career)
 
-# ---------- Rating Gap Analysis Filters ----------
+# ---------- Rating Gap Analysis (new sidebar filter) ----------
 with st.sidebar.expander("Rating Gap Analysis", expanded=False):
-    rating_system = st.selectbox("Rating system",
-                                 ['ColleyOrig', 'ColleyDecay', 'MasseyOrig', 'MasseyDecay'],
+    rating_system = st.selectbox("Rating system", 
+                                 ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay'],
                                  key="gap_system")
-    gap_range = st.slider("Rating gap range",
-                          min_value=0.0, max_value=1.0,
+    gap_range = st.slider("Rating gap range", 
+                          min_value=0.0, max_value=1.0, 
                           value=(0.0, 0.05), step=0.01, key="gap_range")
 
-# ---------- Apply filters ----------
+# ---------- Apply filters (unchanged) ----------
 data = all_fights_display.copy()
 
 if wc: data = data[data['WC'].isin(wc)]
@@ -645,28 +646,23 @@ for result, col in zip(['Yes', 'No'], [col1, col2]):
             st.write(f"**Career Avg Ctrl Time:** {avg_ctrl:.0f}s | CTR/TD: {ctrtd:.1f}s")
         st.write(f"**Avg Age Diff:** {age_diff_mean:.1f} | **Avg Height Diff:** {height_diff_mean:.1f} in | **Avg Reach Diff:** {reach_diff_mean:.1f} in")
 
-# ---------- Rating Gap Analysis ----------
+# ---------- Rating Gap Analysis (new display) ----------
 st.header("Rating Gap Analysis")
 diff_col = f'{rating_system}_Diff'
-
 if diff_col in data.columns:
     gap_min, gap_max = gap_range
     gap_fights = data[(data[diff_col] >= gap_min) & (data[diff_col] <= gap_max)]
     total_gap = len(gap_fights)
     wins_gap = (gap_fights['Win?'] == 'Yes').sum()
     win_rate_gap = wins_gap / total_gap * 100 if total_gap > 0 else 0.0
-
     colg1, colg2, colg3 = st.columns(3)
-    with colg1:
-        st.metric("Fights in gap", total_gap)
-    with colg2:
-        st.metric("Wins", wins_gap)
-    with colg3:
-        st.metric("Win Rate", f"{win_rate_gap:.1f}%")
+    colg1.metric("Fights in gap", total_gap)
+    colg2.metric("Wins", wins_gap)
+    colg3.metric("Win Rate", f"{win_rate_gap:.1f}%")
 else:
-    st.warning(f"Rating system '{rating_system}' not available.")
+    st.warning("Rating system not available.")
 
-# ---------- Matchup area (unfiltered upcoming) ----------
+# ---------- Matchup area (unchanged) ----------
 st.header("Upcoming Fight Matchup")
 upcoming_data_unfiltered = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
 if not upcoming_data_unfiltered.empty:
@@ -688,6 +684,7 @@ if not upcoming_data_unfiltered.empty:
                 pw = int(row['Prev7Wins']) if pd.notna(row['Prev7Wins']) else 0
                 pl = int(row['Prev7Losses']) if pd.notna(row['Prev7Losses']) else 0
                 st.write(f"**Career Win %:** {row['CareerWinPct']:.1f}% | **Prev 7 Record:** {pw}‑{pl}")
+                # Show ratings
                 st.write(f"**Ratings:** CO {row['FighterColleyOrig']:.4f} / CD {row['FighterColleyDecay']:.4f} / MO {row['FighterMasseyOrig']:.4f} / MD {row['FighterMasseyDecay']:.4f}")
                 st.write(f"**Odds (Fighter/Opp):** {row['FighterOddsBFO']} / {row['OpponentOddsBFO']}")
 
@@ -782,7 +779,7 @@ display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
 
 # =========================================================================
-# COMMON DEFINITIONS
+# COMMON DEFINITIONS (updated core list)
 # =========================================================================
 core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
         'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev', 'Avg3DaysGap',
