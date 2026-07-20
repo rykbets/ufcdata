@@ -18,6 +18,9 @@ from scipy.spatial.distance import cdist
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
+# ============================================================
+# 🔑 ONLY THIS ID IS NEEDED – the Parquet must contain all columns
+# ============================================================
 PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace with your actual Parquet ID
 
 @st.cache_data
@@ -137,9 +140,9 @@ with st.sidebar.expander("Previous Outcomes", expanded=False):
     opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career)
     opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career)
 
-# ---------- Rating Gap Analysis Filters (dynamic ranges) ----------
-with st.sidebar.expander("Rating Gap Analysis", expanded=False):
-    st.caption("Enable any rating gap filter. Only fights within ALL selected ranges are counted.")
+# ---------- Rating Gap Filters (NOW APPLIED GLOBALLY) ----------
+with st.sidebar.expander("Rating Gap Filters", expanded=False):
+    st.caption("Enable any rating gap to restrict the data. Only fights within ALL selected ranges are kept.")
     rating_systems = ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay','WeightedMasseyDecay']
     gap_filters = {}
     for sys in rating_systems:
@@ -159,7 +162,7 @@ with st.sidebar.expander("Rating Gap Analysis", expanded=False):
         else:
             gap_filters[sys] = (False, None)
 
-# ---------- Apply filters ----------
+# ---------- Apply all filters (including rating gaps) ----------
 filtered = data.copy()
 
 if wc: filtered = filtered[filtered['WC'].isin(wc)]
@@ -218,7 +221,15 @@ if not data['PrevFighterOddsNum'].isna().all() and prev_odds != (0,0):
     filtered = filtered.dropna(subset=['PrevFighterOddsNum'])
     filtered = filtered[(filtered['PrevFighterOddsNum'] >= prev_odds[0]) & (filtered['PrevFighterOddsNum'] <= prev_odds[1])]
 
-data = filtered
+# ===== APPLY RATING GAP FILTERS GLOBALLY =====
+for sys, (enabled, gap_range) in gap_filters.items():
+    if enabled:
+        diff_col = f'{sys}_Diff'
+        if diff_col in filtered.columns:
+            gap_min, gap_max = gap_range
+            filtered = filtered[(filtered[diff_col] >= gap_min) & (filtered[diff_col] <= gap_max)]
+
+data = filtered   # from this point onward, 'data' is fully filtered
 
 # ---------- Dashboard ----------
 st.title("UFC Pre‑Fight Performance Dashboard")
@@ -273,42 +284,19 @@ for result, col in zip(['Yes', 'No'], [col1, col2]):
             st.write(f"**Career Avg Ctrl Time:** {avg_ctrl:.0f}s | CTR/TD: {ctrtd:.1f}s")
         st.write(f"**Avg Age Diff:** {age_diff_mean:.1f} | **Avg Height Diff:** {height_diff_mean:.1f} in | **Avg Reach Diff:** {reach_diff_mean:.1f} in")
 
-# ---------- Rating Gap Analysis ----------
-st.header("Rating Gap Analysis")
-
-conditions = []
-active_systems = []
-for sys, (enabled, gap_range) in gap_filters.items():
-    if enabled:
-        diff_col = f'{sys}_Diff'
-        if diff_col in data.columns:
-            gap_min, gap_max = gap_range
-            conditions.append( (data[diff_col] >= gap_min) & (data[diff_col] <= gap_max) )
-            active_systems.append(sys)
-        else:
-            st.warning(f"Column {diff_col} not found, ignoring {sys}.")
-
-if conditions:
-    combined_mask = conditions[0]
-    for cond in conditions[1:]:
-        combined_mask = combined_mask & cond
-
-    gap_fights = data[combined_mask]
-    total_gap = len(gap_fights)
-    wins_gap = (gap_fights['Win?'] == 'Yes').sum()
-    win_rate_gap = wins_gap / total_gap * 100 if total_gap > 0 else 0.0
-
-    st.subheader("Combined Gap Filter")
-    st.caption(f"Filters active: {', '.join(active_systems)}")
-    colg1, colg2, colg3 = st.columns(3)
-    with colg1:
-        st.metric("Fights in gap", total_gap)
-    with colg2:
-        st.metric("Wins", wins_gap)
-    with colg3:
-        st.metric("Win Rate", f"{win_rate_gap:.1f}%")
+# ---------- Rating Gap Status (informational) ----------
+st.header("Rating Gap Filters")
+active_gaps = [sys for sys, (enabled, _) in gap_filters.items() if enabled]
+if active_gaps:
+    st.success(f"Data restricted to fights satisfying: {', '.join(active_gaps)}")
 else:
-    st.info("Enable one or more rating gap filters above to see the combined effect.")
+    st.info("No rating gap filters active – showing all fights.")
+
+# The rest of the dashboard (matchup, last20, LR/KNN, spider, feature importance) follows exactly as before,
+# using the fully filtered 'data'.
+
+# ... (include all the remaining sections from the previous full script: Matchup, Last 20, LR, KNN, Spider, Feature Importance)
+# I'll omit the rest to keep this response concise, but you can copy them from any earlier working version.
 
 # ---------- Matchup area ----------
 st.header("Upcoming Fight Matchup")
