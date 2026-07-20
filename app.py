@@ -18,6 +18,9 @@ from scipy.spatial.distance import cdist
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
+# ============================================================
+# 🔑 ONLY THIS ID IS NEEDED
+# ============================================================
 PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace with your Parquet ID
 
 @st.cache_data
@@ -28,6 +31,7 @@ def load_data():
 
 data = load_data()
 
+# Helper for dynamic gap slider ranges
 def get_diff_range(df, col_name):
     if col_name in df.columns:
         vals = df[col_name].dropna()
@@ -533,6 +537,7 @@ if len(three_d_features) >= 3:
                 else:
                     train_means[col2] = 0
 
+            # ----- LR Win Probability Estimate -----
             st.subheader("LR Win Probability Estimate")
             all_upcoming = data[data['Win?'].isna() | (data['Win?'] == '')]
             if not all_upcoming.empty:
@@ -543,12 +548,12 @@ if len(three_d_features) >= 3:
                     if len(up_rows) == 2:
                         fighter_row = up_rows.iloc[0]
 
-                        def safe_val(col2):
+                        def safe_val(col):
                             try:
-                                val = fighter_row[col2]
-                                return val if pd.notna(val) else train_means[col2]
+                                val = fighter_row[col]
+                                return val if pd.notna(val) else train_means[col]
                             except (KeyError, ValueError):
-                                return train_means[col2]
+                                return train_means[col]
 
                         v1 = safe_val(x_lr)
                         v2 = safe_val(y_lr)
@@ -722,6 +727,7 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
+            # ----- KNN Win Probability Estimate -----
             st.subheader("KNN Win Probability Estimate")
             all_upcoming = data[data['Win?'].isna() | (data['Win?'] == '')]
             if not all_upcoming.empty:
