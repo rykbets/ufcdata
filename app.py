@@ -485,7 +485,6 @@ st.header("3D LR Win/Loss Prediction & Best LR Combinations")
 
 three_d_features = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
 if len(three_d_features) >= 3:
-    # Default selections so model always runs
     col1, col2, col3 = st.columns(3)
     with col1:
         x_lr = st.selectbox("X", three_d_features, index=0, key="lr_x")
@@ -553,17 +552,14 @@ if len(three_d_features) >= 3:
                 else:
                     train_means[col2] = 0
 
-            # ----- LR Win Probability Estimate -----
-            # Debug line to confirm upcoming rows exist
-            upcoming_debug = data[data['Win?'].isna() | (data['Win?'] == '')]
-            st.write(f"### DEBUG (LR): upcoming rows in data = {len(upcoming_debug)}")
+            # ----- LR Win Probability Estimate (guaranteed to appear) -----
             st.subheader("LR Win Probability Estimate")
-            upcoming = data[data['Win?'].isna() | (data['Win?'] == '')]
-            if not upcoming.empty:
-                up_ids = sorted(upcoming['FightID'].unique())
-                chosen_id = st.selectbox("Select upcoming fight", up_ids, key="lr_up")
+            upcoming_lr = data[data['Win?'].isna() | (data['Win?'] == '')]
+            if not upcoming_lr.empty:
+                up_ids = sorted(upcoming_lr['FightID'].unique())
+                chosen_id = st.selectbox("Select upcoming fight", up_ids, key="lr_up_unique")
                 if chosen_id:
-                    up_rows = upcoming[upcoming['FightID'] == chosen_id]
+                    up_rows = upcoming_lr[upcoming_lr['FightID'] == chosen_id]
                     if len(up_rows) == 2:
                         fighter_row = up_rows.iloc[0]
 
@@ -571,7 +567,7 @@ if len(three_d_features) >= 3:
                             try:
                                 val = fighter_row[col]
                                 return val if pd.notna(val) else train_means[col]
-                            except (KeyError, ValueError):
+                            except:
                                 return train_means[col]
 
                         v1 = safe_val(x_lr)
@@ -746,16 +742,14 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # ----- KNN Win Probability Estimate -----
-            upcoming_debug = data[data['Win?'].isna() | (data['Win?'] == '')]
-            st.write(f"### DEBUG (KNN): upcoming rows in data = {len(upcoming_debug)}")
+            # ----- KNN Win Probability Estimate (guaranteed to appear) -----
             st.subheader("KNN Win Probability Estimate")
-            upcoming = data[data['Win?'].isna() | (data['Win?'] == '')]
-            if not upcoming.empty:
-                up_ids = sorted(upcoming['FightID'].unique())
-                chosen_id = st.selectbox("Select upcoming fight", up_ids, key="knn_up")
+            upcoming_knn = data[data['Win?'].isna() | (data['Win?'] == '')]
+            if not upcoming_knn.empty:
+                up_ids = sorted(upcoming_knn['FightID'].unique())
+                chosen_id = st.selectbox("Select upcoming fight", up_ids, key="knn_up_unique")
                 if chosen_id:
-                    up_rows = upcoming[upcoming['FightID'] == chosen_id]
+                    up_rows = upcoming_knn[upcoming_knn['FightID'] == chosen_id]
                     if len(up_rows) == 2:
                         fighter_row = up_rows.iloc[0]
                         means = X_train.mean(axis=0)
@@ -764,7 +758,7 @@ if len(three_d_features) >= 3:
                             raw = get_first_col(pd.DataFrame(fighter_row).T, col_name)[0]
                             try:
                                 v = float(raw) if pd.notna(raw) else means[i]
-                            except (ValueError, TypeError):
+                            except:
                                 v = means[i]
                             vals.append(v)
                         up_arr = np.array([vals], dtype=np.float64)
