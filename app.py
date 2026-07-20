@@ -544,6 +544,7 @@ if len(three_d_features) >= 3:
                 else:
                     train_means[col2] = 0
 
+            # ----- LR Win Probability Estimate (restored) -----
             st.subheader("LR Win Probability Estimate")
             all_upcoming = data[data['Win?'].isna() | (data['Win?'] == '')]
             if not all_upcoming.empty:
@@ -581,6 +582,9 @@ if len(three_d_features) >= 3:
                             st.metric("LR shrunken", f"{shrunk_prob:.1%}")
             else:
                 st.write("No upcoming fights available.")
+
+    # --- LR 3‑Variable Combination Builder (Brier) ---
+    # ... (keep your existing combination builder code unchanged)
 
     # --- LR 3‑Variable Combination Builder (Brier) ---
     st.subheader("LR 3‑Variable Combinations (Brier)")
@@ -733,6 +737,7 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
+            # ----- KNN Win Probability Estimate (restored) -----
             st.subheader("KNN Win Probability Estimate")
             all_upcoming = data[data['Win?'].isna() | (data['Win?'] == '')]
             if not all_upcoming.empty:
@@ -769,6 +774,9 @@ if len(three_d_features) >= 3:
                             st.metric("KNN shrunken", f"{shrunk_prob:.1%}")
             else:
                 st.write("No upcoming fights available.")
+
+    # --- KNN 3‑Variable Combination Builder (IN‑SAMPLE) ---
+    # ... (keep your existing combo builder unchanged)
 
     # --- KNN 3‑Variable Combination Builder (IN‑SAMPLE) ---
     st.subheader("KNN 3‑Variable Combinations (Brier, In‑Sample)")
