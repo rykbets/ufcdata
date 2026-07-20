@@ -22,7 +22,7 @@ st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 # ============================================================
 # 🔑 YOUR FILE IDs – replace with your actual IDs
 # ============================================================
-PARQUET_FILE_ID   = "YOUR_PARQUET_FILE_ID"        # all_fights.parquet (from Colab)
+PARQUET_FILE_ID   = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"        # all_fights.parquet (from Colab)
 UPCOMING_FILE_ID  = "1mUyNR2WLHQjC8IuvG7RA6LoXPjJq3aZ1"   # upcoming.csv
 
 # ---------- Cached data loader ----------
