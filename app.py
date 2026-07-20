@@ -1,10 +1,12 @@
 import streamlit as st
+import pandas as pdimport streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import re
 import itertools
+import gdown
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.calibration import CalibratedClassifierCV
@@ -14,23 +16,18 @@ from sklearn.metrics import log_loss, brier_score_loss, mutual_info_score
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.model_selection import cross_val_predict
 from scipy.spatial.distance import cdist
-import os
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
 # ============================================================
-# Load data: local Parquet or upload
+# 🔑 YOUR PARQUET FILE ID – replace with your actual ID
 # ============================================================
+PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"
+
 @st.cache_data
 def load_data():
-    if os.path.exists("data.parquet"):
-        return pd.read_parquet("data.parquet")
-    else:
-        st.warning("No data.parquet found. Please upload one.")
-        uploaded = st.file_uploader("Upload your Parquet file", type=["parquet"])
-        if uploaded is not None:
-            return pd.read_parquet(uploaded)
-        st.stop()
+    gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
+    return pd.read_parquet("data.parquet")
 
 data = load_data()
 
@@ -178,7 +175,7 @@ with st.sidebar.expander("Rating Gap Analysis", expanded=False):
         else:
             gap_filters[sys] = (False, None)
 
-# ---------- Apply filters ----------
+# ---------- Apply filters (all filters apply to all rows) ----------
 filtered = data.copy()
 
 if wc: filtered = filtered[filtered['WC'].isin(wc)]
@@ -250,7 +247,7 @@ for sys, (enabled, gap_range) in gap_filters.items():
             gap_min, gap_max = gap_range
             filtered = filtered[(filtered[diff_col] >= gap_min) & (filtered[diff_col] <= gap_max)]
 
-data = filtered  # Now data is the filtered set
+data = filtered  # This is the filtered dataset used for display and training
 
 # =========================================================================
 # COMMON DEFINITIONS
@@ -309,78 +306,7 @@ prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0
 recent_window = st.sidebar.slider("Recent fights window", 1, 100, 50, key="recent_win_global")
 
 # =========================================================================
-# MODEL TRAINING FUNCTIONS (with error reporting)
-# =========================================================================
-def train_models(x_lr, y_lr, z_lr, x_knn, y_knn, z_knn, k_knn=5):
-    """Train LR and KNN on the current filtered data. Store in session_state."""
-    # LR
-    if x_lr is None or y_lr is None or z_lr is None:
-        st.session_state.lr_model = None
-        st.session_state.lr_error = "LR features not set."
-    else:
-        hist = data[data['Win?'].isin(['Yes','No'])].copy()
-        hist = hist.loc[:, ~hist.columns.duplicated()]
-        sub = hist[[x_lr, y_lr, z_lr, 'Win?']].dropna()
-        if len(sub) < 10:
-            st.session_state.lr_model = None
-            st.session_state.lr_error = f"LR: only {len(sub)} rows after dropping NaN. Need at least 10."
-        elif sub['Win?'].nunique() < 2:
-            st.session_state.lr_model = None
-            st.session_state.lr_error = "LR: need both Win and Loss in training data."
-        else:
-            try:
-                sub['target'] = (sub['Win?'] == 'Yes').astype(int)
-                X = sub[[x_lr, y_lr, z_lr]].values
-                y_train = sub['target'].values
-                lr = LogisticRegression(max_iter=1000)
-                lr.fit(X, y_train)
-                st.session_state.lr_model = lr
-                st.session_state.lr_error = None
-            except Exception as e:
-                st.session_state.lr_model = None
-                st.session_state.lr_error = f"LR training error: {str(e)}"
-
-    # KNN
-    if x_knn is None or y_knn is None or z_knn is None:
-        st.session_state.calibrated_knn = None
-        st.session_state.knn_error = "KNN features not set."
-    else:
-        hist = data[data['Win?'].isin(['Yes','No'])].copy()
-        hist = hist.loc[:, ~hist.columns.duplicated()]
-        c1 = get_first_col(hist, x_knn)
-        c2 = get_first_col(hist, y_knn)
-        c3 = get_first_col(hist, z_knn)
-        win_col = hist['Win?']
-        if isinstance(win_col, pd.DataFrame):
-            win_vals = win_col.iloc[:, 0].values
-        else:
-            win_vals = win_col.values
-        train_df = pd.DataFrame({'f1': c1, 'f2': c2, 'f3': c3, 'Win?': win_vals}).dropna()
-        if len(train_df) < 10:
-            st.session_state.calibrated_knn = None
-            st.session_state.knn_error = f"KNN: only {len(train_df)} rows after dropping NaN. Need at least 10."
-        elif train_df['Win?'].nunique() < 2:
-            st.session_state.calibrated_knn = None
-            st.session_state.knn_error = "KNN: need both Win and Loss in training data."
-        else:
-            try:
-                X = train_df[['f1','f2','f3']].values.astype(np.float64)
-                y_train = (train_df['Win?'] == 'Yes').astype(int).values
-                scaler = StandardScaler()
-                X_scaled = scaler.fit_transform(X)
-                base_knn = KNeighborsClassifier(n_neighbors=k_knn, weights='distance')
-                calibrated = CalibratedClassifierCV(base_knn, method='sigmoid', cv=5)
-                calibrated.fit(X_scaled, y_train)
-                st.session_state.calibrated_knn = calibrated
-                st.session_state.scaler = scaler
-                st.session_state.X_train = X
-                st.session_state.knn_error = None
-            except Exception as e:
-                st.session_state.calibrated_knn = None
-                st.session_state.knn_error = f"KNN training error: {str(e)}"
-
-# =========================================================================
-# Initialize session state and choose default features
+# Initialize session state
 # =========================================================================
 if 'lr_model' not in st.session_state:
     st.session_state.lr_model = None
@@ -390,35 +316,34 @@ if 'scaler' not in st.session_state:
     st.session_state.scaler = None
 if 'X_train' not in st.session_state:
     st.session_state.X_train = None
-if 'lr_error' not in st.session_state:
-    st.session_state.lr_error = None
-if 'knn_error' not in st.session_state:
-    st.session_state.knn_error = None
 if 'overall_wr' not in st.session_state:
     st.session_state.overall_wr = 0.0
 if 'recent_wr' not in st.session_state:
     st.session_state.recent_wr = 0.0
 if 'recent_count' not in st.session_state:
     st.session_state.recent_count = 0
+if 'lr_train_status' not in st.session_state:
+    st.session_state.lr_train_status = "Not trained"
+if 'knn_train_status' not in st.session_state:
+    st.session_state.knn_train_status = "Not trained"
 
-# Default features: Age, Height, Reach if available, else first three numerical
-preferred = ['Age', 'Height', 'Reach']
-default_feats = [f for f in preferred if f in data.columns]
-if len(default_feats) < 3:
-    default_feats += [f for f in numerical_features if f not in default_feats][:3-len(default_feats)]
-
+# Set default features to Age, Height, Reach if present
+default_lr = ['Age', 'Height', 'Reach']
+default_lr = [f for f in default_lr if f in data.columns]
+if len(default_lr) < 3:
+    default_lr += [f for f in numerical_features if f not in default_lr][:3-len(default_lr)]
 if 'x_lr' not in st.session_state:
-    st.session_state.x_lr = default_feats[0] if len(default_feats) > 0 else None
+    st.session_state.x_lr = default_lr[0] if len(default_lr) > 0 else None
 if 'y_lr' not in st.session_state:
-    st.session_state.y_lr = default_feats[1] if len(default_feats) > 1 else None
+    st.session_state.y_lr = default_lr[1] if len(default_lr) > 1 else None
 if 'z_lr' not in st.session_state:
-    st.session_state.z_lr = default_feats[2] if len(default_feats) > 2 else None
+    st.session_state.z_lr = default_lr[2] if len(default_lr) > 2 else None
 if 'x_knn' not in st.session_state:
-    st.session_state.x_knn = default_feats[0] if len(default_feats) > 0 else None
+    st.session_state.x_knn = default_lr[0] if len(default_lr) > 0 else None
 if 'y_knn' not in st.session_state:
-    st.session_state.y_knn = default_feats[1] if len(default_feats) > 1 else None
+    st.session_state.y_knn = default_lr[1] if len(default_lr) > 1 else None
 if 'z_knn' not in st.session_state:
-    st.session_state.z_knn = default_feats[2] if len(default_feats) > 2 else None
+    st.session_state.z_knn = default_lr[2] if len(default_lr) > 2 else None
 if 'knn_model_k' not in st.session_state:
     st.session_state.knn_model_k = 5
 
@@ -429,15 +354,6 @@ if len(full_hist) > 0:
     recent = full_hist.tail(recent_window)
     st.session_state.recent_wr = (recent['Win?'] == 'Yes').mean() * 100 if len(recent) > 0 else 0.0
     st.session_state.recent_count = len(recent)
-
-# =========================================================================
-# TRAIN MODELS IMMEDIATELY (so they're ready for Matchup)
-# =========================================================================
-train_models(
-    st.session_state.x_lr, st.session_state.y_lr, st.session_state.z_lr,
-    st.session_state.x_knn, st.session_state.y_knn, st.session_state.z_knn,
-    st.session_state.knn_model_k
-)
 
 # =========================================================================
 # PERFORMANCE SUMMARY
@@ -525,22 +441,98 @@ else:
     st.info("Enable one or more rating gap filters to see the combined effect.")
 
 # =========================================================================
-# UPCOMING FIGHT MATCHUP
+# TRAIN MODELS ON FILTERED DATA (right before Matchup)
 # =========================================================================
-# Re-train models (in case filters changed) – already trained above, but do again for safety
-train_models(
-    st.session_state.x_lr, st.session_state.y_lr, st.session_state.z_lr,
-    st.session_state.x_knn, st.session_state.y_knn, st.session_state.z_knn,
-    st.session_state.knn_model_k
-)
+def train_models_on_filtered():
+    """Train LR and KNN on the current filtered data (data). Update session_state and status messages."""
+    x_lr = st.session_state.x_lr
+    y_lr = st.session_state.y_lr
+    z_lr = st.session_state.z_lr
+    x_knn = st.session_state.x_knn
+    y_knn = st.session_state.y_knn
+    z_knn = st.session_state.z_knn
+    k_knn = st.session_state.knn_model_k
 
-# Show errors if any
-if st.session_state.lr_error:
-    st.error(f"LR training issue: {st.session_state.lr_error}")
-if st.session_state.knn_error:
-    st.error(f"KNN training issue: {st.session_state.knn_error}")
+    # --- LR Training ---
+    if x_lr is None or y_lr is None or z_lr is None:
+        st.session_state.lr_model = None
+        st.session_state.lr_train_status = "LR features not set."
+    else:
+        hist = data[data['Win?'].isin(['Yes','No'])].copy()
+        sub = hist[[x_lr, y_lr, z_lr, 'Win?']].dropna()
+        if len(sub) < 10:
+            st.session_state.lr_model = None
+            st.session_state.lr_train_status = f"LR: only {len(sub)} rows (need ≥10)."
+        elif sub['Win?'].nunique() < 2:
+            st.session_state.lr_model = None
+            st.session_state.lr_train_status = "LR: need both Win and Loss."
+        else:
+            try:
+                sub['target'] = (sub['Win?'] == 'Yes').astype(int)
+                X = sub[[x_lr, y_lr, z_lr]].values
+                y = sub['target'].values
+                lr = LogisticRegression(max_iter=1000)
+                lr.fit(X, y)
+                st.session_state.lr_model = lr
+                st.session_state.lr_train_status = f"LR trained on {len(sub)} fights."
+            except Exception as e:
+                st.session_state.lr_model = None
+                st.session_state.lr_train_status = f"LR error: {str(e)}"
 
+    # --- KNN Training ---
+    if x_knn is None or y_knn is None or z_knn is None:
+        st.session_state.calibrated_knn = None
+        st.session_state.knn_train_status = "KNN features not set."
+    else:
+        hist = data[data['Win?'].isin(['Yes','No'])].copy()
+        c1 = get_first_col(hist, x_knn)
+        c2 = get_first_col(hist, y_knn)
+        c3 = get_first_col(hist, z_knn)
+        win_col = hist['Win?']
+        if isinstance(win_col, pd.DataFrame):
+            win_vals = win_col.iloc[:, 0].values
+        else:
+            win_vals = win_col.values
+        train_df = pd.DataFrame({'f1': c1, 'f2': c2, 'f3': c3, 'Win?': win_vals}).dropna()
+        if len(train_df) < 10:
+            st.session_state.calibrated_knn = None
+            st.session_state.knn_train_status = f"KNN: only {len(train_df)} rows (need ≥10)."
+        elif train_df['Win?'].nunique() < 2:
+            st.session_state.calibrated_knn = None
+            st.session_state.knn_train_status = "KNN: need both Win and Loss."
+        else:
+            try:
+                X = train_df[['f1','f2','f3']].values.astype(np.float64)
+                y = (train_df['Win?'] == 'Yes').astype(int).values
+                scaler = StandardScaler()
+                X_scaled = scaler.fit_transform(X)
+                base_knn = KNeighborsClassifier(n_neighbors=k_knn, weights='distance')
+                calibrated = CalibratedClassifierCV(base_knn, method='sigmoid', cv=5)
+                calibrated.fit(X_scaled, y)
+                st.session_state.calibrated_knn = calibrated
+                st.session_state.scaler = scaler
+                st.session_state.X_train = X
+                st.session_state.knn_train_status = f"KNN trained on {len(train_df)} fights."
+            except Exception as e:
+                st.session_state.calibrated_knn = None
+                st.session_state.knn_train_status = f"KNN error: {str(e)}"
+
+# Train models now (after filters applied)
+train_models_on_filtered()
+
+# =========================================================================
+# UPCOMING FIGHT MATCHUP (with status messages)
+# =========================================================================
 st.header("Upcoming Fight Matchup")
+if st.session_state.lr_train_status and "error" not in st.session_state.lr_train_status.lower():
+    st.success(f"LR: {st.session_state.lr_train_status}")
+else:
+    st.error(f"LR: {st.session_state.lr_train_status}")
+if st.session_state.knn_train_status and "error" not in st.session_state.knn_train_status.lower():
+    st.success(f"KNN: {st.session_state.knn_train_status}")
+else:
+    st.error(f"KNN: {st.session_state.knn_train_status}")
+
 upcoming_data = data[data['Win?'].isna() | (data['Win?'] == '')]
 if not upcoming_data.empty:
     upcoming_fight_ids = sorted(upcoming_data['FightID'].unique())
@@ -671,7 +663,7 @@ if not upcoming_data.empty:
                 except Exception as e:
                     st.error(f"LR probability error: {e}")
             else:
-                st.info("LR model not trained. Check errors above.")
+                st.info("LR model not trained. Check status above.")
 
             calibrated_knn = st.session_state.calibrated_knn
             scaler = st.session_state.scaler
@@ -703,12 +695,12 @@ if not upcoming_data.empty:
                 except Exception as e:
                     st.error(f"KNN probability error: {e}")
             else:
-                st.info("KNN model not trained. Check errors above.")
+                st.info("KNN model not trained. Check status above.")
 else:
     st.write("No upcoming fights in the dataset.")
 
 # =========================================================================
-# 3D LR SCATTER & COMBO BUILDER
+# 3D LR SCATTER & COMBO BUILDER (unchanged)
 # =========================================================================
 st.header("3D LR Win/Loss Prediction & Best LR Combinations")
 
@@ -726,9 +718,7 @@ if len(three_d_features) >= 3:
         st.session_state.x_lr = x_lr
         st.session_state.y_lr = y_lr
         st.session_state.z_lr = z_lr
-        train_models(x_lr, y_lr, z_lr,
-                     st.session_state.x_knn, st.session_state.y_knn, st.session_state.z_knn,
-                     st.session_state.knn_model_k)
+        train_models_on_filtered()
         st.experimental_rerun()
 
     if x_lr and y_lr and z_lr:
@@ -810,7 +800,7 @@ else:
     st.warning("Not enough numerical features for a 3D LR plot (need at least 3).")
 
 # =========================================================================
-# 3D KNN SCATTER & COMBO BUILDER
+# 3D KNN SCATTER & COMBO BUILDER (unchanged)
 # =========================================================================
 st.header("3D Weighted KNN Win/Loss Prediction (Platt‑scaled) & Best KNN Combinations")
 
@@ -827,9 +817,7 @@ if len(three_d_features) >= 3:
         st.session_state.x_knn = x_knn
         st.session_state.y_knn = y_knn
         st.session_state.z_knn = z_knn
-        train_models(st.session_state.x_lr, st.session_state.y_lr, st.session_state.z_lr,
-                     x_knn, y_knn, z_knn,
-                     st.session_state.knn_model_k)
+        train_models_on_filtered()
         st.experimental_rerun()
 
     if x_knn and y_knn and z_knn:
@@ -851,15 +839,13 @@ if len(three_d_features) >= 3:
         k_knn = st.slider("KNN neighbors", 1, 20, 5, key="knn_model_k")
         if k_knn != st.session_state.knn_model_k:
             st.session_state.knn_model_k = k_knn
-            train_models(st.session_state.x_lr, st.session_state.y_lr, st.session_state.z_lr,
-                         x_knn, y_knn, z_knn,
-                         k_knn)
+            train_models_on_filtered()
             st.experimental_rerun()
 
         if st.session_state.calibrated_knn is not None:
             st.write("KNN model trained with current settings.")
         else:
-            st.info("KNN model not trained. Check errors above.")
+            st.info("KNN model not trained. Check status above.")
 
         st.subheader("KNN 3‑Variable Combinations (Brier, In‑Sample)")
         combo_candidates_knn = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
@@ -980,9 +966,6 @@ else:
     else:
         st.warning("No categorical features available after filtering.")
 
-# =========================================================================
-# SPIDER CHART (unchanged)
-# =========================================================================
 st.header("Fight Similarity & Comparison (Independent Filters)")
 st.subheader("Spider Chart Filters (fighter data only)")
 
