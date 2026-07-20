@@ -28,7 +28,6 @@ PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace with your 
 def load_data():
     gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
     data = pd.read_parquet("data.parquet")
-    # Quick check for upcoming fights
     upcoming = data[data['Win?'].isna()]
     if len(upcoming) % 2 != 0:
         st.warning(f"⚠️ Upcoming rows: {len(upcoming)} (should be even)")
@@ -137,15 +136,23 @@ with st.sidebar.expander("Previous Outcomes", expanded=False):
     opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career)
     opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career)
 
-# ---------- Rating Gap Analysis Filters ----------
+# ---------- Rating Gap Analysis Filters (NEW – independent per rating) ----------
 with st.sidebar.expander("Rating Gap Analysis", expanded=False):
-    rating_system = st.selectbox("Rating system",
-                                 ['None','ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay','WeightedMasseyDecay'],
-                                 key="gap_system")
-    if rating_system != 'None':
-        gap_range = st.slider("Rating gap range",
-                              min_value=-1.0, max_value=1.0,
-                              value=(0.0, 0.05), step=0.01, key="gap_range")
+    st.caption("Enable any rating gap filter. Only fights within ALL selected ranges are counted.")
+    rating_systems = ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay','WeightedMasseyDecay']
+    gap_filters = {}  # will store (enabled, gap_range) for each system
+    for sys in rating_systems:
+        enabled = st.checkbox(f"Use {sys}", key=f"gap_enable_{sys}")
+        if enabled:
+            gap_range = st.slider(
+                f"{sys} gap range",
+                min_value=-1.0, max_value=1.0,
+                value=(0.0, 0.05), step=0.01,
+                key=f"gap_range_{sys}"
+            )
+            gap_filters[sys] = (True, gap_range)
+        else:
+            gap_filters[sys] = (False, None)
 
 # ---------- Apply filters ----------
 filtered = data.copy()
@@ -261,30 +268,44 @@ for result, col in zip(['Yes', 'No'], [col1, col2]):
             st.write(f"**Career Avg Ctrl Time:** {avg_ctrl:.0f}s | CTR/TD: {ctrtd:.1f}s")
         st.write(f"**Avg Age Diff:** {age_diff_mean:.1f} | **Avg Height Diff:** {height_diff_mean:.1f} in | **Avg Reach Diff:** {reach_diff_mean:.1f} in")
 
-# ---------- Rating Gap Analysis ----------
+# ---------- Rating Gap Analysis (NEW – combined intersection) ----------
 st.header("Rating Gap Analysis")
 
-if rating_system != 'None':
-    diff_col = f'{rating_system}_Diff'
-    if diff_col in data.columns:
-        gap_min, gap_max = gap_range
-        gap_fights = data[(data[diff_col] >= gap_min) & (data[diff_col] <= gap_max)]
-        total_gap = len(gap_fights)
-        wins_gap = (gap_fights['Win?'] == 'Yes').sum()
-        win_rate_gap = wins_gap / total_gap * 100 if total_gap > 0 else 0.0
+# Collect all enabled gap conditions
+conditions = []
+active_systems = []
+for sys, (enabled, gap_range) in gap_filters.items():
+    if enabled:
+        diff_col = f'{sys}_Diff'
+        if diff_col in data.columns:
+            gap_min, gap_max = gap_range
+            conditions.append( (data[diff_col] >= gap_min) & (data[diff_col] <= gap_max) )
+            active_systems.append(sys)
+        else:
+            st.warning(f"Column {diff_col} not found, ignoring {sys}.")
 
-        colg1, colg2, colg3 = st.columns(3)
-        with colg1:
-            st.metric("Fights in gap", total_gap)
-        with colg2:
-            st.metric("Wins", wins_gap)
-        with colg3:
-            st.metric("Win Rate", f"{win_rate_gap:.1f}%")
-        st.caption(f"*Gap = {rating_system} (Fighter − Opponent). Positive = fighter rated higher.*")
-    else:
-        st.warning(f"Rating system '{rating_system}' not available.")
+if conditions:
+    # Intersection of all enabled gaps
+    combined_mask = conditions[0]
+    for cond in conditions[1:]:
+        combined_mask = combined_mask & cond
+
+    gap_fights = data[combined_mask]
+    total_gap = len(gap_fights)
+    wins_gap = (gap_fights['Win?'] == 'Yes').sum()
+    win_rate_gap = wins_gap / total_gap * 100 if total_gap > 0 else 0.0
+
+    st.subheader("Combined Gap Filter")
+    st.caption(f"Filters active: {', '.join(active_systems)}")
+    colg1, colg2, colg3 = st.columns(3)
+    with colg1:
+        st.metric("Fights in gap", total_gap)
+    with colg2:
+        st.metric("Wins", wins_gap)
+    with colg3:
+        st.metric("Win Rate", f"{win_rate_gap:.1f}%")
 else:
-    st.info("Select a rating system above to analyse gaps.")
+    st.info("Enable one or more rating gap filters above to see the combined effect.")
 
 # ---------- Matchup area ----------
 st.header("Upcoming Fight Matchup")
@@ -833,6 +854,7 @@ else:
 
     importance_features = [c for c in numerical_features
                            if not c.startswith('Opponent_')
+                           and not c.endswith('_Diff')
                            and not re.match(r'Prev\d+_', c)
                            and c in hist_imp.columns]
     if importance_features:
