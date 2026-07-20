@@ -1,4 +1,4 @@
-import streamlit as st
+import streamlit as stimport streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -29,7 +29,7 @@ def load_data():
     return pd.read_parquet("data.parquet")
 
 data = load_data()
-original_data = data.copy()  # keep full data for restoring missing rows
+original_data = data.copy()
 
 # ---------- Helper functions ----------
 def get_diff_range(df, col_name):
@@ -175,7 +175,7 @@ with st.sidebar.expander("Rating Gap Analysis", expanded=False):
         else:
             gap_filters[sys] = (False, None)
 
-# ---------- Apply filters ----------
+# ---------- Apply filters (row-wise, as intended) ----------
 filtered = data.copy()
 
 if wc: filtered = filtered[filtered['WC'].isin(wc)]
@@ -188,26 +188,15 @@ if opp_hometown != "All": filtered = filtered[filtered['Opponent_Hometown'] == o
 if event_country: filtered = filtered[filtered['EventCountry'].isin(event_country)]
 if new_wc: filtered = filtered[filtered['IsNewWeightClass'] == True]
 
-# ---- Title filters: keep fight if at least one fighter matches, then restore missing rows ----
+# Title filters (row-wise, as intended)
 filtered['Prev1_Title_clean'] = normalize_title_col(filtered.get('Prev1_Title', None))
+if prev_title != "All":
+    filtered = filtered[filtered['Prev1_Title_clean'] == prev_title.lower()]
 if 'Opponent_Prev1_Title' in filtered.columns:
     filtered['Opp_Prev1_Title_clean'] = normalize_title_col(filtered['Opponent_Prev1_Title'])
+    if opp_prev_title != "All":
+        filtered = filtered[filtered['Opp_Prev1_Title_clean'] == opp_prev_title.lower()]
 
-if prev_title != "All":
-    fighter_mask = filtered['Prev1_Title_clean'] == prev_title.lower()
-    matching_fight_ids = filtered.loc[fighter_mask, 'FightID'].unique()
-    filtered = filtered[filtered['FightID'].isin(matching_fight_ids)]
-
-if opp_prev_title != "All" and 'Opp_Prev1_Title_clean' in filtered.columns:
-    fighter_mask = filtered['Opp_Prev1_Title_clean'] == opp_prev_title.lower()
-    matching_fight_ids = filtered.loc[fighter_mask, 'FightID'].unique()
-    filtered = filtered[filtered['FightID'].isin(matching_fight_ids)]
-
-# Re-add missing rows from original_data for the remaining FightIDs
-fids = filtered['FightID'].unique()
-filtered = original_data[original_data['FightID'].isin(fids)]
-
-# ---- Other outcome filters (row-wise) ----
 if prev1: filtered = filtered[filtered[prev1_col].isin(prev1)]
 if prev2: filtered = filtered[filtered[prev2_col].isin(prev2)]
 if prev3: filtered = filtered[filtered[prev3_col].isin(prev3)]
@@ -260,7 +249,15 @@ for sys, (enabled, gap_range) in gap_filters.items():
             gap_min, gap_max = gap_range
             filtered = filtered[(filtered[diff_col] >= gap_min) & (filtered[diff_col] <= gap_max)]
 
+# Keep this as the working dataset
 data = filtered
+
+# ----- For the matchup section, get both fighters from original_data -----
+# Get the FightIDs that survived the filter (unique)
+surviving_fight_ids = data['FightID'].unique()
+# Pull both rows from original_data for these FightIDs
+matchup_data = original_data[original_data['FightID'].isin(surviving_fight_ids)]
+# This guarantees 2 rows per fight for display
 
 # =========================================================================
 # COMMON DEFINITIONS
@@ -371,7 +368,7 @@ if len(full_hist) > 0:
     st.session_state.recent_count = len(recent)
 
 # =========================================================================
-# TRAIN MODELS ON FILTERED DATA (store training targets for metrics)
+# TRAIN MODELS ON FILTERED DATA
 # =========================================================================
 def train_models_on_filtered():
     x_lr = st.session_state.x_lr
@@ -546,7 +543,7 @@ else:
     st.info("Enable one or more rating gap filters to see the combined effect.")
 
 # =========================================================================
-# UPCOMING FIGHT MATCHUP (with model status)
+# UPCOMING FIGHT MATCHUP (using matchup_data from original_data)
 # =========================================================================
 st.header("Upcoming Fight Matchup")
 
@@ -559,14 +556,16 @@ if st.session_state.knn_train_status and "error" not in st.session_state.knn_tra
 else:
     st.error(f"❌ KNN: {st.session_state.knn_train_status}")
 
-upcoming_data = data[data['Win?'].isna() | (data['Win?'] == '')]
-st.write(f"**Upcoming rows:** {len(upcoming_data)}  |  **Unique FightIDs:** {len(upcoming_data['FightID'].unique())}")
+# Use matchup_data for display (pulls both rows from original_data)
+upcoming_display = matchup_data[matchup_data['Win?'].isna() | (matchup_data['Win?'] == '')]
+st.write(f"**Upcoming fights after filters:** {len(upcoming_display['FightID'].unique())}")
 
-if not upcoming_data.empty:
-    upcoming_fight_ids = sorted(upcoming_data['FightID'].unique())
+if not upcoming_display.empty:
+    upcoming_fight_ids = sorted(upcoming_display['FightID'].unique())
     selected_fight = st.selectbox("Choose an upcoming fight", upcoming_fight_ids)
     if selected_fight:
-        fight_rows = upcoming_data[upcoming_data['FightID'] == selected_fight]
+        fight_rows = upcoming_display[upcoming_display['FightID'] == selected_fight]
+        # This should now always have 2 rows
         if len(fight_rows) == 2:
             f1_row = fight_rows.iloc[0]
             f2_row = fight_rows.iloc[1]
@@ -727,7 +726,7 @@ if not upcoming_data.empty:
             else:
                 st.info("KNN model not trained. Check status above.")
         else:
-            st.warning(f"Expected 2 rows for this fight, but got {len(fight_rows)}. This should not happen now.")
+            st.warning(f"Expected 2 rows for this fight, but got {len(fight_rows)}. Check data.")
 else:
     st.write("No upcoming fights match the current filters.")
 
@@ -793,7 +792,7 @@ if len(three_d_features) >= 3:
         else:
             st.info("LR model not trained.")
 
-        # ---- LR combo builder (unchanged) ----
+        # ---- LR combo builder ----
         st.subheader("LR 3‑Variable Combinations (Brier)")
         combo_candidates = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
         importance_features = [c for c in numerical_features
@@ -920,7 +919,7 @@ if len(three_d_features) >= 3:
         else:
             st.info("KNN model not trained.")
 
-        # ---- KNN slider and retrain ----
+        # ---- KNN slider ----
         k_knn = st.slider("KNN neighbors", 1, 20, 5, key="knn_model_k")
         if k_knn != st.session_state.knn_model_k:
             st.session_state.knn_model_k = k_knn
@@ -932,7 +931,7 @@ if len(three_d_features) >= 3:
         else:
             st.info("KNN model not trained. Check status above.")
 
-        # ---- KNN combo builder (unchanged) ----
+        # ---- KNN combo builder ----
         st.subheader("KNN 3‑Variable Combinations (Brier, In‑Sample)")
         combo_candidates_knn = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
         if not mi_df.empty:
