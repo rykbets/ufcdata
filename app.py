@@ -47,7 +47,6 @@ def get_first_col(df, col_name):
     return pd.to_numeric(sub, errors='coerce').to_numpy(dtype=np.float64)
 
 def normalize_title_col(series):
-    """Return cleaned lowercase string for title columns"""
     if series is None:
         return pd.Series('', index=series.index)
     return series.astype(str).str.strip().str.lower()
@@ -304,7 +303,20 @@ color_map = {
     'Draw': 'gray'
 }
 
-# Initialize session state variables for models if not present
+# ============================================================
+# INITIALIZE MODELS WITH DEFAULT FEATURES (so Matchup works)
+# ============================================================
+prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight_global")
+recent_window = st.sidebar.slider("Recent fights window", 1, 100, 50, key="recent_win_global")
+
+# Get default features (first 3 from numerical_features)
+if len(numerical_features) >= 3:
+    default_lr = numerical_features[:3]
+    default_knn = numerical_features[:3]
+else:
+    default_lr = default_knn = []
+
+# Initialize session state for models if not present
 if 'lr_model' not in st.session_state:
     st.session_state.lr_model = None
 if 'calibrated_knn' not in st.session_state:
@@ -320,17 +332,74 @@ if 'recent_wr' not in st.session_state:
 if 'recent_count' not in st.session_state:
     st.session_state.recent_count = 0
 if 'x_lr' not in st.session_state:
-    st.session_state.x_lr = None
+    st.session_state.x_lr = default_lr[0] if len(default_lr) > 0 else None
 if 'y_lr' not in st.session_state:
-    st.session_state.y_lr = None
+    st.session_state.y_lr = default_lr[1] if len(default_lr) > 1 else None
 if 'z_lr' not in st.session_state:
-    st.session_state.z_lr = None
+    st.session_state.z_lr = default_lr[2] if len(default_lr) > 2 else None
 if 'x_knn' not in st.session_state:
-    st.session_state.x_knn = None
+    st.session_state.x_knn = default_knn[0] if len(default_knn) > 0 else None
 if 'y_knn' not in st.session_state:
-    st.session_state.y_knn = None
+    st.session_state.y_knn = default_knn[1] if len(default_knn) > 1 else None
 if 'z_knn' not in st.session_state:
-    st.session_state.z_knn = None
+    st.session_state.z_knn = default_knn[2] if len(default_knn) > 2 else None
+
+# Train default models if needed
+def train_lr_model(x, y, z):
+    if x is None or y is None or z is None:
+        return
+    hist = data[data['Win?'].isin(['Yes','No'])].copy()
+    hist = hist.loc[:, ~hist.columns.duplicated()]
+    sub = hist[[x, y, z, 'Win?']].dropna()
+    if len(sub) < 10 or sub['Win?'].nunique() < 2:
+        return
+    sub['target'] = (sub['Win?'] == 'Yes').astype(int)
+    X = sub[[x, y, z]].values
+    y_train = sub['target'].values
+    lr = LogisticRegression(max_iter=1000)
+    lr.fit(X, y_train)
+    st.session_state.lr_model = lr
+
+def train_knn_model(x, y, z, k=5):
+    if x is None or y is None or z is None:
+        return
+    hist = data[data['Win?'].isin(['Yes','No'])].copy()
+    hist = hist.loc[:, ~hist.columns.duplicated()]
+    c1 = get_first_col(hist, x)
+    c2 = get_first_col(hist, y)
+    c3 = get_first_col(hist, z)
+    win_col = hist['Win?']
+    if isinstance(win_col, pd.DataFrame):
+        win_vals = win_col.iloc[:, 0].values
+    else:
+        win_vals = win_col.values
+    train_df = pd.DataFrame({'f1': c1, 'f2': c2, 'f3': c3, 'Win?': win_vals}).dropna()
+    if len(train_df) < 10 or train_df['Win?'].nunique() < 2:
+        return
+    X = train_df[['f1','f2','f3']].values.astype(np.float64)
+    y_train = (train_df['Win?'] == 'Yes').astype(int).values
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    base_knn = KNeighborsClassifier(n_neighbors=k, weights='distance')
+    calibrated = CalibratedClassifierCV(base_knn, method='sigmoid', cv=5)
+    calibrated.fit(X_scaled, y_train)
+    st.session_state.calibrated_knn = calibrated
+    st.session_state.scaler = scaler
+    st.session_state.X_train = X
+
+# Train with defaults if features exist
+if st.session_state.x_lr and st.session_state.y_lr and st.session_state.z_lr and st.session_state.lr_model is None:
+    train_lr_model(st.session_state.x_lr, st.session_state.y_lr, st.session_state.z_lr)
+if st.session_state.x_knn and st.session_state.y_knn and st.session_state.z_knn and st.session_state.calibrated_knn is None:
+    train_knn_model(st.session_state.x_knn, st.session_state.y_knn, st.session_state.z_knn)
+
+# Compute overall/recent win rates for shrinkage
+full_hist = data[data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
+if len(full_hist) > 0:
+    st.session_state.overall_wr = (full_hist['Win?'] == 'Yes').mean() * 100
+    recent = full_hist.tail(recent_window)
+    st.session_state.recent_wr = (recent['Win?'] == 'Yes').mean() * 100 if len(recent) > 0 else 0.0
+    st.session_state.recent_count = len(recent)
 
 # =========================================================================
 # PERFORMANCE SUMMARY (First)
@@ -387,7 +456,7 @@ for result, col in zip(['Yes', 'No'], [col1, col2]):
             st.write(f"**Career Avg Ctrl Time:** {avg_ctrl:.0f}s | CTR/TD: {ctrtd:.1f}s")
         st.write(f"**Avg Age Diff:** {age_diff_mean:.1f} | **Avg Height Diff:** {height_diff_mean:.1f} in | **Avg Reach Diff:** {reach_diff_mean:.1f} in")
 
-# ---------- Rating Gap Analysis (still here) ----------
+# ---------- Rating Gap Analysis ----------
 st.header("Rating Gap Analysis")
 conditions = []
 active_systems = []
@@ -417,130 +486,8 @@ if conditions:
 else:
     st.info("Enable one or more rating gap filters to see the combined effect.")
 
-# ---------- Bayesian Shrinkage Sliders (global) ----------
-prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight_global")
-recent_window = st.sidebar.slider("Recent fights window", 1, 100, 50, key="recent_win_global")
-
 # =========================================================================
-# MODEL CONFIGURATION (Now before Matchup)
-# =========================================================================
-st.header("Model Configuration")
-three_d_features = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
-if len(three_d_features) >= 3:
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        x_lr = st.selectbox("LR X", three_d_features, index=0, key="lr_x")
-    with col2:
-        y_lr = st.selectbox("LR Y", three_d_features, index=min(1, len(three_d_features)-1), key="lr_y")
-    with col3:
-        z_lr = st.selectbox("LR Z", three_d_features, index=min(2, len(three_d_features)-1), key="lr_z")
-
-    col1k, col2k, col3k = st.columns(3)
-    with col1k:
-        x_knn = st.selectbox("KNN X", three_d_features, index=0, key="knn_x")
-    with col2k:
-        y_knn = st.selectbox("KNN Y", three_d_features, index=min(1, len(three_d_features)-1), key="knn_y")
-    with col3k:
-        z_knn = st.selectbox("KNN Z", three_d_features, index=min(2, len(three_d_features)-1), key="knn_z")
-
-    # Store chosen features in session state for later use
-    st.session_state.x_lr = x_lr
-    st.session_state.y_lr = y_lr
-    st.session_state.z_lr = z_lr
-    st.session_state.x_knn = x_knn
-    st.session_state.y_knn = y_knn
-    st.session_state.z_knn = z_knn
-
-    # --- Train LR model ---
-    hist_lr = data[data['Win?'].isin(['Yes','No'])].copy()
-    hist_lr = hist_lr.loc[:, ~hist_lr.columns.duplicated()]
-    if x_lr and y_lr and z_lr:
-        hist_lr_sub = hist_lr[[x_lr, y_lr, z_lr, 'Win?']].dropna()
-        if len(hist_lr_sub) >= 10 and hist_lr_sub['Win?'].nunique() >= 2:
-            hist_lr_sub['target'] = (hist_lr_sub['Win?'] == 'Yes').astype(int)
-            X_lr = hist_lr_sub[[x_lr, y_lr, z_lr]].values
-            y_lr_target = hist_lr_sub['target'].values
-            lr_model = LogisticRegression(max_iter=1000)
-            lr_model.fit(X_lr, y_lr_target)
-            st.session_state.lr_model = lr_model
-            # compute metrics for display later (optional)
-            y_prob_lr_in = lr_model.predict_proba(X_lr)[:, 1]
-            ll_lr = log_loss(y_lr_target, y_prob_lr_in)
-            bs_lr = brier_score_loss(y_lr_target, y_prob_lr_in)
-            st.session_state.ll_lr = ll_lr
-            st.session_state.bs_lr = bs_lr
-
-            # Overall and recent win rates
-            full_hist = data[data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
-            if len(full_hist) > 0:
-                overall_wr = (full_hist['Win?'] == 'Yes').mean() * 100
-                recent = full_hist.tail(recent_window)
-                recent_wr = (recent['Win?'] == 'Yes').mean() * 100 if len(recent) > 0 else 0.0
-                recent_count = len(recent)
-                st.session_state.overall_wr = overall_wr
-                st.session_state.recent_wr = recent_wr
-                st.session_state.recent_count = recent_count
-
-            # Display LR metrics
-            col_m1, col_m2, col_m3 = st.columns(3)
-            with col_m1:
-                st.metric("LR Log‑loss", f"{ll_lr:.3f}")
-            with col_m2:
-                st.metric("LR Brier", f"{bs_lr:.3f}")
-            with col_m3:
-                st.metric("Overall Win%", f"{overall_wr:.1f}%")
-                st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
-        else:
-            st.warning("Not enough historical data to train LR model.")
-
-    # --- Train KNN model ---
-    hist_knn = data[data['Win?'].isin(['Yes','No'])].copy()
-    hist_knn = hist_knn.loc[:, ~hist_knn.columns.duplicated()]
-    if x_knn and y_knn and z_knn:
-        c1 = get_first_col(hist_knn, x_knn)
-        c2 = get_first_col(hist_knn, y_knn)
-        c3 = get_first_col(hist_knn, z_knn)
-        win_col = hist_knn['Win?']
-        if isinstance(win_col, pd.DataFrame):
-            win_vals = win_col.iloc[:, 0].values
-        else:
-            win_vals = win_col.values
-        train_df = pd.DataFrame({'f1': c1, 'f2': c2, 'f3': c3, 'Win?': win_vals}).dropna()
-        if len(train_df) >= 10 and train_df['Win?'].nunique() >= 2:
-            X_train = train_df[['f1','f2','f3']].values.astype(np.float64)
-            y_train = (train_df['Win?'] == 'Yes').astype(int).values
-            k_knn = st.slider("KNN neighbors", 1, 20, 5, key="knn_model_k")
-            scaler = StandardScaler()
-            X_scaled = scaler.fit_transform(X_train)
-            base_knn = KNeighborsClassifier(n_neighbors=k_knn, weights='distance')
-            calibrated_knn = CalibratedClassifierCV(base_knn, method='sigmoid', cv=5)
-            calibrated_knn.fit(X_scaled, y_train)
-            st.session_state.calibrated_knn = calibrated_knn
-            st.session_state.scaler = scaler
-            st.session_state.X_train = X_train
-
-            y_prob_in = calibrated_knn.predict_proba(X_scaled)[:, 1]
-            y_prob_in = np.clip(y_prob_in, 0.1, 0.9)
-            ll_knn = log_loss(y_train, y_prob_in)
-            bs_knn = brier_score_loss(y_train, y_prob_in)
-            st.session_state.ll_knn = ll_knn
-            st.session_state.bs_knn = bs_knn
-
-            col_m1, col_m2, col_m3 = st.columns(3)
-            with col_m1:
-                st.metric("KNN Log‑loss", f"{ll_knn:.3f}")
-            with col_m2:
-                st.metric("KNN Brier", f"{bs_knn:.3f}")
-            with col_m3:
-                st.metric("Overall Win%", f"{overall_wr:.1f}%")
-                st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
-        else:
-            st.warning("Not enough training data for KNN model.")
-else:
-    st.warning("Not enough numerical features for model training (need at least 3).")
-
-# =========================================================================
-# UPCOMING FIGHT MATCHUP (Now before scatterplots)
+# UPCOMING FIGHT MATCHUP (Now before scatter sections)
 # =========================================================================
 st.header("Upcoming Fight Matchup")
 upcoming_data_unfiltered = data[data['Win?'].isna() | (data['Win?'] == '')]
@@ -631,7 +578,6 @@ if not upcoming_data_unfiltered.empty:
                 st.write(" · ".join(opp_career_outs) if opp_career_outs else "N/A")
 
                 st.write("**Title History:**")
-                # Use cleaned versions for display
                 f_title = row.get('Prev1_Title', '--')
                 if pd.isna(f_title):
                     f_title = '--'
@@ -676,7 +622,7 @@ if not upcoming_data_unfiltered.empty:
                 except Exception as e:
                     st.error(f"LR probability error: {e}")
             else:
-                st.info("LR model not trained. Please ensure enough data and select features.")
+                st.info("LR model not trained. Select features in the 3D LR section below.")
 
             # KNN probability
             calibrated_knn = st.session_state.calibrated_knn
@@ -709,181 +655,237 @@ if not upcoming_data_unfiltered.empty:
                 except Exception as e:
                     st.error(f"KNN probability error: {e}")
             else:
-                st.info("KNN model not trained. Please ensure enough data and select features.")
+                st.info("KNN model not trained. Select features in the 3D KNN section below.")
 else:
     st.write("No upcoming fights in the dataset.")
 
 # =========================================================================
-# 3D LR SCATTER & COMBO BUILDER (now after matchup)
+# 3D LR SCATTER & COMBO BUILDER (with its own dropdowns & training)
 # =========================================================================
 st.header("3D LR Win/Loss Prediction & Best LR Combinations")
 
-if st.session_state.x_lr and st.session_state.y_lr and st.session_state.z_lr:
-    x_lr = st.session_state.x_lr
-    y_lr = st.session_state.y_lr
-    z_lr = st.session_state.z_lr
-    plot_data = data[[x_lr, y_lr, z_lr, 'DetailedResult', 'Fight']].copy()
-    plot_data = plot_data.loc[:, ~plot_data.columns.duplicated()].dropna()
-    if len(plot_data) >= 10:
-        fig = px.scatter_3d(
-            plot_data,
-            x=x_lr, y=y_lr, z=z_lr,
-            color='DetailedResult',
-            color_discrete_map=color_map,
-            hover_data=['Fight'],
-            title="3D Scatter – Logistic Regression"
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("Not enough data for 3D LR plot.")
+three_d_features = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
+if len(three_d_features) >= 3:
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        x_lr = st.selectbox("X", three_d_features, index=three_d_features.index(st.session_state.x_lr) if st.session_state.x_lr in three_d_features else 0, key="lr_x")
+    with col2:
+        y_lr = st.selectbox("Y", three_d_features, index=three_d_features.index(st.session_state.y_lr) if st.session_state.y_lr in three_d_features else min(1, len(three_d_features)-1), key="lr_y")
+    with col3:
+        z_lr = st.selectbox("Z", three_d_features, index=three_d_features.index(st.session_state.z_lr) if st.session_state.z_lr in three_d_features else min(2, len(three_d_features)-1), key="lr_z")
 
-    # LR combo builder (unchanged)
-    st.subheader("LR 3‑Variable Combinations (Brier)")
-    combo_candidates = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
-    importance_features = [c for c in numerical_features
-                           if not c.startswith('Opponent_')
-                           and not c.endswith('_Diff')
-                           and not re.match(r'Prev\d+_', c)]
-    @st.cache_data
-    def numerical_importance(_data, features):
-        hist = _data[_data['Win?'].isin(['Yes','No'])].copy()
-        hist['Target'] = (hist['Win?'] == 'Yes').astype(int)
-        X = hist[features].dropna()
-        y = hist.loc[X.index, 'Target']
-        if len(X) > 10:
-            X_imp = SimpleImputer(strategy='median').fit_transform(X)
-            mi = mutual_info_classif(X_imp, y, discrete_features=False)
-            return pd.DataFrame({'Feature': features, 'Mutual Information': mi}).sort_values('Mutual Information', ascending=False).head(20)
-        return pd.DataFrame()
-    mi_df = numerical_importance(data, importance_features)
-    top_feats = mi_df['Feature'].tolist() if not mi_df.empty else combo_candidates
-    num_top = st.slider("Top features to test", 5, min(30, len(top_feats)), 10, key="lr_combo_top")
-    candidates = top_feats[:num_top]
-    candidates = [c for c in candidates if c != 'FighterOddsNum']
+    # If changed, retrain and update session_state
+    if (x_lr != st.session_state.x_lr or y_lr != st.session_state.y_lr or z_lr != st.session_state.z_lr):
+        st.session_state.x_lr = x_lr
+        st.session_state.y_lr = y_lr
+        st.session_state.z_lr = z_lr
+        train_lr_model(x_lr, y_lr, z_lr)
+        # Force rerun to update Matchup
+        st.experimental_rerun()
 
-    data_fp = hash(str(data.shape))
-    if "lr_combo_results" not in st.session_state:
-        st.session_state.lr_combo_results = None
-        st.session_state.lr_combo_hash = data_fp
-    if st.session_state.lr_combo_hash != data_fp:
-        st.session_state.lr_combo_results = None
-        st.session_state.lr_combo_hash = data_fp
+    if x_lr and y_lr and z_lr:
+        plot_data = data[[x_lr, y_lr, z_lr, 'DetailedResult', 'Fight']].copy()
+        plot_data = plot_data.loc[:, ~plot_data.columns.duplicated()].dropna()
+        if len(plot_data) >= 10:
+            fig = px.scatter_3d(
+                plot_data,
+                x=x_lr, y=y_lr, z=z_lr,
+                color='DetailedResult',
+                color_discrete_map=color_map,
+                hover_data=['Fight'],
+                title="3D Scatter – Logistic Regression"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Not enough data for 3D LR plot.")
 
-    if len(candidates) >= 3:
-        if st.button("Compute LR 3‑Var Combos", key="lr_combo_btn"):
-            with st.spinner("Testing 3‑variable LR combos…"):
-                hist = data[data['Win?'].isin(['Yes','No'])].copy()
-                hist['WinNum'] = (hist['Win?'] == 'Yes').astype(int)
-                results = []
-                for combo in itertools.combinations(candidates, 3):
-                    sub = hist[list(combo) + ['WinNum']].dropna()
-                    if len(sub) < 10 or sub['WinNum'].nunique() < 2:
-                        continue
-                    X = sub[list(combo)].values
-                    y = sub['WinNum'].values
-                    try:
-                        lr = LogisticRegression(max_iter=1000)
-                        y_prob = cross_val_predict(lr, X, y, cv=5, method='predict_proba')[:, 1]
-                        bs = brier_score_loss(y, y_prob)
-                        results.append({'Variables': ', '.join(combo), 'Brier': bs})
-                    except:
-                        pass
-                if results:
-                    st.session_state.lr_combo_results = pd.DataFrame(results).sort_values('Brier').head(20)
-                else:
-                    st.warning("Could not evaluate any combination.")
-        if st.session_state.lr_combo_results is not None:
-            st.write("**Top 20 3‑Variable Combinations (Brier)**")
-            st.dataframe(st.session_state.lr_combo_results, use_container_width=True)
-    else:
-        st.warning("Not enough features to test (need at least 3).")
+        # LR combo builder
+        st.subheader("LR 3‑Variable Combinations (Brier)")
+        combo_candidates = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
+        importance_features = [c for c in numerical_features
+                               if not c.startswith('Opponent_')
+                               and not c.endswith('_Diff')
+                               and not re.match(r'Prev\d+_', c)]
+        @st.cache_data
+        def numerical_importance(_data, features):
+            hist = _data[_data['Win?'].isin(['Yes','No'])].copy()
+            hist['Target'] = (hist['Win?'] == 'Yes').astype(int)
+            X = hist[features].dropna()
+            y = hist.loc[X.index, 'Target']
+            if len(X) > 10:
+                X_imp = SimpleImputer(strategy='median').fit_transform(X)
+                mi = mutual_info_classif(X_imp, y, discrete_features=False)
+                return pd.DataFrame({'Feature': features, 'Mutual Information': mi}).sort_values('Mutual Information', ascending=False).head(20)
+            return pd.DataFrame()
+        mi_df = numerical_importance(data, importance_features)
+        top_feats = mi_df['Feature'].tolist() if not mi_df.empty else combo_candidates
+        num_top = st.slider("Top features to test", 5, min(30, len(top_feats)), 10, key="lr_combo_top")
+        candidates = top_feats[:num_top]
+        candidates = [c for c in candidates if c != 'FighterOddsNum']
+
+        data_fp = hash(str(data.shape))
+        if "lr_combo_results" not in st.session_state:
+            st.session_state.lr_combo_results = None
+            st.session_state.lr_combo_hash = data_fp
+        if st.session_state.lr_combo_hash != data_fp:
+            st.session_state.lr_combo_results = None
+            st.session_state.lr_combo_hash = data_fp
+
+        if len(candidates) >= 3:
+            if st.button("Compute LR 3‑Var Combos", key="lr_combo_btn"):
+                with st.spinner("Testing 3‑variable LR combos…"):
+                    hist = data[data['Win?'].isin(['Yes','No'])].copy()
+                    hist['WinNum'] = (hist['Win?'] == 'Yes').astype(int)
+                    results = []
+                    for combo in itertools.combinations(candidates, 3):
+                        sub = hist[list(combo) + ['WinNum']].dropna()
+                        if len(sub) < 10 or sub['WinNum'].nunique() < 2:
+                            continue
+                        X = sub[list(combo)].values
+                        y = sub['WinNum'].values
+                        try:
+                            lr = LogisticRegression(max_iter=1000)
+                            y_prob = cross_val_predict(lr, X, y, cv=5, method='predict_proba')[:, 1]
+                            bs = brier_score_loss(y, y_prob)
+                            results.append({'Variables': ', '.join(combo), 'Brier': bs})
+                        except:
+                            pass
+                    if results:
+                        st.session_state.lr_combo_results = pd.DataFrame(results).sort_values('Brier').head(20)
+                    else:
+                        st.warning("Could not evaluate any combination.")
+            if st.session_state.lr_combo_results is not None:
+                st.write("**Top 20 3‑Variable Combinations (Brier)**")
+                st.dataframe(st.session_state.lr_combo_results, use_container_width=True)
+        else:
+            st.warning("Not enough features to test (need at least 3).")
 else:
-    st.warning("LR features not selected.")
+    st.warning("Not enough numerical features for a 3D plot (need at least 3).")
 
 # =========================================================================
-# 3D KNN SCATTER & COMBO BUILDER
+# 3D KNN SCATTER & COMBO BUILDER (with its own dropdowns & training)
 # =========================================================================
 st.header("3D Weighted KNN Win/Loss Prediction (Platt‑scaled) & Best KNN Combinations")
 
-if st.session_state.x_knn and st.session_state.y_knn and st.session_state.z_knn:
-    x_knn = st.session_state.x_knn
-    y_knn = st.session_state.y_knn
-    z_knn = st.session_state.z_knn
-    plot_data_knn = data[[x_knn, y_knn, z_knn, 'DetailedResult', 'Fight']].copy()
-    plot_data_knn = plot_data_knn.loc[:, ~plot_data_knn.columns.duplicated()].dropna()
-    if len(plot_data_knn) >= 10:
-        fig_knn = px.scatter_3d(
-            plot_data_knn,
-            x=x_knn, y=y_knn, z=z_knn,
-            color='DetailedResult',
-            color_discrete_map=color_map,
-            hover_data=['Fight'],
-            title="3D Scatter – Weighted KNN"
-        )
-        st.plotly_chart(fig_knn, use_container_width=True)
-    else:
-        st.warning("Not enough data for 3D KNN plot.")
+if len(three_d_features) >= 3:
+    col1k, col2k, col3k = st.columns(3)
+    with col1k:
+        x_knn = st.selectbox("X", three_d_features, index=three_d_features.index(st.session_state.x_knn) if st.session_state.x_knn in three_d_features else 0, key="knn_x")
+    with col2k:
+        y_knn = st.selectbox("Y", three_d_features, index=three_d_features.index(st.session_state.y_knn) if st.session_state.y_knn in three_d_features else min(1, len(three_d_features)-1), key="knn_y")
+    with col3k:
+        z_knn = st.selectbox("Z", three_d_features, index=three_d_features.index(st.session_state.z_knn) if st.session_state.z_knn in three_d_features else min(2, len(three_d_features)-1), key="knn_z")
 
-    # KNN combo builder (in-sample)
-    st.subheader("KNN 3‑Variable Combinations (Brier, In‑Sample)")
-    combo_candidates_knn = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
-    if not mi_df.empty:
-        top_features_knn = mi_df['Feature'].tolist()
-    else:
-        top_features_knn = combo_candidates_knn
-    num_top_knn = st.slider("Top features to test", 5, min(30, len(top_features_knn)), 10, key="knn_combo_top")
-    candidates_knn = top_features_knn[:num_top_knn]
-    candidates_knn = [c for c in candidates_knn if c != 'FighterOddsNum']
-    k_combo = st.slider("KNN neighbors (combo builder)", 1, 20, 5, key="knn_combo_k")
+    # If changed, retrain and update session_state
+    if (x_knn != st.session_state.x_knn or y_knn != st.session_state.y_knn or z_knn != st.session_state.z_knn):
+        st.session_state.x_knn = x_knn
+        st.session_state.y_knn = y_knn
+        st.session_state.z_knn = z_knn
+        # Also need K value from slider (defined below) – we'll get it after slider
+        # We'll retrain in the main block after slider is defined
 
-    data_fp_knn = hash(str(data.shape))
-    if "knn_combo_results" not in st.session_state:
-        st.session_state.knn_combo_results = None
-        st.session_state.knn_combo_hash = data_fp_knn
-    if st.session_state.knn_combo_hash != data_fp_knn:
-        st.session_state.knn_combo_results = None
-        st.session_state.knn_combo_hash = data_fp_knn
+    if x_knn and y_knn and z_knn:
+        plot_data_knn = data[[x_knn, y_knn, z_knn, 'DetailedResult', 'Fight']].copy()
+        plot_data_knn = plot_data_knn.loc[:, ~plot_data_knn.columns.duplicated()].dropna()
+        if len(plot_data_knn) >= 10:
+            fig_knn = px.scatter_3d(
+                plot_data_knn,
+                x=x_knn, y=y_knn, z=z_knn,
+                color='DetailedResult',
+                color_discrete_map=color_map,
+                hover_data=['Fight'],
+                title="3D Scatter – Weighted KNN"
+            )
+            st.plotly_chart(fig_knn, use_container_width=True)
+        else:
+            st.warning("Not enough data for 3D KNN plot.")
 
-    if len(candidates_knn) >= 3:
-        if st.button("Compute KNN 3‑Var Combos (In‑Sample)", key="knn_combo_btn"):
-            with st.spinner("Testing 3‑variable KNN combos (in‑sample)…"):
-                hist_combo = data[data['Win?'].isin(['Yes','No'])].copy()
-                hist_combo = hist_combo.loc[:, ~hist_combo.columns.duplicated()]
-                hist_combo['WinNum'] = (hist_combo['Win?'] == 'Yes').astype(int)
-                results = []
-                for combo in itertools.combinations(candidates_knn, 3):
-                    c1 = get_first_col(hist_combo, combo[0])
-                    c2 = get_first_col(hist_combo, combo[1])
-                    c3 = get_first_col(hist_combo, combo[2])
-                    y = hist_combo['WinNum'].values
-                    mask = ~(np.isnan(c1) | np.isnan(c2) | np.isnan(c3))
-                    if mask.sum() < 10 or np.unique(y[mask]).size < 2:
-                        continue
-                    X = np.column_stack([c1[mask], c2[mask], c3[mask]])
-                    y_clean = y[mask]
-                    try:
-                        scaler_combo = StandardScaler()
-                        X_scaled = scaler_combo.fit_transform(X)
-                        base_knn_cv = KNeighborsClassifier(n_neighbors=k_combo, weights='distance')
-                        calibrated = CalibratedClassifierCV(base_knn_cv, method='sigmoid', cv=5)
-                        calibrated.fit(X_scaled, y_clean)
-                        y_prob = calibrated.predict_proba(X_scaled)[:, 1]
-                        y_prob = np.clip(y_prob, 0.1, 0.9)
-                        bs = brier_score_loss(y_clean, y_prob)
-                        results.append({'Variables': ', '.join(combo), 'Brier (In‑Sample)': bs})
-                    except:
-                        pass
-                if results:
-                    st.session_state.knn_combo_results = pd.DataFrame(results).sort_values('Brier (In‑Sample)').head(20)
-                else:
-                    st.warning("Could not evaluate any combination.")
-        if st.session_state.knn_combo_results is not None:
-            st.write("**Top 20 3‑Variable Combinations (Brier, In‑Sample)**")
-            st.dataframe(st.session_state.knn_combo_results, use_container_width=True)
-    else:
-        st.warning("Not enough features to test (need at least 3).")
+        # KNN training with K slider
+        k_knn = st.slider("KNN neighbors", 1, 20, 5, key="knn_model_k")
+        # Retrain if K changed or features changed (check if model exists and matches current)
+        # For simplicity, retrain always when K changes, but we need to avoid infinite loop.
+        # We'll train if model is None or K changed.
+        # We'll store last K in session_state.
+        if 'last_knn_k' not in st.session_state:
+            st.session_state.last_knn_k = k_knn
+        if (st.session_state.calibrated_knn is None or 
+            st.session_state.last_knn_k != k_knn or
+            x_knn != st.session_state.x_knn or
+            y_knn != st.session_state.y_knn or
+            z_knn != st.session_state.z_knn):
+            train_knn_model(x_knn, y_knn, z_knn, k=k_knn)
+            st.session_state.last_knn_k = k_knn
+            # Update session state features already done above
+            st.experimental_rerun()
+
+        # Display KNN metrics if model exists
+        if st.session_state.calibrated_knn is not None:
+            # We can compute metrics on training data again, but we already have them from training
+            # For simplicity, just show info
+            st.write("KNN model trained with current settings.")
+        else:
+            st.info("KNN model not trained. Adjust K or features.")
+
+        # KNN combo builder (in-sample)
+        st.subheader("KNN 3‑Variable Combinations (Brier, In‑Sample)")
+        combo_candidates_knn = [c for c in numerical_features if c != 'FighterOddsNum' and c in data.columns and data[c].nunique(dropna=True) >= 2]
+        if not mi_df.empty:
+            top_features_knn = mi_df['Feature'].tolist()
+        else:
+            top_features_knn = combo_candidates_knn
+        num_top_knn = st.slider("Top features to test", 5, min(30, len(top_features_knn)), 10, key="knn_combo_top")
+        candidates_knn = top_features_knn[:num_top_knn]
+        candidates_knn = [c for c in candidates_knn if c != 'FighterOddsNum']
+        k_combo = st.slider("KNN neighbors (combo builder)", 1, 20, 5, key="knn_combo_k")
+
+        data_fp_knn = hash(str(data.shape))
+        if "knn_combo_results" not in st.session_state:
+            st.session_state.knn_combo_results = None
+            st.session_state.knn_combo_hash = data_fp_knn
+        if st.session_state.knn_combo_hash != data_fp_knn:
+            st.session_state.knn_combo_results = None
+            st.session_state.knn_combo_hash = data_fp_knn
+
+        if len(candidates_knn) >= 3:
+            if st.button("Compute KNN 3‑Var Combos (In‑Sample)", key="knn_combo_btn"):
+                with st.spinner("Testing 3‑variable KNN combos (in‑sample)…"):
+                    hist_combo = data[data['Win?'].isin(['Yes','No'])].copy()
+                    hist_combo = hist_combo.loc[:, ~hist_combo.columns.duplicated()]
+                    hist_combo['WinNum'] = (hist_combo['Win?'] == 'Yes').astype(int)
+                    results = []
+                    for combo in itertools.combinations(candidates_knn, 3):
+                        c1 = get_first_col(hist_combo, combo[0])
+                        c2 = get_first_col(hist_combo, combo[1])
+                        c3 = get_first_col(hist_combo, combo[2])
+                        y = hist_combo['WinNum'].values
+                        mask = ~(np.isnan(c1) | np.isnan(c2) | np.isnan(c3))
+                        if mask.sum() < 10 or np.unique(y[mask]).size < 2:
+                            continue
+                        X = np.column_stack([c1[mask], c2[mask], c3[mask]])
+                        y_clean = y[mask]
+                        try:
+                            scaler_combo = StandardScaler()
+                            X_scaled = scaler_combo.fit_transform(X)
+                            base_knn_cv = KNeighborsClassifier(n_neighbors=k_combo, weights='distance')
+                            calibrated = CalibratedClassifierCV(base_knn_cv, method='sigmoid', cv=5)
+                            calibrated.fit(X_scaled, y_clean)
+                            y_prob = calibrated.predict_proba(X_scaled)[:, 1]
+                            y_prob = np.clip(y_prob, 0.1, 0.9)
+                            bs = brier_score_loss(y_clean, y_prob)
+                            results.append({'Variables': ', '.join(combo), 'Brier (In‑Sample)': bs})
+                        except:
+                            pass
+                    if results:
+                        st.session_state.knn_combo_results = pd.DataFrame(results).sort_values('Brier (In‑Sample)').head(20)
+                    else:
+                        st.warning("Could not evaluate any combination.")
+            if st.session_state.knn_combo_results is not None:
+                st.write("**Top 20 3‑Variable Combinations (Brier, In‑Sample)**")
+                st.dataframe(st.session_state.knn_combo_results, use_container_width=True)
+        else:
+            st.warning("Not enough features to test (need at least 3).")
 else:
-    st.warning("KNN features not selected.")
+    st.warning("Not enough numerical features for a 3D plot (need at least 3).")
 
 # =========================================================================
 # LAST 20 FIGHTS
@@ -948,7 +950,7 @@ else:
         st.warning("No categorical features available after filtering.")
 
 # =========================================================================
-# SPIDER CHART (Fighter‑Side Filters + LR + KNN + Similarity)
+# SPIDER CHART (unchanged)
 # =========================================================================
 st.header("Fight Similarity & Comparison (Independent Filters)")
 st.subheader("Spider Chart Filters (fighter data only)")
@@ -995,7 +997,6 @@ if spider_title_fight != "All": mask &= spider_data['Title'] == spider_title_fig
 if spider_hometown != "All": mask &= spider_data['HometownFighter'] == spider_hometown
 if spider_event_country: mask &= spider_data['EventCountry'].isin(spider_event_country)
 if spider_new_wc: mask &= spider_data['IsNewWeightClass'] == True
-# Normalize title for spider
 spider_data['Prev1_Title_clean'] = normalize_title_col(spider_data.get('Prev1_Title', None))
 if spider_prev_title != "All":
     mask &= spider_data['Prev1_Title_clean'] == spider_prev_title.lower()
