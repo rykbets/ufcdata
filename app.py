@@ -18,17 +18,20 @@ from scipy.spatial.distance import cdist
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
-PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace with your Parquet ID from Colab
+# ============================================================
+# 🔑 ONLY THIS ID IS NEEDED – the Parquet must contain all columns
+# ============================================================
+PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace with your actual Parquet ID
 
+# ---------- Cached data loader ----------
 @st.cache_data
 def load_data():
     gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
     data = pd.read_parquet("data.parquet")
+    # Quick check for upcoming fights
     upcoming = data[data['Win?'].isna()]
-    st.sidebar.write(f"✅ Loaded {len(upcoming)} upcoming fight rows ({len(upcoming['FightID'].unique())} unique fights)")
-    if len(upcoming) != 2 * len(upcoming['FightID'].unique()):
-        st.error("❌ Duplicate upcoming fights detected! Re‑run the Colab script with deduplication.")
-        st.stop()
+    if len(upcoming) % 2 != 0:
+        st.warning(f"⚠️ Upcoming rows: {len(upcoming)} (should be even)")
     return data
 
 data = load_data()
@@ -134,9 +137,15 @@ with st.sidebar.expander("Previous Outcomes", expanded=False):
     opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career)
     opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career)
 
+# ---------- Rating Gap Analysis Filters ----------
 with st.sidebar.expander("Rating Gap Analysis", expanded=False):
-    rating_system = st.selectbox("Rating system", ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay','WeightedMasseyDecay'], key="gap_system")
-    gap_range = st.slider("Rating gap range", min_value=0.0, max_value=1.0, value=(0.0, 0.05), step=0.01, key="gap_range")
+    rating_system = st.selectbox("Rating system",
+                                 ['None','ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay','WeightedMasseyDecay'],
+                                 key="gap_system")
+    if rating_system != 'None':
+        gap_range = st.slider("Rating gap range",
+                              min_value=-1.0, max_value=1.0,
+                              value=(0.0, 0.05), step=0.01, key="gap_range")
 
 # ---------- Apply filters ----------
 filtered = data.copy()
@@ -151,7 +160,8 @@ if opp_hometown != "All": filtered = filtered[filtered['Opponent_Hometown'] == o
 if event_country: filtered = filtered[filtered['EventCountry'].isin(event_country)]
 if new_wc: filtered = filtered[filtered['IsNewWeightClass'] == True]
 if prev_title != "All": filtered = filtered[filtered['Prev1_Title'] == prev_title]
-if opp_prev_title != "All": filtered = filtered[filtered['Opponent_Prev1_Title'] == opp_prev_title]
+if opp_prev_title != "All" and 'Opponent_Prev1_Title' in filtered.columns:
+    filtered = filtered[filtered['Opponent_Prev1_Title'] == opp_prev_title]
 if prev1: filtered = filtered[filtered[prev1_col].isin(prev1)]
 if prev2: filtered = filtered[filtered[prev2_col].isin(prev2)]
 if prev3: filtered = filtered[filtered[prev3_col].isin(prev3)]
@@ -253,24 +263,28 @@ for result, col in zip(['Yes', 'No'], [col1, col2]):
 
 # ---------- Rating Gap Analysis ----------
 st.header("Rating Gap Analysis")
-diff_col = f'{rating_system}_Diff'
 
-if diff_col in data.columns:
-    gap_min, gap_max = gap_range
-    gap_fights = data[(data[diff_col] >= gap_min) & (data[diff_col] <= gap_max)]
-    total_gap = len(gap_fights)
-    wins_gap = (gap_fights['Win?'] == 'Yes').sum()
-    win_rate_gap = wins_gap / total_gap * 100 if total_gap > 0 else 0.0
+if rating_system != 'None':
+    diff_col = f'{rating_system}_Diff'
+    if diff_col in data.columns:
+        gap_min, gap_max = gap_range
+        gap_fights = data[(data[diff_col] >= gap_min) & (data[diff_col] <= gap_max)]
+        total_gap = len(gap_fights)
+        wins_gap = (gap_fights['Win?'] == 'Yes').sum()
+        win_rate_gap = wins_gap / total_gap * 100 if total_gap > 0 else 0.0
 
-    colg1, colg2, colg3 = st.columns(3)
-    with colg1:
-        st.metric("Fights in gap", total_gap)
-    with colg2:
-        st.metric("Wins", wins_gap)
-    with colg3:
-        st.metric("Win Rate", f"{win_rate_gap:.1f}%")
+        colg1, colg2, colg3 = st.columns(3)
+        with colg1:
+            st.metric("Fights in gap", total_gap)
+        with colg2:
+            st.metric("Wins", wins_gap)
+        with colg3:
+            st.metric("Win Rate", f"{win_rate_gap:.1f}%")
+        st.caption(f"*Gap = {rating_system} (Fighter − Opponent). Positive = fighter rated higher.*")
+    else:
+        st.warning(f"Rating system '{rating_system}' not available.")
 else:
-    st.warning(f"Rating system '{rating_system}' not available.")
+    st.info("Select a rating system above to analyse gaps.")
 
 # ---------- Matchup area ----------
 st.header("Upcoming Fight Matchup")
@@ -399,7 +413,7 @@ core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
         'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecay_Diff',
         'FighterMasseyOrig', 'OpponentMasseyOrig', 'MasseyOrig_Diff',
         'FighterMasseyDecay', 'OpponentMasseyDecay', 'MasseyDecay_Diff',
-        'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecay_Diff']   # NEW
+        'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecay_Diff']
 career_avg = [c for c in data.columns if c.startswith('CareerAvg_') and not c.startswith('Opponent_CareerAvg_')]
 opp_career_avg = [c for c in data.columns if c.startswith('Opponent_CareerAvg_')]
 diff_cols = [c for c in data.columns if c.endswith('_Diff')]
