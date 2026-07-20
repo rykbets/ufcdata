@@ -11,6 +11,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
 from sklearn.metrics import log_loss, brier_score_loss, mutual_info_score
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.model_selection import cross_val_predict
@@ -683,7 +684,7 @@ else:
     st.warning("Not enough numerical features for a 3D LR plot (need at least 3).")
 
 # =========================================================================
-# 3D KNN SCATTER & COMBO BUILDER (Cross-Validated Brier)
+# 3D KNN SCATTER & COMBO BUILDER (True Cross-Validated Brier with Pipeline)
 # =========================================================================
 st.header("3D Weighted KNN Win/Loss Prediction (Platt‑scaled) & Best KNN Combinations")
 
@@ -792,7 +793,7 @@ if len(three_d_features) >= 3:
         else:
             st.info("KNN model not trained. Check status above.")
 
-        # ---- KNN combo builder using all new_features (Cross-Validated) ----
+        # ---- KNN combo builder using all new_features (True Cross-Validated) ----
         st.subheader("KNN 3‑Variable Combinations (Cross‑Validated Brier)")
         combo_candidates_knn = [c for c in new_features if c != 'FighterOddsNum' and c in data.columns]
         if len(combo_candidates_knn) < 3:
@@ -818,12 +819,13 @@ if len(three_d_features) >= 3:
 
             if len(candidates_knn) >= 3:
                 if st.button("Compute KNN 3‑Var Combos (Cross‑Validated)", key="knn_combo_btn"):
-                    with st.spinner("Computing cross‑validated Brier (5‑fold) for KNN..."):
+                    with st.spinner("Computing cross‑validated Brier (5‑fold) for KNN with pipeline..."):
                         hist_combo = data[data['Win?'].isin(['Yes','No'])].copy()
                         hist_combo = hist_combo.loc[:, ~hist_combo.columns.duplicated()]
                         hist_combo['WinNum'] = (hist_combo['Win?'] == 'Yes').astype(int)
                         results = []
                         for combo in itertools.combinations(candidates_knn, 3):
+                            # Extract the three features
                             c1 = get_first_col(hist_combo, combo[0])
                             c2 = get_first_col(hist_combo, combo[1])
                             c3 = get_first_col(hist_combo, combo[2])
@@ -834,14 +836,17 @@ if len(three_d_features) >= 3:
                             X = np.column_stack([c1[mask], c2[mask], c3[mask]])
                             y_clean = y[mask]
                             try:
-                                scaler_combo = StandardScaler()
-                                X_scaled = scaler_combo.fit_transform(X)
-                                knn = KNeighborsClassifier(n_neighbors=k_combo, weights='distance')
-                                y_prob = cross_val_predict(knn, X_scaled, y_clean, cv=5, method='predict_proba')[:, 1]
+                                # Create a pipeline with StandardScaler and KNN
+                                pipeline = Pipeline([
+                                    ('scaler', StandardScaler()),
+                                    ('knn', KNeighborsClassifier(n_neighbors=k_combo, weights='distance'))
+                                ])
+                                # Cross-validated predictions – scaling done per fold!
+                                y_prob = cross_val_predict(pipeline, X, y_clean, cv=5, method='predict_proba')[:, 1]
                                 y_prob = np.clip(y_prob, 0.1, 0.9)
                                 bs = brier_score_loss(y_clean, y_prob)
                                 results.append({'Variables': ', '.join(combo), 'CV Brier': bs})
-                            except:
+                            except Exception as e:
                                 pass
                         if results:
                             st.session_state.knn_combo_results = pd.DataFrame(results).sort_values('CV Brier').head(20)
