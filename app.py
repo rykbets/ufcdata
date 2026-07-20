@@ -1,4 +1,4 @@
-import streamlit as stimport streamlit as st
+import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -175,7 +175,7 @@ with st.sidebar.expander("Rating Gap Analysis", expanded=False):
         else:
             gap_filters[sys] = (False, None)
 
-# ---------- Apply filters (row-wise, as intended) ----------
+# ---------- Apply filters (row-wise) ----------
 filtered = data.copy()
 
 if wc: filtered = filtered[filtered['WC'].isin(wc)]
@@ -188,7 +188,7 @@ if opp_hometown != "All": filtered = filtered[filtered['Opponent_Hometown'] == o
 if event_country: filtered = filtered[filtered['EventCountry'].isin(event_country)]
 if new_wc: filtered = filtered[filtered['IsNewWeightClass'] == True]
 
-# Title filters (row-wise, as intended)
+# Title filters (row-wise)
 filtered['Prev1_Title_clean'] = normalize_title_col(filtered.get('Prev1_Title', None))
 if prev_title != "All":
     filtered = filtered[filtered['Prev1_Title_clean'] == prev_title.lower()]
@@ -249,15 +249,12 @@ for sys, (enabled, gap_range) in gap_filters.items():
             gap_min, gap_max = gap_range
             filtered = filtered[(filtered[diff_col] >= gap_min) & (filtered[diff_col] <= gap_max)]
 
-# Keep this as the working dataset
+# Keep this as the working dataset for model training and analysis
 data = filtered
 
-# ----- For the matchup section, get both fighters from original_data -----
-# Get the FightIDs that survived the filter (unique)
+# For matchup display, get both fighters from original_data for the surviving FightIDs
 surviving_fight_ids = data['FightID'].unique()
-# Pull both rows from original_data for these FightIDs
 matchup_data = original_data[original_data['FightID'].isin(surviving_fight_ids)]
-# This guarantees 2 rows per fight for display
 
 # =========================================================================
 # COMMON DEFINITIONS
@@ -565,7 +562,6 @@ if not upcoming_display.empty:
     selected_fight = st.selectbox("Choose an upcoming fight", upcoming_fight_ids)
     if selected_fight:
         fight_rows = upcoming_display[upcoming_display['FightID'] == selected_fight]
-        # This should now always have 2 rows
         if len(fight_rows) == 2:
             f1_row = fight_rows.iloc[0]
             f2_row = fight_rows.iloc[1]
