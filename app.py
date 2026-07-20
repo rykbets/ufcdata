@@ -555,42 +555,29 @@ if len(three_d_features) >= 3:
             # ----- LR Win Probability Estimate (guaranteed to appear) -----
             st.subheader("LR Win Probability Estimate")
             upcoming_lr = data[data['Win?'].isna() | (data['Win?'] == '')]
-            st.write(f"Upcoming count: {len(upcoming_lr)}")
             if not upcoming_lr.empty:
-                st.write("### BEFORE SELECTBOX")
                 up_ids = sorted(upcoming_lr['FightID'].unique())
-                # Try a radio button instead (always renders)
                 chosen_id = st.radio("Select upcoming fight", up_ids, key="lr_radio")
-                st.write("### AFTER SELECTBOX")
-                if chosen_id:
-                    ... (rest of probability logic)
-            else:
-                st.write("No upcoming fights.")
                 if chosen_id:
                     up_rows = upcoming_lr[upcoming_lr['FightID'] == chosen_id]
                     if len(up_rows) == 2:
                         fighter_row = up_rows.iloc[0]
-
                         def safe_val(col):
                             try:
                                 val = fighter_row[col]
                                 return val if pd.notna(val) else train_means[col]
                             except:
                                 return train_means[col]
-
                         v1 = safe_val(x_lr)
                         v2 = safe_val(y_lr)
                         v3 = safe_val(z_lr)
-
                         up_arr = np.array([[v1, v2, v3]])
                         prob_lr = lr_model.predict_proba(up_arr)[0, 1]
-
                         if recent_count > 0:
                             shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
                         else:
                             shrunk_recent = overall_wr
                         shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
-
                         col_p1, col_p2 = st.columns(2)
                         with col_p1:
                             st.metric("LR win prob", f"{prob_lr:.1%}")
