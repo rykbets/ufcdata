@@ -23,7 +23,7 @@ st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 # ============================================================
 # 🔑 YOUR GOOGLE DRIVE FILE IDS – replace with your actual IDs
 # ============================================================
-PARQUET_FILE_ID = "YOUR_PARQUET_FILE_ID"   # ← all_fights.parquet ID
+PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← all_fights.parquet ID
 
 # ---------- Cached data loader – instant ----------
 @st.cache_data
