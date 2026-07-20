@@ -536,7 +536,7 @@ else:
     st.write("No upcoming fights match the current filters.")
 
 # =========================================================================
-# 3D LR SCATTER & COMBO BUILDER (Cross-Validated OOS)
+# 3D LR SCATTER & COMBO BUILDER (Cross-Validated Brier)
 # =========================================================================
 st.header("3D LR Win/Loss Prediction & Best LR Combinations")
 
@@ -619,8 +619,8 @@ if len(three_d_features) >= 3:
         else:
             st.info("LR model not trained.")
 
-        # ---- LR combo builder using all new_features ----
-        st.subheader("LR 3‑Variable Combinations (Cross-Validated Brier)")
+        # ---- LR combo builder using all new_features (Cross-Validated) ----
+        st.subheader("LR 3‑Variable Combinations (Cross‑Validated Brier)")
         combo_candidates = [c for c in new_features if c != 'FighterOddsNum' and c in data.columns]
         if len(combo_candidates) < 3:
             st.warning("Not enough features to test (need at least 3).")
@@ -652,8 +652,8 @@ if len(three_d_features) >= 3:
                 st.session_state.lr_combo_hash = data_fp
 
             if len(candidates) >= 3:
-                if st.button("Compute LR 3‑Var Combos (Cross-Validated)", key="lr_combo_btn"):
-                    with st.spinner("Computing cross‑validated Brier for all combinations..."):
+                if st.button("Compute LR 3‑Var Combos (Cross‑Validated)", key="lr_combo_btn"):
+                    with st.spinner("Computing cross‑validated Brier (5‑fold)..."):
                         hist = data[data['Win?'].isin(['Yes','No'])].copy()
                         hist['WinNum'] = (hist['Win?'] == 'Yes').astype(int)
                         results = []
@@ -665,7 +665,6 @@ if len(three_d_features) >= 3:
                             y = sub['WinNum'].values
                             try:
                                 lr = LogisticRegression(max_iter=1000)
-                                # Cross-validated predictions (out-of-sample)
                                 y_prob = cross_val_predict(lr, X, y, cv=5, method='predict_proba')[:, 1]
                                 bs = brier_score_loss(y, y_prob)
                                 results.append({'Variables': ', '.join(combo), 'CV Brier': bs})
@@ -676,7 +675,7 @@ if len(three_d_features) >= 3:
                         else:
                             st.warning("Could not evaluate any combination.")
                 if st.session_state.lr_combo_results is not None:
-                    st.write("**Top 20 3‑Variable Combinations (Cross-Validated Brier)**")
+                    st.write("**Top 20 3‑Variable Combinations (Cross‑Validated Brier)**")
                     st.dataframe(st.session_state.lr_combo_results, use_container_width=True)
             else:
                 st.warning("Not enough features to test (need at least 3).")
@@ -684,7 +683,7 @@ else:
     st.warning("Not enough numerical features for a 3D LR plot (need at least 3).")
 
 # =========================================================================
-# 3D KNN SCATTER & COMBO BUILDER (Cross-Validated OOS)
+# 3D KNN SCATTER & COMBO BUILDER (Cross-Validated Brier)
 # =========================================================================
 st.header("3D Weighted KNN Win/Loss Prediction (Platt‑scaled) & Best KNN Combinations")
 
@@ -793,8 +792,8 @@ if len(three_d_features) >= 3:
         else:
             st.info("KNN model not trained. Check status above.")
 
-        # ---- KNN combo builder using all new_features ----
-        st.subheader("KNN 3‑Variable Combinations (Cross-Validated Brier)")
+        # ---- KNN combo builder using all new_features (Cross-Validated) ----
+        st.subheader("KNN 3‑Variable Combinations (Cross‑Validated Brier)")
         combo_candidates_knn = [c for c in new_features if c != 'FighterOddsNum' and c in data.columns]
         if len(combo_candidates_knn) < 3:
             st.warning("Not enough features to test (need at least 3).")
@@ -818,8 +817,8 @@ if len(three_d_features) >= 3:
                 st.session_state.knn_combo_hash = data_fp_knn
 
             if len(candidates_knn) >= 3:
-                if st.button("Compute KNN 3‑Var Combos (Cross-Validated)", key="knn_combo_btn"):
-                    with st.spinner("Computing cross‑validated Brier for all KNN combinations..."):
+                if st.button("Compute KNN 3‑Var Combos (Cross‑Validated)", key="knn_combo_btn"):
+                    with st.spinner("Computing cross‑validated Brier (5‑fold) for KNN..."):
                         hist_combo = data[data['Win?'].isin(['Yes','No'])].copy()
                         hist_combo = hist_combo.loc[:, ~hist_combo.columns.duplicated()]
                         hist_combo['WinNum'] = (hist_combo['Win?'] == 'Yes').astype(int)
@@ -837,13 +836,6 @@ if len(three_d_features) >= 3:
                             try:
                                 scaler_combo = StandardScaler()
                                 X_scaled = scaler_combo.fit_transform(X)
-                                # Use cross_val_predict with Platt scaling? 
-                                # For KNN we can use a pipeline with StandardScaler and KNeighborsClassifier
-                                # But cross_val_predict with a pipeline is tricky; we'll do a manual cross-validation loop.
-                                # Simpler: use cross_val_predict with the base KNN and then calibrate inside? That would be overkill.
-                                # Instead, we can use cross_val_predict with a KNeighborsClassifier (uncalibrated) but we want Platt scaling.
-                                # For OOS, we can simply use cross_val_predict on the base KNN and compute Brier; it's still OOS.
-                                from sklearn.model_selection import cross_val_predict
                                 knn = KNeighborsClassifier(n_neighbors=k_combo, weights='distance')
                                 y_prob = cross_val_predict(knn, X_scaled, y_clean, cv=5, method='predict_proba')[:, 1]
                                 y_prob = np.clip(y_prob, 0.1, 0.9)
@@ -856,7 +848,7 @@ if len(three_d_features) >= 3:
                         else:
                             st.warning("Could not evaluate any combination.")
                 if st.session_state.knn_combo_results is not None:
-                    st.write("**Top 20 3‑Variable Combinations (Cross-Validated Brier)**")
+                    st.write("**Top 20 3‑Variable Combinations (Cross‑Validated Brier)**")
                     st.dataframe(st.session_state.knn_combo_results, use_container_width=True)
             else:
                 st.warning("Not enough features to test (need at least 3).")
