@@ -19,9 +19,9 @@ from scipy.spatial.distance import cdist
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
 # ============================================================
-# 🔑 YOUR PARQUET FILE ID
+# 🔑 YOUR PARQUET FILE ID – replace with your actual ID
 # ============================================================
-PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace with your actual Parquet ID
+PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace here
 
 @st.cache_data
 def load_data():
@@ -220,8 +220,20 @@ if not data['PrevFighterOddsNum'].isna().all() and prev_odds != (0,0):
     filtered = filtered.dropna(subset=['PrevFighterOddsNum'])
     filtered = filtered[(filtered['PrevFighterOddsNum'] >= prev_odds[0]) & (filtered['PrevFighterOddsNum'] <= prev_odds[1])]
 
-# This is the main dataset – gap filters are NOT applied to it
+# Main dataset – gap filters are NOT applied to it
 data = filtered
+
+# Pre‑compute train_means for imputation (used in probabilities)
+train_means = {col: data[col].mean() for col in numerical_features if col in data.columns} if 'numerical_features' in dir() else {}
+
+# Helper function for KNN (define globally)
+def get_first_col(df, col_name):
+    if col_name not in df.columns:
+        return np.full(len(df), np.nan)
+    sub = df[col_name]
+    if isinstance(sub, pd.DataFrame):
+        return sub.iloc[:, 0].to_numpy(dtype=np.float64, na_value=np.nan)
+    return pd.to_numeric(sub, errors='coerce').to_numpy(dtype=np.float64)
 
 # ---------- Dashboard ----------
 st.title("UFC Pre‑Fight Performance Dashboard")
@@ -407,6 +419,54 @@ if not upcoming_data_unfiltered.empty:
                 show_fighter_stats(f1_row, f1_row['Fighter'])
             with colB:
                 show_fighter_stats(f2_row, f2_row['Fighter'])
+
+            # ----- Model Probabilities (directly inside matchup) -----
+            if lr_model is not None or (calibrated_knn is not None and scaler is not None):
+                st.subheader("Model Win Probabilities for " + f1_row['Fighter'])
+                if lr_model is not None:
+                    def safe_val(row, col):
+                        try:
+                            val = row[col]
+                            return val if pd.notna(val) else train_means.get(col, 0)
+                        except:
+                            return train_means.get(col, 0)
+                    v1 = safe_val(f1_row, x_lr)
+                    v2 = safe_val(f1_row, y_lr)
+                    v3 = safe_val(f1_row, z_lr)
+                    try:
+                        prob_lr = lr_model.predict_proba(np.array([[v1, v2, v3]]))[0, 1]
+                        if recent_count > 0:
+                            shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
+                        else:
+                            shrunk_recent = overall_wr
+                        shrunk_lr = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
+                        st.write(f"**LR win probability:** {prob_lr:.1%}  |  **shrunken:** {shrunk_lr:.1%}")
+                    except Exception as e:
+                        st.error(f"LR error: {e}")
+
+                if calibrated_knn is not None and scaler is not None:
+                    means_knn = X_train.mean(axis=0) if X_train is not None else np.zeros(3)
+                    vals_knn = []
+                    for i, col_name in enumerate([x_knn, y_knn, z_knn]):
+                        raw = get_first_col(pd.DataFrame(f1_row).T, col_name)[0]
+                        try:
+                            v = float(raw) if pd.notna(raw) else means_knn[i]
+                        except:
+                            v = means_knn[i]
+                        vals_knn.append(v)
+                    try:
+                        up_arr = np.array([vals_knn], dtype=np.float64)
+                        up_scaled = scaler.transform(up_arr)
+                        prob_knn = calibrated_knn.predict_proba(up_scaled)[0, 1]
+                        prob_knn = np.clip(prob_knn, 0.1, 0.9)
+                        if recent_count > 0:
+                            shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
+                        else:
+                            shrunk_recent = overall_wr
+                        shrunk_knn = (prior_weight * (shrunk_recent / 100) + prob_knn) / (prior_weight + 1)
+                        st.write(f"**KNN win probability:** {prob_knn:.1%}  |  **shrunken:** {shrunk_knn:.1%}")
+                    except Exception as e:
+                        st.error(f"KNN error: {e}")
 else:
     st.write("No upcoming fights in the dataset.")
 
@@ -513,9 +573,14 @@ if len(three_d_features) >= 3:
         hist_base = hist_base.loc[:, ~hist_base.columns.duplicated()]
         hist_lr = hist_base[[x_lr, y_lr, z_lr, 'Win?']].dropna()
 
-        if len(hist_lr) < 10 or hist_lr['Win?'].nunique() < 2:
-            st.warning("Not enough historical data for LR model.")
-        else:
+        lr_model = None
+        ll_lr = None
+        bs_lr = None
+        overall_wr = 0.0
+        recent_wr = 0.0
+        recent_count = 0
+
+        if len(hist_lr) >= 10 and hist_lr['Win?'].nunique() >= 2:
             hist_lr['target'] = (hist_lr['Win?'] == 'Yes').astype(int)
             X_lr = hist_lr[[x_lr, y_lr, z_lr]].values
             y_lr_target = hist_lr['target'].values
@@ -532,9 +597,6 @@ if len(three_d_features) >= 3:
                 recent = full_hist.tail(recent_window)
                 recent_wr = (recent['Win?'] == 'Yes').mean() * 100 if len(recent) > 0 else 0.0
                 recent_count = len(recent)
-            else:
-                overall_wr = recent_wr = 0.0
-                recent_count = 0
 
             col_m1, col_m2, col_m3 = st.columns(3)
             with col_m1:
@@ -544,53 +606,10 @@ if len(three_d_features) >= 3:
             with col_m3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
+        else:
+            st.warning("Not enough historical data to train LR model. Scatterplot probabilities will not be shown.")
 
-            train_means = {}
-            for col2 in (x_lr, y_lr, z_lr):
-                if col2 in hist_base.columns:
-                    train_means[col2] = hist_base[col2].mean()
-                else:
-                    train_means[col2] = 0
-
-            # ----- LR Win Probability Estimate (guaranteed to appear) -----
-            st.subheader("LR Win Probability Estimate")
-            
-            # Re‑use the upcoming fight already selected in the match‑up area
-            if selected_fight and lr_model is not None:
-                # Get the rows for the selected fight from the filtered `data`
-                fight_rows = data[data['FightID'] == selected_fight]
-                if len(fight_rows) == 2:
-                    fighter_row = fight_rows.iloc[0]
-            
-                    def safe_val(col):
-                        try:
-                            val = fighter_row[col]
-                            return val if pd.notna(val) else train_means.get(col, 0)
-                        except:
-                            return train_means.get(col, 0)
-            
-                    v1 = safe_val(x_lr)
-                    v2 = safe_val(y_lr)
-                    v3 = safe_val(z_lr)
-            
-                    try:
-                        prob = lr_model.predict_proba(np.array([[v1, v2, v3]]))[0, 1]
-            
-                        if recent_count > 0:
-                            shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
-                        else:
-                            shrunk_recent = overall_wr
-                        shrunk = (prior_weight * (shrunk_recent / 100) + prob) / (prior_weight + 1)
-            
-                        st.markdown(f"**LR win probability:** {prob:.1%}  \n**LR shrunken:** {shrunk:.1%}")
-                    except Exception as e:
-                        st.error(f"Calculation error: {e}")
-                else:
-                    st.warning("Selected fight does not have both fighters in the current filtered data.")
-            elif selected_fight and lr_model is None:
-                st.warning("LR model not trained.")
-            else:
-                st.write("No upcoming fight selected in the match‑up panel.")
+        # No separate probability selectors – probabilities are now in the matchup area.
 
     # --- LR 3‑Variable Combination Builder (Brier) ---
     st.subheader("LR 3‑Variable Combinations (Brier)")
@@ -691,13 +710,6 @@ if len(three_d_features) >= 3:
 
         hist_knn = data[data['Win?'].isin(['Yes','No'])].copy()
         hist_knn = hist_knn.loc[:, ~hist_knn.columns.duplicated()]
-        def get_first_col(df, col_name):
-            if col_name not in df.columns:
-                return np.full(len(df), np.nan)
-            sub = df[col_name]
-            if isinstance(sub, pd.DataFrame):
-                return sub.iloc[:, 0].to_numpy(dtype=np.float64, na_value=np.nan)
-            return pd.to_numeric(sub, errors='coerce').to_numpy(dtype=np.float64)
 
         c1 = get_first_col(hist_knn, x_knn)
         c2 = get_first_col(hist_knn, y_knn)
@@ -709,9 +721,17 @@ if len(three_d_features) >= 3:
             win_vals = win_col.values
 
         train_df = pd.DataFrame({'f1': c1, 'f2': c2, 'f3': c3, 'Win?': win_vals}).dropna()
-        if len(train_df) < 10 or train_df['Win?'].nunique() < 2:
-            st.warning("Not enough training data for KNN model.")
-        else:
+
+        calibrated_knn = None
+        scaler = None
+        X_train = None
+        ll_knn = None
+        bs_knn = None
+        overall_wr = 0.0
+        recent_wr = 0.0
+        recent_count = 0
+
+        if len(train_df) >= 10 and train_df['Win?'].nunique() >= 2:
             X_train = train_df[['f1','f2','f3']].values.astype(np.float64)
             y_train = (train_df['Win?'] == 'Yes').astype(int).values
 
@@ -742,67 +762,10 @@ if len(three_d_features) >= 3:
             with col_m3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
+        else:
+            st.warning("Not enough training data for KNN model. Probabilities will not be shown.")
 
-            # ----- KNN Win Probability Estimate (guaranteed to appear) -----
-            st.subheader("KNN Win Probability Estimate")
-            
-            # Apply gap filters to a temporary copy (same as LR)
-            temp_data = data.copy()
-            for sys, (enabled, gap_range) in gap_filters.items():
-                if enabled:
-                    diff_col = f'{sys}_Diff'
-                    if diff_col in temp_data.columns:
-                        gap_min, gap_max = gap_range
-                        mask = (
-                            ((temp_data[diff_col] >= gap_min) & (temp_data[diff_col] <= gap_max))
-                            | (temp_data['Win?'].isna() | (temp_data['Win?'] == ''))
-                        )
-                        temp_data = temp_data[mask]
-            
-            upcoming_knn = temp_data[temp_data['Win?'].isna() | (temp_data['Win?'] == '')]
-            fight_counts = upcoming_knn.groupby('FightID').size()
-            valid_ids = fight_counts[fight_counts == 2].index
-            upcoming_knn = upcoming_knn[upcoming_knn['FightID'].isin(valid_ids)]
-            
-            if not upcoming_knn.empty:
-                up_ids = sorted(upcoming_knn['FightID'].unique())
-                chosen_id = st.radio("Select upcoming fight", up_ids, key="knn_radio")
-                if chosen_id:
-                    up_rows = upcoming_knn[upcoming_knn['FightID'] == chosen_id]
-                    if len(up_rows) == 2:
-                        fighter_row = up_rows.iloc[0]
-                        means = X_train.mean(axis=0)
-                        vals = []
-                        for i, col_name in enumerate([x_knn, y_knn, z_knn]):
-                            raw = get_first_col(pd.DataFrame(fighter_row).T, col_name)[0]
-                            try:
-                                v = float(raw) if pd.notna(raw) else means[i]
-                            except:
-                                v = means[i]
-                            vals.append(v)
-            
-                        try:
-                            up_arr = np.array([vals], dtype=np.float64)
-                            up_scaled = scaler.transform(up_arr)
-                            prob_knn = calibrated_knn.predict_proba(up_scaled)[0, 1]
-                            prob_knn = np.clip(prob_knn, 0.1, 0.9)
-            
-                            if recent_count > 0:
-                                shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
-                            else:
-                                shrunk_recent = overall_wr
-                            shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_knn) / (prior_weight + 1)
-            
-                            col_p1, col_p2 = st.columns(2)
-                            with col_p1:
-                                st.metric("KNN win prob", f"{prob_knn:.1%}")
-                            with col_p2:
-                                st.metric("KNN shrunken", f"{shrunk_prob:.1%}")
-                        except Exception as e:
-                            st.error(f"Error computing KNN probability: {e}")
-                            st.write(f"Feature values: {vals}")
-            else:
-                st.write("No upcoming fights available after applying gap filters.")
+        # No separate probability selectors – probabilities are now in the matchup area.
 
     # --- KNN 3‑Variable Combination Builder (IN‑SAMPLE) ---
     st.subheader("KNN 3‑Variable Combinations (Brier, In‑Sample)")
