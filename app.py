@@ -20,14 +20,13 @@ import os
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard (Adjusted)", layout="wide")
 
 # ============================================================
-# Load data: try local Parquet first, then fallback to Drive
+# Load data
 # ============================================================
 @st.cache_data
 def load_data():
     if os.path.exists("all_fights_adjperf.parquet"):
         return pd.read_parquet("all_fights_adjperf.parquet")
-    # Otherwise try Drive download (you need to set your file ID)
-    PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"   # replace with your actual ID
+    PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"
     gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
     return pd.read_parquet("data.parquet")
 
@@ -59,8 +58,8 @@ def normalize_title_col(series):
         return pd.Series('', index=series.index)
     return series.astype(str).str.strip().str.lower()
 
-# ---------- Define available features – include ALL adjperf columns (deduplicated) ----------
-adjperf_cols = [c for c in data.columns if c.startswith('adjperf_')]
+# ---------- Define features – only adjperf diffs for models ----------
+adjperf_diff_cols = [c for c in data.columns if c.endswith('_diff') and c.startswith('adjperf_')]
 base_cols = ['Age', 'AgeDiff', 'HeightDiff', 'ReachDiff',
              'DaysSincePrev', 'DaysSincePrev_diff', 'Avg3DaysGap_diff',
              'FightNumber', 'FightNumber_diff',
@@ -70,20 +69,13 @@ base_cols = ['Age', 'AgeDiff', 'HeightDiff', 'ReachDiff',
              'FighterMasseyDecay', 'OpponentMasseyDecay', 'MasseyDecayDiff',
              'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecayDiff']
 
-# Build new_features with deduplication
 new_features = []
 for col in base_cols:
     if col in data.columns:
         new_features.append(col)
-for col in adjperf_cols:
+for col in adjperf_diff_cols:
     if col in data.columns:
-        new_features.append(col)                 # fighter adjperf
-    opp_col = f'Opponent_{col}'
-    if opp_col in data.columns:
-        new_features.append(opp_col)
-    diff_col = f'{col}_diff'
-    if diff_col in data.columns:
-        new_features.append(diff_col)
+        new_features.append(col)
 
 # Remove duplicates while preserving order
 seen = set()
@@ -427,7 +419,7 @@ if cols_to_show:
                     st.write(f"**{feat}:** {subset[feat].mean():.2f}")
 
 # =========================================================================
-# UPCOMING FIGHT MATCHUP (removed duplicate adjperf diff table)
+# UPCOMING FIGHT MATCHUP (no adjperf table)
 # =========================================================================
 st.header("Upcoming Fight Matchup")
 
@@ -464,7 +456,6 @@ if not upcoming_display.empty:
                     if col in row:
                         st.write(f"**{col}:** {row[col]:.2f}" if isinstance(row[col], (int, float)) else f"**{col}:** {row[col]}")
                 st.write("---")
-                # No adjperf table here – they are only for model variables
 
             colA, colB = st.columns(2)
             with colA:
@@ -544,7 +535,7 @@ else:
     st.write("No upcoming fights match the current filters.")
 
 # =========================================================================
-# 3D LR SCATTER & COMBO BUILDER (with feature name consistency)
+# 3D LR SCATTER & COMBO BUILDER
 # =========================================================================
 st.header("3D LR Win/Loss Prediction & Best LR Combinations")
 
@@ -635,7 +626,7 @@ if len(three_d_features) >= 3:
         def numerical_importance(_data, features):
             hist = _data[_data['Win?'].isin(['Yes','No'])].copy()
             hist['Target'] = (hist['Win?'] == 'Yes').astype(int)
-            features = list(dict.fromkeys(features))  # deduplicate
+            features = list(dict.fromkeys(features))
             X = hist[features].dropna()
             y = hist.loc[X.index, 'Target']
             if len(X) > 10:
@@ -689,7 +680,7 @@ else:
     st.warning("Not enough numerical features for a 3D LR plot (need at least 3).")
 
 # =========================================================================
-# 3D KNN SCATTER & COMBO BUILDER (with feature name consistency)
+# 3D KNN SCATTER & COMBO BUILDER
 # =========================================================================
 st.header("3D Weighted KNN Win/Loss Prediction (Platt‑scaled) & Best KNN Combinations")
 
