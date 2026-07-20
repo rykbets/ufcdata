@@ -96,7 +96,7 @@ exclude_combo = [
 combo_candidates = [c for c in new_features if c not in exclude_combo]
 
 # =========================================================================
-# INITIALIZE SESSION STATE (must be done before any usage)
+# INITIALIZE SESSION STATE
 # =========================================================================
 if 'lr_model' not in st.session_state:
     st.session_state.lr_model = None
@@ -267,111 +267,81 @@ opp_prev_title = st.sidebar.selectbox("Opp Prev Fight Was Title?", ["All", "Yes"
 new_wc = st.sidebar.checkbox("New Weight Class") if 'IsNewWeightClass' in data.columns else False
 
 # =========================================================================
-# APPLY FILTERS (in order, with debug counts)
+# APPLY FILTERS
 # =========================================================================
 filtered = data.copy()
-st.sidebar.write(f"**Initial rows:** {len(filtered)}")
 
 # General
 if wc and 'WC' in filtered.columns:
     filtered = filtered[filtered['WC'].isin(wc)]
-    st.sidebar.write(f"After WC: {len(filtered)}")
 if stance and 'Stance' in filtered.columns:
     filtered = filtered[filtered['Stance'].isin(stance)]
-    st.sidebar.write(f"After Stance: {len(filtered)}")
 if country and 'Country' in filtered.columns:
     filtered = filtered[filtered['Country'].isin(country)]
-    st.sidebar.write(f"After Country: {len(filtered)}")
 if sched_rounds and 'ScheduledRounds' in filtered.columns:
     filtered = filtered[filtered['ScheduledRounds'].isin(sched_rounds)]
-    st.sidebar.write(f"After Sched Rounds: {len(filtered)}")
 if title_fight != "All" and 'Title' in filtered.columns:
     filtered = filtered[filtered['Title'] == title_fight]
-    st.sidebar.write(f"After Title Fight: {len(filtered)}")
 if hometown != "All" and 'HometownFighter' in filtered.columns:
     filtered = filtered[filtered['HometownFighter'] == hometown]
-    st.sidebar.write(f"After Hometown: {len(filtered)}")
 if opp_hometown != "All" and 'Opponent_Hometown' in filtered.columns:
     filtered = filtered[filtered['Opponent_Hometown'] == opp_hometown]
-    st.sidebar.write(f"After Opp Hometown: {len(filtered)}")
 if event_country and 'EventCountry' in filtered.columns:
     filtered = filtered[filtered['EventCountry'].isin(event_country)]
-    st.sidebar.write(f"After Event Country: {len(filtered)}")
 if new_wc and 'IsNewWeightClass' in filtered.columns:
     filtered = filtered[filtered['IsNewWeightClass'] == True]
-    st.sidebar.write(f"After New WC: {len(filtered)}")
 
-# Title filters (Prev Title, Opp Prev Title)
+# Title filters
 if 'Prev1_Title' in filtered.columns:
     filtered['Prev1_Title_clean'] = normalize_title_col(filtered['Prev1_Title'])
     if prev_title != "All":
         filtered = filtered[filtered['Prev1_Title_clean'] == prev_title.lower()]
-        st.sidebar.write(f"After Prev Title: {len(filtered)}")
 if 'Opponent_Prev1_Title' in filtered.columns:
     filtered['Opp_Prev1_Title_clean'] = normalize_title_col(filtered['Opponent_Prev1_Title'])
     if opp_prev_title != "All":
         filtered = filtered[filtered['Opp_Prev1_Title_clean'] == opp_prev_title.lower()]
-        st.sidebar.write(f"After Opp Prev Title: {len(filtered)}")
 
 # Fight numbers
 if 'FightNumber' in filtered.columns:
     filtered = filtered[(filtered['FightNumber'] >= fn_min) & (filtered['FightNumber'] <= fn_max)]
-    st.sidebar.write(f"After Fight #: {len(filtered)}")
 if 'Opponent_FightNumber' in filtered.columns:
     filtered = filtered[(filtered['Opponent_FightNumber'] >= ofn_min) & (filtered['Opponent_FightNumber'] <= ofn_max)]
-    st.sidebar.write(f"After Opp Fight #: {len(filtered)}")
 
 # Physical, days, odds
 if 'Age' in filtered.columns:
     filtered = filtered[(filtered['Age'] >= age[0]) & (filtered['Age'] <= age[1])]
-    st.sidebar.write(f"After Age: {len(filtered)}")
 if 'AgeDiff' in filtered.columns:
     filtered = filtered[(filtered['AgeDiff'] >= age_diff[0]) & (filtered['AgeDiff'] <= age_diff[1])]
-    st.sidebar.write(f"After Age Diff: {len(filtered)}")
 if 'HeightDiff' in filtered.columns:
     filtered = filtered[(filtered['HeightDiff'] >= height_diff[0]) & (filtered['HeightDiff'] <= height_diff[1])]
-    st.sidebar.write(f"After Height Diff: {len(filtered)}")
 if 'ReachDiff' in filtered.columns:
     filtered = filtered[(filtered['ReachDiff'] >= reach_diff[0]) & (filtered['ReachDiff'] <= reach_diff[1])]
-    st.sidebar.write(f"After Reach Diff: {len(filtered)}")
 if 'DaysSincePrev' in filtered.columns:
     filtered = filtered[(filtered['DaysSincePrev'] >= days[0]) & (filtered['DaysSincePrev'] <= days[1])]
-    st.sidebar.write(f"After Days Since Prev: {len(filtered)}")
 if 'DaysSincePrev_diff' in filtered.columns:
     filtered = filtered[(filtered['DaysSincePrev_diff'] >= days_diff[0]) & (filtered['DaysSincePrev_diff'] <= days_diff[1])]
-    st.sidebar.write(f"After Days Diff: {len(filtered)}")
 if 'Avg3DaysGap_diff' in filtered.columns:
     filtered = filtered[(filtered['Avg3DaysGap_diff'] >= avg3_diff[0]) & (filtered['Avg3DaysGap_diff'] <= avg3_diff[1])]
-    st.sidebar.write(f"After Avg3 Gap Diff: {len(filtered)}")
 if 'CareerWinPct_diff' in filtered.columns:
     filtered = filtered[(filtered['CareerWinPct_diff'] >= cwp_min) & (filtered['CareerWinPct_diff'] <= cwp_max)]
-    st.sidebar.write(f"After Career Win% Diff: {len(filtered)}")
 if 'FighterOddsNum' in filtered.columns:
     filtered = filtered[(filtered['FighterOddsNum'] >= cur_odds[0]) & (filtered['FighterOddsNum'] <= cur_odds[1])]
-    st.sidebar.write(f"After Fighter Odds: {len(filtered)}")
 if 'PrevFighterOddsNum' in filtered.columns:
     filtered = filtered[(filtered['PrevFighterOddsNum'] >= prev_odds[0]) & (filtered['PrevFighterOddsNum'] <= prev_odds[1])]
-    st.sidebar.write(f"After Prev Odds: {len(filtered)}")
 
 # Previous outcomes (fighter)
 if prev1 and prev1_col in filtered.columns:
     filtered = filtered[filtered[prev1_col].isin(prev1)]
-    st.sidebar.write(f"After Prev1: {len(filtered)}")
 if prev2 and prev2_col in filtered.columns:
     filtered = filtered[filtered[prev2_col].isin(prev2)]
-    st.sidebar.write(f"After Prev2: {len(filtered)}")
 if prev3 and prev3_col in filtered.columns:
     filtered = filtered[filtered[prev3_col].isin(prev3)]
-    st.sidebar.write(f"After Prev3: {len(filtered)}")
 if career1 and career1_col in filtered.columns:
     filtered = filtered[filtered[career1_col].isin(career1)]
-    st.sidebar.write(f"After Career1: {len(filtered)}")
 if career2 and career2_col in filtered.columns:
     filtered = filtered[filtered[career2_col].isin(career2)]
-    st.sidebar.write(f"After Career2: {len(filtered)}")
 if career3 and career3_col in filtered.columns:
     filtered = filtered[filtered[career3_col].isin(career3)]
-    st.sidebar.write(f"After Career3: {len(filtered)}")
 
 # Opponent previous outcomes (shifted)
 for shift, wlist in [(1, opp_prev1), (2, opp_prev2), (3, opp_prev3)]:
@@ -381,34 +351,24 @@ for shift, wlist in [(1, opp_prev1), (2, opp_prev2), (3, opp_prev3)]:
             col_use = f'Opponent_Prev{shift}_Outcome_skipNC'
             if col_use in filtered.columns:
                 filtered = filtered[filtered[col_use].isin(wlist)]
-                st.sidebar.write(f"After Opp Prev{shift} (skipNC): {len(filtered)}")
         else:
             filtered = filtered[filtered[col].isin(wlist)]
-            st.sidebar.write(f"After Opp Prev{shift} (raw): {len(filtered)}")
 
 # Opponent career outcomes
 if opp_career1 and opp_career1_col in filtered.columns:
     filtered = filtered[filtered[opp_career1_col].isin(opp_career1)]
-    st.sidebar.write(f"After Opp Career1: {len(filtered)}")
 if opp_career2 and opp_career2_col in filtered.columns:
     filtered = filtered[filtered[opp_career2_col].isin(opp_career2)]
-    st.sidebar.write(f"After Opp Career2: {len(filtered)}")
 if opp_career3 and opp_career3_col in filtered.columns:
     filtered = filtered[filtered[opp_career3_col].isin(opp_career3)]
-    st.sidebar.write(f"After Opp Career3: {len(filtered)}")
 
 # Ratings filters
 if use_colley and 'ColleyDecayDiff' in filtered.columns:
     filtered = filtered[(filtered['ColleyDecayDiff'] >= colley_range[0]) & (filtered['ColleyDecayDiff'] <= colley_range[1])]
-    st.sidebar.write(f"After Colley: {len(filtered)}")
 if use_massey and 'MasseyDecayDiff' in filtered.columns:
     filtered = filtered[(filtered['MasseyDecayDiff'] >= massey_range[0]) & (filtered['MasseyDecayDiff'] <= massey_range[1])]
-    st.sidebar.write(f"After Massey: {len(filtered)}")
 if use_wmd and 'WeightedMasseyDecayDiff' in filtered.columns:
     filtered = filtered[(filtered['WeightedMasseyDecayDiff'] >= wmd_range[0]) & (filtered['WeightedMasseyDecayDiff'] <= wmd_range[1])]
-    st.sidebar.write(f"After WMD: {len(filtered)}")
-
-st.sidebar.write(f"**Final rows after all filters:** {len(filtered)}")
 
 # Overwrite data
 data = filtered
@@ -726,7 +686,7 @@ else:
     st.write("No upcoming fights match the current filters.")
 
 # =========================================================================
-# 3D LR SCATTER & COMBO BUILDER (Cross-Validated Brier)
+# 3D LR SCATTER & COMBO BUILDER
 # =========================================================================
 st.header("3D LR Win/Loss Prediction & Best LR Combinations")
 
@@ -809,7 +769,7 @@ if len(three_d_features) >= 3:
         else:
             st.info("LR model not trained.")
 
-        # ---- LR combo builder using combo_candidates (excludes ratings/win-pct) ----
+        # ---- LR combo builder ----
         st.subheader("LR 3‑Variable Combinations (Cross‑Validated Brier)")
         candidates = [c for c in combo_candidates if c in data.columns and c != 'FighterOddsNum']
         if len(candidates) < 3:
@@ -873,7 +833,7 @@ else:
     st.warning("Not enough numerical features for a 3D LR plot (need at least 3).")
 
 # =========================================================================
-# 3D KNN SCATTER & COMBO BUILDER (Cross-Validated Brier)
+# 3D KNN SCATTER & COMBO BUILDER
 # =========================================================================
 st.header("3D Weighted KNN Win/Loss Prediction (Platt‑scaled) & Best KNN Combinations")
 
@@ -982,7 +942,7 @@ if len(three_d_features) >= 3:
         else:
             st.info("KNN model not trained. Check status above.")
 
-        # ---- KNN combo builder using combo_candidates ----
+        # ---- KNN combo builder ----
         st.subheader("KNN 3‑Variable Combinations (Cross‑Validated Brier)")
         candidates_knn = [c for c in combo_candidates if c in data.columns and c != 'FighterOddsNum']
         if len(candidates_knn) < 3:
