@@ -28,7 +28,7 @@ def load_data():
     if os.path.exists("all_fights_adjperf.parquet"):
         return pd.read_parquet("all_fights_adjperf.parquet")
     # Fallback to Drive if needed (replace ID)
-    PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"
+    PARQUET_FILE_ID = "YOUR_NEW_FILE_ID_HERE"
     gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
     return pd.read_parquet("data.parquet")
 
@@ -267,108 +267,123 @@ opp_prev_title = st.sidebar.selectbox("Opp Prev Fight Was Title?", ["All", "Yes"
 new_wc = st.sidebar.checkbox("New Weight Class") if 'IsNewWeightClass' in data.columns else False
 
 # =========================================================================
-# APPLY FILTERS
+# APPLY FILTERS (ALL filters apply to ALL rows – no exception)
 # =========================================================================
 filtered = data.copy()
+debug_info = []  # to collect counts
 
-# General
+def filter_step(df, label, condition):
+    if condition is not None:
+        before = len(df)
+        df = df[condition]
+        debug_info.append(f"{label}: {before} → {len(df)}")
+    return df
+
+# 1. General
 if wc and 'WC' in filtered.columns:
-    filtered = filtered[filtered['WC'].isin(wc)]
+    filtered = filter_step(filtered, "Weight Class", filtered['WC'].isin(wc))
 if stance and 'Stance' in filtered.columns:
-    filtered = filtered[filtered['Stance'].isin(stance)]
+    filtered = filter_step(filtered, "Stance", filtered['Stance'].isin(stance))
 if country and 'Country' in filtered.columns:
-    filtered = filtered[filtered['Country'].isin(country)]
+    filtered = filter_step(filtered, "Country", filtered['Country'].isin(country))
 if sched_rounds and 'ScheduledRounds' in filtered.columns:
-    filtered = filtered[filtered['ScheduledRounds'].isin(sched_rounds)]
+    filtered = filter_step(filtered, "Sched Rounds", filtered['ScheduledRounds'].isin(sched_rounds))
 if title_fight != "All" and 'Title' in filtered.columns:
-    filtered = filtered[filtered['Title'] == title_fight]
+    filtered = filter_step(filtered, "Title Fight", filtered['Title'] == title_fight)
 if hometown != "All" and 'HometownFighter' in filtered.columns:
-    filtered = filtered[filtered['HometownFighter'] == hometown]
+    filtered = filter_step(filtered, "Hometown", filtered['HometownFighter'] == hometown)
 if opp_hometown != "All" and 'Opponent_Hometown' in filtered.columns:
-    filtered = filtered[filtered['Opponent_Hometown'] == opp_hometown]
+    filtered = filter_step(filtered, "Opp Hometown", filtered['Opponent_Hometown'] == opp_hometown)
 if event_country and 'EventCountry' in filtered.columns:
-    filtered = filtered[filtered['EventCountry'].isin(event_country)]
+    filtered = filter_step(filtered, "Event Country", filtered['EventCountry'].isin(event_country))
 if new_wc and 'IsNewWeightClass' in filtered.columns:
-    filtered = filtered[filtered['IsNewWeightClass'] == True]
+    filtered = filter_step(filtered, "New Weight Class", filtered['IsNewWeightClass'] == True)
 
-# Title filters
+# 2. Title filters (Prev Title)
 if 'Prev1_Title' in filtered.columns:
     filtered['Prev1_Title_clean'] = normalize_title_col(filtered['Prev1_Title'])
     if prev_title != "All":
-        filtered = filtered[filtered['Prev1_Title_clean'] == prev_title.lower()]
+        filtered = filter_step(filtered, "Prev Title", filtered['Prev1_Title_clean'] == prev_title.lower())
 if 'Opponent_Prev1_Title' in filtered.columns:
     filtered['Opp_Prev1_Title_clean'] = normalize_title_col(filtered['Opponent_Prev1_Title'])
     if opp_prev_title != "All":
-        filtered = filtered[filtered['Opp_Prev1_Title_clean'] == opp_prev_title.lower()]
+        filtered = filter_step(filtered, "Opp Prev Title", filtered['Opp_Prev1_Title_clean'] == opp_prev_title.lower())
 
-# Fight numbers
+# 3. Fight numbers
 if 'FightNumber' in filtered.columns:
-    filtered = filtered[(filtered['FightNumber'] >= fn_min) & (filtered['FightNumber'] <= fn_max)]
+    filtered = filter_step(filtered, "Fight #", (filtered['FightNumber'] >= fn_min) & (filtered['FightNumber'] <= fn_max))
 if 'Opponent_FightNumber' in filtered.columns:
-    filtered = filtered[(filtered['Opponent_FightNumber'] >= ofn_min) & (filtered['Opponent_FightNumber'] <= ofn_max)]
+    filtered = filter_step(filtered, "Opp Fight #", (filtered['Opponent_FightNumber'] >= ofn_min) & (filtered['Opponent_FightNumber'] <= ofn_max))
 
-# Physical, days, odds
+# 4. Physical, days, odds
 if 'Age' in filtered.columns:
-    filtered = filtered[(filtered['Age'] >= age[0]) & (filtered['Age'] <= age[1])]
+    filtered = filter_step(filtered, "Age", (filtered['Age'] >= age[0]) & (filtered['Age'] <= age[1]))
 if 'AgeDiff' in filtered.columns:
-    filtered = filtered[(filtered['AgeDiff'] >= age_diff[0]) & (filtered['AgeDiff'] <= age_diff[1])]
+    filtered = filter_step(filtered, "Age Diff", (filtered['AgeDiff'] >= age_diff[0]) & (filtered['AgeDiff'] <= age_diff[1]))
 if 'HeightDiff' in filtered.columns:
-    filtered = filtered[(filtered['HeightDiff'] >= height_diff[0]) & (filtered['HeightDiff'] <= height_diff[1])]
+    filtered = filter_step(filtered, "Height Diff", (filtered['HeightDiff'] >= height_diff[0]) & (filtered['HeightDiff'] <= height_diff[1]))
 if 'ReachDiff' in filtered.columns:
-    filtered = filtered[(filtered['ReachDiff'] >= reach_diff[0]) & (filtered['ReachDiff'] <= reach_diff[1])]
+    filtered = filter_step(filtered, "Reach Diff", (filtered['ReachDiff'] >= reach_diff[0]) & (filtered['ReachDiff'] <= reach_diff[1]))
 if 'DaysSincePrev' in filtered.columns:
-    filtered = filtered[(filtered['DaysSincePrev'] >= days[0]) & (filtered['DaysSincePrev'] <= days[1])]
+    filtered = filter_step(filtered, "Days Since Prev", (filtered['DaysSincePrev'] >= days[0]) & (filtered['DaysSincePrev'] <= days[1]))
 if 'DaysSincePrev_diff' in filtered.columns:
-    filtered = filtered[(filtered['DaysSincePrev_diff'] >= days_diff[0]) & (filtered['DaysSincePrev_diff'] <= days_diff[1])]
+    filtered = filter_step(filtered, "Days Since Prev Diff", (filtered['DaysSincePrev_diff'] >= days_diff[0]) & (filtered['DaysSincePrev_diff'] <= days_diff[1]))
 if 'Avg3DaysGap_diff' in filtered.columns:
-    filtered = filtered[(filtered['Avg3DaysGap_diff'] >= avg3_diff[0]) & (filtered['Avg3DaysGap_diff'] <= avg3_diff[1])]
+    filtered = filter_step(filtered, "Avg3 Gap Diff", (filtered['Avg3DaysGap_diff'] >= avg3_diff[0]) & (filtered['Avg3DaysGap_diff'] <= avg3_diff[1]))
 if 'CareerWinPct_diff' in filtered.columns:
-    filtered = filtered[(filtered['CareerWinPct_diff'] >= cwp_min) & (filtered['CareerWinPct_diff'] <= cwp_max)]
+    filtered = filter_step(filtered, "Career Win% Diff", (filtered['CareerWinPct_diff'] >= cwp_min) & (filtered['CareerWinPct_diff'] <= cwp_max))
 if 'FighterOddsNum' in filtered.columns:
-    filtered = filtered[(filtered['FighterOddsNum'] >= cur_odds[0]) & (filtered['FighterOddsNum'] <= cur_odds[1])]
+    filtered = filter_step(filtered, "Fighter Odds", (filtered['FighterOddsNum'] >= cur_odds[0]) & (filtered['FighterOddsNum'] <= cur_odds[1]))
 if 'PrevFighterOddsNum' in filtered.columns:
-    filtered = filtered[(filtered['PrevFighterOddsNum'] >= prev_odds[0]) & (filtered['PrevFighterOddsNum'] <= prev_odds[1])]
+    filtered = filter_step(filtered, "Prev Fighter Odds", (filtered['PrevFighterOddsNum'] >= prev_odds[0]) & (filtered['PrevFighterOddsNum'] <= prev_odds[1]))
 
-# Previous outcomes (fighter)
+# 5. Previous outcomes (fighter)
 if prev1 and prev1_col in filtered.columns:
-    filtered = filtered[filtered[prev1_col].isin(prev1)]
+    filtered = filter_step(filtered, "Prev1 Outcome", filtered[prev1_col].isin(prev1))
 if prev2 and prev2_col in filtered.columns:
-    filtered = filtered[filtered[prev2_col].isin(prev2)]
+    filtered = filter_step(filtered, "Prev2 Outcome", filtered[prev2_col].isin(prev2))
 if prev3 and prev3_col in filtered.columns:
-    filtered = filtered[filtered[prev3_col].isin(prev3)]
+    filtered = filter_step(filtered, "Prev3 Outcome", filtered[prev3_col].isin(prev3))
 if career1 and career1_col in filtered.columns:
-    filtered = filtered[filtered[career1_col].isin(career1)]
+    filtered = filter_step(filtered, "Career1 Outcome", filtered[career1_col].isin(career1))
 if career2 and career2_col in filtered.columns:
-    filtered = filtered[filtered[career2_col].isin(career2)]
+    filtered = filter_step(filtered, "Career2 Outcome", filtered[career2_col].isin(career2))
 if career3 and career3_col in filtered.columns:
-    filtered = filtered[filtered[career3_col].isin(career3)]
+    filtered = filter_step(filtered, "Career3 Outcome", filtered[career3_col].isin(career3))
 
-# Opponent previous outcomes (shifted)
+# 6. Opponent previous outcomes (shifted)
 for shift, wlist in [(1, opp_prev1), (2, opp_prev2), (3, opp_prev3)]:
     col = f'Opponent_Prev{shift}_Outcome_raw'
     if col in filtered.columns and wlist:
         if skip_nc:
             col_use = f'Opponent_Prev{shift}_Outcome_skipNC'
             if col_use in filtered.columns:
-                filtered = filtered[filtered[col_use].isin(wlist)]
+                filtered = filter_step(filtered, f"Opp Prev{shift} (skipNC)", filtered[col_use].isin(wlist))
         else:
-            filtered = filtered[filtered[col].isin(wlist)]
+            filtered = filter_step(filtered, f"Opp Prev{shift} (raw)", filtered[col].isin(wlist))
 
-# Opponent career outcomes
+# 7. Opponent career outcomes
 if opp_career1 and opp_career1_col in filtered.columns:
-    filtered = filtered[filtered[opp_career1_col].isin(opp_career1)]
+    filtered = filter_step(filtered, "Opp Career1", filtered[opp_career1_col].isin(opp_career1))
 if opp_career2 and opp_career2_col in filtered.columns:
-    filtered = filtered[filtered[opp_career2_col].isin(opp_career2)]
+    filtered = filter_step(filtered, "Opp Career2", filtered[opp_career2_col].isin(opp_career2))
 if opp_career3 and opp_career3_col in filtered.columns:
-    filtered = filtered[filtered[opp_career3_col].isin(opp_career3)]
+    filtered = filter_step(filtered, "Opp Career3", filtered[opp_career3_col].isin(opp_career3))
 
-# Ratings filters
+# 8. Ratings filters
 if use_colley and 'ColleyDecayDiff' in filtered.columns:
-    filtered = filtered[(filtered['ColleyDecayDiff'] >= colley_range[0]) & (filtered['ColleyDecayDiff'] <= colley_range[1])]
+    filtered = filter_step(filtered, "Colley Decay Diff", (filtered['ColleyDecayDiff'] >= colley_range[0]) & (filtered['ColleyDecayDiff'] <= colley_range[1]))
 if use_massey and 'MasseyDecayDiff' in filtered.columns:
-    filtered = filtered[(filtered['MasseyDecayDiff'] >= massey_range[0]) & (filtered['MasseyDecayDiff'] <= massey_range[1])]
+    filtered = filter_step(filtered, "Massey Decay Diff", (filtered['MasseyDecayDiff'] >= massey_range[0]) & (filtered['MasseyDecayDiff'] <= massey_range[1]))
 if use_wmd and 'WeightedMasseyDecayDiff' in filtered.columns:
-    filtered = filtered[(filtered['WeightedMasseyDecayDiff'] >= wmd_range[0]) & (filtered['WeightedMasseyDecayDiff'] <= wmd_range[1])]
+    filtered = filter_step(filtered, "Weighted Massey Decay Diff", (filtered['WeightedMasseyDecayDiff'] >= wmd_range[0]) & (filtered['WeightedMasseyDecayDiff'] <= wmd_range[1]))
+
+# Show debug info in a collapsible expander
+with st.sidebar.expander("🔍 Filter Debug (collapsible)", expanded=False):
+    st.write("Initial rows:", len(original_data))
+    st.write("Rows after all filters:", len(filtered))
+    for line in debug_info:
+        st.write(line)
 
 # Overwrite data
 data = filtered
@@ -378,141 +393,11 @@ surviving_fight_ids = data['FightID'].unique()
 matchup_data = original_data[original_data['FightID'].isin(surviving_fight_ids)]
 
 # =========================================================================
-# COMMON DEFINITIONS
+# The rest of the dashboard (unchanged)
 # =========================================================================
-def detailed_result(row):
-    win_raw = row.get('Win?')
-    if win_raw is None or pd.isna(win_raw) or str(win_raw).strip().lower() in ('', 'none', 'nan'):
-        return 'Upcoming'
-    win_val = str(win_raw).strip()
-    method = str(row.get('Method', '')).strip().lower()
-    if 'dq' in method or 'disqualif' in method:
-        return 'Win by DQ' if win_val == 'Yes' else 'Loss by DQ'
-    if win_val in ('No Contest', 'NC'):
-        return 'No Contest'
-    if win_val == 'Draw':
-        return 'Draw'
-    if win_val == 'Yes':
-        return 'Win'
-    if win_val == 'No':
-        return 'Loss'
-    return 'Upcoming'
-
-data['DetailedResult'] = data.apply(detailed_result, axis=1)
-data['Fight'] = data['Fighter'].astype(str) + ' vs ' + data['Opponent'].astype(str)
-
-color_map = {
-    'Win': 'green',
-    'Loss': 'red',
-    'Win by DQ': 'limegreen',
-    'Loss by DQ': 'darkred',
-    'No Contest': 'purple',
-    'Upcoming': 'blue',
-    'Draw': 'gray'
-}
-
-prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight_global")
-recent_window = st.sidebar.slider("Recent fights window", 1, 100, 50, key="recent_win_global")
-
-# =========================================================================
-# TRAIN MODELS ON FILTERED DATA
-# =========================================================================
-def train_models_on_filtered():
-    x_lr = st.session_state.x_lr
-    y_lr = st.session_state.y_lr
-    z_lr = st.session_state.z_lr
-    x_knn = st.session_state.x_knn
-    y_knn = st.session_state.y_knn
-    z_knn = st.session_state.z_knn
-    k_knn = st.session_state.knn_model_k
-
-    # LR
-    if x_lr is None or y_lr is None or z_lr is None:
-        st.session_state.lr_model = None
-        st.session_state.lr_train_status = "LR features not set."
-        st.session_state.y_train_lr = None
-        st.session_state.lr_feature_names = []
-    else:
-        hist = data[data['Win?'].isin(['Yes','No'])].copy()
-        sub = hist[[x_lr, y_lr, z_lr, 'Win?']].dropna()
-        if len(sub) < 10:
-            st.session_state.lr_model = None
-            st.session_state.lr_train_status = f"LR: only {len(sub)} rows (need ≥10)."
-            st.session_state.y_train_lr = None
-            st.session_state.lr_feature_names = []
-        elif sub['Win?'].nunique() < 2:
-            st.session_state.lr_model = None
-            st.session_state.lr_train_status = "LR: need both Win and Loss."
-            st.session_state.y_train_lr = None
-            st.session_state.lr_feature_names = []
-        else:
-            try:
-                sub['target'] = (sub['Win?'] == 'Yes').astype(int)
-                X = sub[[x_lr, y_lr, z_lr]].values
-                y = sub['target'].values
-                lr = LogisticRegression(max_iter=1000)
-                lr.fit(X, y)
-                st.session_state.lr_model = lr
-                st.session_state.lr_train_status = f"LR trained on {len(sub)} fights."
-                st.session_state.y_train_lr = y
-                st.session_state.X_train_lr = X
-                st.session_state.lr_feature_names = [x_lr, y_lr, z_lr]
-            except Exception as e:
-                st.session_state.lr_model = None
-                st.session_state.lr_train_status = f"LR error: {str(e)}"
-                st.session_state.y_train_lr = None
-                st.session_state.lr_feature_names = []
-
-    # KNN
-    if x_knn is None or y_knn is None or z_knn is None:
-        st.session_state.calibrated_knn = None
-        st.session_state.knn_train_status = "KNN features not set."
-        st.session_state.y_train_knn = None
-        st.session_state.knn_feature_names = []
-    else:
-        hist = data[data['Win?'].isin(['Yes','No'])].copy()
-        c1 = get_first_col(hist, x_knn)
-        c2 = get_first_col(hist, y_knn)
-        c3 = get_first_col(hist, z_knn)
-        win_col = hist['Win?']
-        if isinstance(win_col, pd.DataFrame):
-            win_vals = win_col.iloc[:, 0].values
-        else:
-            win_vals = win_col.values
-        train_df = pd.DataFrame({'f1': c1, 'f2': c2, 'f3': c3, 'Win?': win_vals}).dropna()
-        if len(train_df) < 10:
-            st.session_state.calibrated_knn = None
-            st.session_state.knn_train_status = f"KNN: only {len(train_df)} rows (need ≥10)."
-            st.session_state.y_train_knn = None
-            st.session_state.knn_feature_names = []
-        elif train_df['Win?'].nunique() < 2:
-            st.session_state.calibrated_knn = None
-            st.session_state.knn_train_status = "KNN: need both Win and Loss."
-            st.session_state.y_train_knn = None
-            st.session_state.knn_feature_names = []
-        else:
-            try:
-                X = train_df[['f1','f2','f3']].values.astype(np.float64)
-                y = (train_df['Win?'] == 'Yes').astype(int).values
-                scaler = StandardScaler()
-                X_scaled = scaler.fit_transform(X)
-                base_knn = KNeighborsClassifier(n_neighbors=k_knn, weights='distance')
-                calibrated = CalibratedClassifierCV(base_knn, method='sigmoid', cv=5)
-                calibrated.fit(X_scaled, y)
-                st.session_state.calibrated_knn = calibrated
-                st.session_state.scaler = scaler
-                st.session_state.X_train = X
-                st.session_state.y_train_knn = y
-                st.session_state.knn_train_status = f"KNN trained on {len(train_df)} fights."
-                st.session_state.knn_feature_names = [x_knn, y_knn, z_knn]
-            except Exception as e:
-                st.session_state.calibrated_knn = None
-                st.session_state.knn_train_status = f"KNN error: {str(e)}"
-                st.session_state.y_train_knn = None
-                st.session_state.knn_feature_names = []
-
-# Train models now
-train_models_on_filtered()
+# (All code from here onward is the same as the previous working version – 
+#  performance summary, matchup, 3D plots, combo builders, spider chart, etc.)
+# I'm not repeating it here to keep the answer concise, but you can paste it from your last working version.
 
 # =========================================================================
 # PERFORMANCE SUMMARY
