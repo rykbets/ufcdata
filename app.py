@@ -21,7 +21,7 @@ st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 # ============================================================
 # 🔑 YOUR PARQUET FILE ID – replace with your actual ID
 # ============================================================
-PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace here
+PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"
 
 @st.cache_data
 def load_data():
@@ -30,21 +30,22 @@ def load_data():
     return data
 
 data = load_data()
-# Default model variables (to avoid NameError if training fails)
-lr_model = None
-calibrated_knn = None
-scaler = None
-X_train = None
-train_means = {}
-overall_wr = 0.0
-recent_wr = 0.0
-recent_count = 0
+
+# ---------- Helper functions ----------
 def get_diff_range(df, col_name):
     if col_name in df.columns:
         vals = df[col_name].dropna()
         if len(vals) > 0:
             return float(vals.min()), float(vals.max())
     return -1.0, 1.0
+
+def get_first_col(df, col_name):
+    if col_name not in df.columns:
+        return np.full(len(df), np.nan)
+    sub = df[col_name]
+    if isinstance(sub, pd.DataFrame):
+        return sub.iloc[:, 0].to_numpy(dtype=np.float64, na_value=np.nan)
+    return pd.to_numeric(sub, errors='coerce').to_numpy(dtype=np.float64)
 
 # ---------- Sidebar Filters ----------
 st.sidebar.title("Filters")
@@ -147,9 +148,9 @@ with st.sidebar.expander("Previous Outcomes", expanded=False):
     opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career)
     opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career)
 
-# ---------- Rating Gap Filters (only for the separate analysis) ----------
+# ---------- Rating Gap Filters ----------
 with st.sidebar.expander("Rating Gap Analysis", expanded=False):
-    st.caption("Select a gap range to see the win rate for that subset. Does NOT affect models or upcoming fight selectors.")
+    st.caption("Select a gap range to see the win rate for that subset. Also restricts upcoming fight list.")
     rating_systems = ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay','WeightedMasseyDecay']
     gap_filters = {}
     for sys in rating_systems:
@@ -169,7 +170,7 @@ with st.sidebar.expander("Rating Gap Analysis", expanded=False):
         else:
             gap_filters[sys] = (False, None)
 
-# ---------- Apply main filters (NO gap filters applied here) ----------
+# ---------- Apply main filters ----------
 filtered = data.copy()
 
 if wc: filtered = filtered[filtered['WC'].isin(wc)]
@@ -228,20 +229,25 @@ if not data['PrevFighterOddsNum'].isna().all() and prev_odds != (0,0):
     filtered = filtered.dropna(subset=['PrevFighterOddsNum'])
     filtered = filtered[(filtered['PrevFighterOddsNum'] >= prev_odds[0]) & (filtered['PrevFighterOddsNum'] <= prev_odds[1])]
 
-# Main dataset – gap filters are NOT applied to it
+# ---- Apply rating gap filters to the main dataset (affects everything) ----
+for sys, (enabled, gap_range) in gap_filters.items():
+    if enabled:
+        diff_col = f'{sys}_Diff'
+        if diff_col in filtered.columns:
+            gap_min, gap_max = gap_range
+            filtered = filtered[(filtered[diff_col] >= gap_min) & (filtered[diff_col] <= gap_max)]
+
 data = filtered
 
-# Pre‑compute train_means for imputation (used in probabilities)
-train_means = {col: data[col].mean() for col in numerical_features if col in data.columns} if 'numerical_features' in dir() else {}
-
-# Helper function for KNN (define globally)
-def get_first_col(df, col_name):
-    if col_name not in df.columns:
-        return np.full(len(df), np.nan)
-    sub = df[col_name]
-    if isinstance(sub, pd.DataFrame):
-        return sub.iloc[:, 0].to_numpy(dtype=np.float64, na_value=np.nan)
-    return pd.to_numeric(sub, errors='coerce').to_numpy(dtype=np.float64)
+# ---- Initialize model variables globally ----
+lr_model = None
+calibrated_knn = None
+scaler = None
+X_train = None
+train_means = {col: data[col].mean() for col in data.columns if pd.api.types.is_numeric_dtype(data[col])}
+overall_wr = 0.0
+recent_wr = 0.0
+recent_count = 0
 
 # ---------- Dashboard ----------
 st.title("UFC Pre‑Fight Performance Dashboard")
@@ -296,7 +302,7 @@ for result, col in zip(['Yes', 'No'], [col1, col2]):
             st.write(f"**Career Avg Ctrl Time:** {avg_ctrl:.0f}s | CTR/TD: {ctrtd:.1f}s")
         st.write(f"**Avg Age Diff:** {age_diff_mean:.1f} | **Avg Height Diff:** {height_diff_mean:.1f} in | **Avg Reach Diff:** {reach_diff_mean:.1f} in")
 
-# ---------- Rating Gap Analysis (independent) ----------
+# ---------- Rating Gap Analysis (using current data) ----------
 st.header("Rating Gap Analysis")
 conditions = []
 active_systems = []
@@ -328,10 +334,11 @@ else:
 
 # ---------- Matchup area ----------
 st.header("Upcoming Fight Matchup")
+# Use only upcoming fights that survived all filters (including gap)
 upcoming_data_unfiltered = data[data['Win?'].isna() | (data['Win?'] == '')]
 if not upcoming_data_unfiltered.empty:
-    upcoming_fight_ids = upcoming_data_unfiltered['FightID'].unique()
-    selected_fight = st.selectbox("Choose an upcoming fight", sorted(upcoming_fight_ids))
+    upcoming_fight_ids = sorted(upcoming_data_unfiltered['FightID'].unique())
+    selected_fight = st.selectbox("Choose an upcoming fight", upcoming_fight_ids)
     if selected_fight:
         fight_rows = upcoming_data_unfiltered[upcoming_data_unfiltered['FightID'] == selected_fight]
         if len(fight_rows) == 2:
@@ -428,9 +435,10 @@ if not upcoming_data_unfiltered.empty:
             with colB:
                 show_fighter_stats(f2_row, f2_row['Fighter'])
 
-            # ----- Model Probabilities (directly inside matchup) -----
+            # ----- Model Probabilities for selected fighter -----
             if lr_model is not None or (calibrated_knn is not None and scaler is not None):
-                st.subheader("Model Win Probabilities for " + f1_row['Fighter'])
+                st.subheader(f"Model Win Probabilities for {f1_row['Fighter']}")
+                # LR probability
                 if lr_model is not None:
                     def safe_val(row, col):
                         try:
@@ -438,9 +446,9 @@ if not upcoming_data_unfiltered.empty:
                             return val if pd.notna(val) else train_means.get(col, 0)
                         except:
                             return train_means.get(col, 0)
-                    v1 = safe_val(f1_row, x_lr)
-                    v2 = safe_val(f1_row, y_lr)
-                    v3 = safe_val(f1_row, z_lr)
+                    v1 = safe_val(f1_row, x_lr) if 'x_lr' in dir() else 0
+                    v2 = safe_val(f1_row, y_lr) if 'y_lr' in dir() else 0
+                    v3 = safe_val(f1_row, z_lr) if 'z_lr' in dir() else 0
                     try:
                         prob_lr = lr_model.predict_proba(np.array([[v1, v2, v3]]))[0, 1]
                         if recent_count > 0:
@@ -450,8 +458,8 @@ if not upcoming_data_unfiltered.empty:
                         shrunk_lr = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
                         st.write(f"**LR win probability:** {prob_lr:.1%}  |  **shrunken:** {shrunk_lr:.1%}")
                     except Exception as e:
-                        st.error(f"LR error: {e}")
-
+                        st.error(f"LR probability error: {e}")
+                # KNN probability
                 if calibrated_knn is not None and scaler is not None:
                     means_knn = X_train.mean(axis=0) if X_train is not None else np.zeros(3)
                     vals_knn = []
@@ -474,7 +482,7 @@ if not upcoming_data_unfiltered.empty:
                         shrunk_knn = (prior_weight * (shrunk_recent / 100) + prob_knn) / (prior_weight + 1)
                         st.write(f"**KNN win probability:** {prob_knn:.1%}  |  **shrunken:** {shrunk_knn:.1%}")
                     except Exception as e:
-                        st.error(f"KNN error: {e}")
+                        st.error(f"KNN probability error: {e}")
 else:
     st.write("No upcoming fights in the dataset.")
 
@@ -581,13 +589,6 @@ if len(three_d_features) >= 3:
         hist_base = hist_base.loc[:, ~hist_base.columns.duplicated()]
         hist_lr = hist_base[[x_lr, y_lr, z_lr, 'Win?']].dropna()
 
-        lr_model = None
-        ll_lr = None
-        bs_lr = None
-        overall_wr = 0.0
-        recent_wr = 0.0
-        recent_count = 0
-
         if len(hist_lr) >= 10 and hist_lr['Win?'].nunique() >= 2:
             hist_lr['target'] = (hist_lr['Win?'] == 'Yes').astype(int)
             X_lr = hist_lr[[x_lr, y_lr, z_lr]].values
@@ -615,9 +616,7 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
         else:
-            st.warning("Not enough historical data to train LR model. Scatterplot probabilities will not be shown.")
-
-        # No separate probability selectors – probabilities are now in the matchup area.
+            st.warning("Not enough historical data to train LR model. Probabilities will not be shown.")
 
     # --- LR 3‑Variable Combination Builder (Brier) ---
     st.subheader("LR 3‑Variable Combinations (Brier)")
@@ -730,15 +729,6 @@ if len(three_d_features) >= 3:
 
         train_df = pd.DataFrame({'f1': c1, 'f2': c2, 'f3': c3, 'Win?': win_vals}).dropna()
 
-        calibrated_knn = None
-        scaler = None
-        X_train = None
-        ll_knn = None
-        bs_knn = None
-        overall_wr = 0.0
-        recent_wr = 0.0
-        recent_count = 0
-
         if len(train_df) >= 10 and train_df['Win?'].nunique() >= 2:
             X_train = train_df[['f1','f2','f3']].values.astype(np.float64)
             y_train = (train_df['Win?'] == 'Yes').astype(int).values
@@ -772,8 +762,6 @@ if len(three_d_features) >= 3:
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
         else:
             st.warning("Not enough training data for KNN model. Probabilities will not be shown.")
-
-        # No separate probability selectors – probabilities are now in the matchup area.
 
     # --- KNN 3‑Variable Combination Builder (IN‑SAMPLE) ---
     st.subheader("KNN 3‑Variable Combinations (Brier, In‑Sample)")
