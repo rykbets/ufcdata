@@ -18,19 +18,16 @@ from scipy.spatial.distance import cdist
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
-# ============================================================
-# 🔑 ONLY THIS ID IS NEEDED – the Parquet must include upcoming fights
-# ============================================================
-PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace with the ID of all_fights.parquet
+PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace with your Parquet file ID from Colab
 
-# ---------- Cached data loader (Parquet only) ----------
 @st.cache_data
 def load_data():
     gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
     data = pd.read_parquet("data.parquet")
-    if len(data[data['Win?'].isna()]) == 0:
-        st.error("❌ This Parquet file does NOT contain upcoming fights. "
-                 "Please re‑run the Colab script that merges upcoming.csv and generates the complete Parquet.")
+    upcoming = data[data['Win?'].isna()]
+    st.sidebar.write(f"✅ Loaded {len(upcoming)} upcoming fight rows ({len(upcoming['FightID'].unique())} unique fights)")
+    if len(upcoming) != 2 * len(upcoming['FightID'].unique()):
+        st.error("❌ Duplicate upcoming fights detected! Re‑run the Colab script with deduplication.")
         st.stop()
     return data
 
