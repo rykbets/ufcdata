@@ -30,7 +30,15 @@ def load_data():
     return data
 
 data = load_data()
-
+# Default model variables (to avoid NameError if training fails)
+lr_model = None
+calibrated_knn = None
+scaler = None
+X_train = None
+train_means = {}
+overall_wr = 0.0
+recent_wr = 0.0
+recent_count = 0
 def get_diff_range(df, col_name):
     if col_name in df.columns:
         vals = df[col_name].dropna()
