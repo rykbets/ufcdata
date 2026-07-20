@@ -20,11 +20,11 @@ from scipy.spatial.distance import cdist
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
 # ============================================================
-# 🔑 YOUR GOOGLE DRIVE FILE IDS – CHANGE THE COLLEY ID TO YOURS
+# 🔑 GOOGLE DRIVE FILE IDS – replace with your actual IDs
 # ============================================================
 MAIN_FILE_ID            = "1eWDGGS8qQdLWvS_dgJ-HqObsr4ie9RcD"
 UPCOMING_FILE_ID        = "1mUyNR2WLHQjC8IuvG7RA6LoXPjJq3aZ1"
-COLLEY_RATINGS_FILE_ID  = "1qjjJ_7Lm5nq9ZtqBwXEtQe-iWeN_XveM"   # ← replace with your actual ID
+ALL_RATINGS_FILE_ID     = "1lS5Af0gIxMyiK8p-QQYXqA5_sdcVxUab"   # ← paste your all_ratings.csv ID
 
 # ---------- Cached data loader ----------
 @st.cache_data
@@ -93,7 +93,7 @@ def load_full_data():
     fight_totals.sort_values(['Fighter','FightDate'], inplace=True)
     fight_totals['FightNumber'] = fight_totals.groupby('Fighter').cumcount() + 1
 
-    # DaysSincePrev, Avg3DaysGap (vectorized)
+    # DaysSincePrev, Avg3DaysGap (vectorised)
     fight_totals['DaysSincePrev'] = fight_totals.groupby('Fighter')['FightDate'].diff().dt.days
     fight_totals['Avg3DaysGap'] = (
         fight_totals.groupby('Fighter')['DaysSincePrev']
@@ -187,7 +187,6 @@ def load_full_data():
         fight_totals[f'CareerAvg_{col}'] = (
             fight_totals[f'prev_cum_{col}'] / fight_totals['prev_fights_count'].replace(0, np.nan)
         )
-        # forward‑fill
         fight_totals[f'CareerAvg_{col}'] = fight_totals.groupby('Fighter')[f'CareerAvg_{col}'].ffill().bfill()
 
     # Defensive ratios
@@ -234,26 +233,46 @@ def load_full_data():
     )
     fight_totals = fight_totals.merge(opp_prev7, on=['FightID','Opponent'], how='left')
 
-    # ---------- LOAD PRECOMPUTED COLLEY RATINGS ----------
-    if COLLEY_RATINGS_FILE_ID.strip() and COLLEY_RATINGS_FILE_ID != "YOUR_COLLEY_RATINGS_FILE_ID_HERE":
-        gdown.download(f"https://drive.google.com/uc?id={COLLEY_RATINGS_FILE_ID}", "colley_ratings.csv", quiet=True)
-        ratings_df = pd.read_csv("colley_ratings.csv")
-        fight_totals = fight_totals.merge(ratings_df, on='Fighter', how='left')
-        fight_totals.rename(columns={'ColleyRating': 'FighterColleyRating'}, inplace=True)
-        opp_ratings = ratings_df.rename(columns={'Fighter': 'Opponent', 'ColleyRating': 'OpponentColleyRating'})
-        fight_totals = fight_totals.merge(opp_ratings, on='Opponent', how='left')
-        median_rating = fight_totals['FighterColleyRating'].median()
-        if pd.isna(median_rating):
-            median_rating = 0.5
-        fight_totals['FighterColleyRating'].fillna(median_rating, inplace=True)
-        fight_totals['OpponentColleyRating'].fillna(median_rating, inplace=True)
-        fight_totals['ColleyRating_Diff'] = fight_totals['FighterColleyRating'] - fight_totals['OpponentColleyRating']
+    # ---------- LOAD ALL RATINGS (time‑aware) ----------
+    if ALL_RATINGS_FILE_ID.strip() and ALL_RATINGS_FILE_ID != "YOUR_ALL_RATINGS_FILE_ID":
+        try:
+            gdown.download(f"https://drive.google.com/uc?id={ALL_RATINGS_FILE_ID}", "all_ratings.csv", quiet=True)
+            ratings_df = pd.read_csv("all_ratings.csv")
+            # Merge for fighter (pre‑fight / final rating)
+            fight_totals = fight_totals.merge(ratings_df, on=['FightID','Fighter'], how='left')
+            for col in ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay']:
+                fight_totals.rename(columns={col: f'Fighter{col}'}, inplace=True)
+            # Merge for opponent
+            opp_ratings = ratings_df.rename(columns={'Fighter':'Opponent'})
+            opp_ratings = opp_ratings.rename(columns={c: f'Opponent{c}' for c in ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay']})
+            fight_totals = fight_totals.merge(opp_ratings, on=['FightID','Opponent'], how='left')
+            # Fill missing
+            for col in ['FighterColleyOrig','FighterColleyDecay','FighterMasseyOrig','FighterMasseyDecay',
+                        'OpponentColleyOrig','OpponentColleyDecay','OpponentMasseyOrig','OpponentMasseyDecay']:
+                if col in fight_totals.columns:
+                    median_val = fight_totals[col].median()
+                    if pd.isna(median_val):
+                        median_val = 0.5
+                    fight_totals[col].fillna(median_val, inplace=True)
+            # Differentials
+            for system in ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay']:
+                f_col = f'Fighter{system}'
+                o_col = f'Opponent{system}'
+                if f_col in fight_totals.columns and o_col in fight_totals.columns:
+                    fight_totals[f'{system}_Diff'] = fight_totals[f_col] - fight_totals[o_col]
+        except Exception as e:
+            st.sidebar.warning(f"⚠️ Advanced ratings not loaded: {e}")
+            for system in ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay']:
+                fight_totals[f'Fighter{system}'] = 0.5
+                fight_totals[f'Opponent{system}'] = 0.5
+                fight_totals[f'{system}_Diff'] = 0.0
     else:
-        fight_totals['FighterColleyRating'] = 0.5
-        fight_totals['OpponentColleyRating'] = 0.5
-        fight_totals['ColleyRating_Diff'] = 0.0
+        for system in ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay']:
+            fight_totals[f'Fighter{system}'] = 0.5
+            fight_totals[f'Opponent{system}'] = 0.5
+            fight_totals[f'{system}_Diff'] = 0.0
 
-    # ---------- DIFFERENTIALS ----------
+    # ---------- DIFFERENTIALS (other stats) ----------
     diff_pairs = [
         ('CareerAvg_SS', 'Opponent_CareerAvg_SS'),
         ('CareerAvg_SSA', 'Opponent_CareerAvg_SSA'),
@@ -281,7 +300,6 @@ def load_full_data():
         ('CareerAvg_Def_Ctrl_per_TD', 'Opponent_CareerAvg_Def_Ctrl_per_TD'),
         ('Prev7Wins', 'Opponent_Prev7Wins'),
         ('Prev7Losses', 'Opponent_Prev7Losses'),
-        ('FighterColleyRating', 'OpponentColleyRating'),
     ]
     for f_col, o_col in diff_pairs:
         if f_col in fight_totals.columns and o_col in fight_totals.columns:
@@ -301,7 +319,7 @@ def load_full_data():
             fight_totals[f'Prev{shift}_{col}'] = fight_totals.groupby('Fighter')[col].shift(shift)
         fight_totals.rename(columns={f'Prev{shift}_Win?': f'Prev{shift}_Win'}, inplace=True)
 
-    # Outcome classification helpers
+    # Outcome classification helpers (unchanged)
     def extract_round_from_method(method_str):
         if not isinstance(method_str, str): return None
         m = re.search(r'[Rr]ound\s*(\d)', method_str)
@@ -440,7 +458,7 @@ for col in ['EventCountry', 'Country', 'Stance', 'WC', 'Title', 'ScheduledRounds
     if col in all_fights_display.columns:
         all_fights_display[col] = all_fights_display[col].fillna('').astype(str)
 
-# ---------- Sidebar Filters (identical to your previous version) ----------
+# ---------- Sidebar Filters ----------
 st.sidebar.title("Filters")
 
 with st.sidebar.expander("General", expanded=True):
@@ -543,6 +561,15 @@ with st.sidebar.expander("Previous Outcomes", expanded=False):
     opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career)
     opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career)
 
+# ---------- Rating Gap Analysis Filters ----------
+with st.sidebar.expander("Rating Gap Analysis", expanded=False):
+    rating_system = st.selectbox("Rating system",
+                                 ['ColleyOrig', 'ColleyDecay', 'MasseyOrig', 'MasseyDecay'],
+                                 key="gap_system")
+    gap_range = st.slider("Rating gap range",
+                          min_value=0.0, max_value=1.0,
+                          value=(0.0, 0.05), step=0.01, key="gap_range")
+
 # ---------- Apply filters ----------
 data = all_fights_display.copy()
 
@@ -603,7 +630,7 @@ if not all_fights_display['PrevFighterOddsNum'].isna().all() and prev_odds != (0
     data = data.dropna(subset=['PrevFighterOddsNum'])
     data = data[(data['PrevFighterOddsNum'] >= prev_odds[0]) & (data['PrevFighterOddsNum'] <= prev_odds[1])]
 
-# ---------- Main Dashboard (identical to previous, incl. performance summary, matchup, last20, etc.) ----------
+# ---------- Main Dashboard ----------
 st.title("UFC Pre‑Fight Performance Dashboard")
 
 if len(data) == 0:
@@ -656,6 +683,27 @@ for result, col in zip(['Yes', 'No'], [col1, col2]):
             st.write(f"**Career Avg Ctrl Time:** {avg_ctrl:.0f}s | CTR/TD: {ctrtd:.1f}s")
         st.write(f"**Avg Age Diff:** {age_diff_mean:.1f} | **Avg Height Diff:** {height_diff_mean:.1f} in | **Avg Reach Diff:** {reach_diff_mean:.1f} in")
 
+# ---------- Rating Gap Analysis ----------
+st.header("Rating Gap Analysis")
+diff_col = f'{rating_system}_Diff'
+
+if diff_col in data.columns:
+    gap_min, gap_max = gap_range
+    gap_fights = data[(data[diff_col] >= gap_min) & (data[diff_col] <= gap_max)]
+    total_gap = len(gap_fights)
+    wins_gap = (gap_fights['Win?'] == 'Yes').sum()
+    win_rate_gap = wins_gap / total_gap * 100 if total_gap > 0 else 0.0
+
+    colg1, colg2, colg3 = st.columns(3)
+    with colg1:
+        st.metric("Fights in gap", total_gap)
+    with colg2:
+        st.metric("Wins", wins_gap)
+    with colg3:
+        st.metric("Win Rate", f"{win_rate_gap:.1f}%")
+else:
+    st.warning(f"Rating system '{rating_system}' not available.")
+
 # ---------- Matchup area (unfiltered upcoming) ----------
 st.header("Upcoming Fight Matchup")
 upcoming_data_unfiltered = all_fights_display[all_fights_display['Win?'].isna() | (all_fights_display['Win?'] == '')]
@@ -678,7 +726,7 @@ if not upcoming_data_unfiltered.empty:
                 pw = int(row['Prev7Wins']) if pd.notna(row['Prev7Wins']) else 0
                 pl = int(row['Prev7Losses']) if pd.notna(row['Prev7Losses']) else 0
                 st.write(f"**Career Win %:** {row['CareerWinPct']:.1f}% | **Prev 7 Record:** {pw}‑{pl}")
-                st.write(f"**Colley Rating:** {row['FighterColleyRating']:.4f}" if pd.notna(row['FighterColleyRating']) else "**Colley Rating:** N/A")
+                st.write(f"**Ratings:** ColleyOrig {row['FighterColleyOrig']:.4f} / ColleyDecay {row['FighterColleyDecay']:.4f} / MasseyOrig {row['FighterMasseyOrig']:.4f} / MasseyDecay {row['FighterMasseyDecay']:.4f}")
                 st.write(f"**Odds (Fighter/Opp):** {row['FighterOddsBFO']} / {row['OpponentOddsBFO']}")
 
                 st.write("**Career Averages (offence):**")
@@ -765,7 +813,8 @@ st.header("Last 20 Fights")
 last20 = data.sort_values('FightDate', ascending=False).head(20)
 display_cols = ['FightDate','Fighter','Opponent','WC','Win?','Method','Age','Height','Reach',
                 'CareerAvg_SS','CareerAvg_KD','DaysSincePrev','Avg3DaysGap','Title',
-                'FighterOddsBFO','OpponentOddsBFO','Prev7Wins','Prev7Losses','FighterColleyRating']
+                'FighterOddsBFO','OpponentOddsBFO','Prev7Wins','Prev7Losses',
+                'FighterColleyOrig','FighterColleyDecay','FighterMasseyOrig','FighterMasseyDecay']
 if 'CareerAvg_Ctrl' in data.columns: display_cols.append('CareerAvg_Ctrl')
 display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
@@ -778,7 +827,11 @@ core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
         'FightNumber', 'Opponent_FightNumber', 'FighterOddsNum', 'PrevFighterOddsNum',
         'CareerWinPct', 'Opponent_CareerWinPct',
         'Prev7Wins', 'Opponent_Prev7Wins', 'Prev7Losses', 'Opponent_Prev7Losses',
-        'FighterColleyRating', 'OpponentColleyRating', 'ColleyRating_Diff']
+        # New ratings
+        'FighterColleyOrig', 'OpponentColleyOrig', 'ColleyOrig_Diff',
+        'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecay_Diff',
+        'FighterMasseyOrig', 'OpponentMasseyOrig', 'MasseyOrig_Diff',
+        'FighterMasseyDecay', 'OpponentMasseyDecay', 'MasseyDecay_Diff']
 career_avg = [c for c in data.columns if c.startswith('CareerAvg_') and not c.startswith('Opponent_CareerAvg_')]
 opp_career_avg = [c for c in data.columns if c.startswith('Opponent_CareerAvg_')]
 diff_cols = [c for c in data.columns if c.endswith('_Diff')]
@@ -1319,7 +1372,7 @@ else:
             'FightNumber', 'Opponent_FightNumber',
             'FighterOddsNum', 'PrevFighterOddsNum',
             'CareerWinPct', 'Prev7Wins', 'Prev7Losses', 'Opponent_Prev7Wins', 'Opponent_Prev7Losses',
-            'FighterColleyRating', 'OpponentColleyRating', 'ColleyRating_Diff',
+            'FighterColley', 'OpponentColley', 'Colley', 'FighterMassey', 'OpponentMassey', 'Massey',
             'CareerAvg_', 'Opponent_CareerAvg_',
             '_Diff'
         ]
