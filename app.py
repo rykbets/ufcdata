@@ -58,7 +58,7 @@ def normalize_title_col(series):
         return pd.Series('', index=series.index)
     return series.astype(str).str.strip().str.lower()
 
-# ---------- Define features – only adjperf diffs for models ----------
+# ---------- Define features – only adjperf diffs for model combos ----------
 adjperf_diff_cols = [c for c in data.columns if c.endswith('_diff') and c.startswith('adjperf_')]
 base_cols = ['Age', 'AgeDiff', 'HeightDiff', 'ReachDiff',
              'DaysSincePrev', 'DaysSincePrev_diff', 'Avg3DaysGap_diff',
@@ -69,6 +69,7 @@ base_cols = ['Age', 'AgeDiff', 'HeightDiff', 'ReachDiff',
              'FighterMasseyDecay', 'OpponentMasseyDecay', 'MasseyDecayDiff',
              'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecayDiff']
 
+# For 3D plots and models, we include base features and adjperf diffs
 new_features = []
 for col in base_cols:
     if col in data.columns:
@@ -77,7 +78,7 @@ for col in adjperf_diff_cols:
     if col in data.columns:
         new_features.append(col)
 
-# Remove duplicates while preserving order
+# Remove duplicates
 seen = set()
 new_features_unique = []
 for col in new_features:
@@ -89,8 +90,11 @@ new_features = new_features_unique
 # For 3D features, use numeric columns from new_features with variance
 three_d_features = [c for c in new_features if data[c].nunique(dropna=True) >= 2 and np.issubdtype(data[c].dtype, np.number)]
 
+# For combo builders, we only want adjperf diffs
+combo_features = [c for c in three_d_features if c in adjperf_diff_cols]
+
 # =========================================================================
-# Sidebar Filters (with existence checks)
+# Sidebar Filters (same as before)
 # =========================================================================
 st.sidebar.title("Filters")
 with st.sidebar.expander("General", expanded=True):
@@ -535,7 +539,7 @@ else:
     st.write("No upcoming fights match the current filters.")
 
 # =========================================================================
-# 3D LR SCATTER & COMBO BUILDER
+# 3D LR SCATTER & COMBO BUILDER (combo uses only adjperf diffs)
 # =========================================================================
 st.header("3D LR Win/Loss Prediction & Best LR Combinations")
 
@@ -618,69 +622,72 @@ if len(three_d_features) >= 3:
         else:
             st.info("LR model not trained.")
 
-        # LR combo builder
-        st.subheader("LR 3‑Variable Combinations (Brier)")
-        combo_candidates = [c for c in three_d_features if c != 'FighterOddsNum']
-        importance_features = [c for c in three_d_features if not c.endswith('_diff') and not c.startswith('Opponent_')]
-        @st.cache_data
-        def numerical_importance(_data, features):
-            hist = _data[_data['Win?'].isin(['Yes','No'])].copy()
-            hist['Target'] = (hist['Win?'] == 'Yes').astype(int)
-            features = list(dict.fromkeys(features))
-            X = hist[features].dropna()
-            y = hist.loc[X.index, 'Target']
-            if len(X) > 10:
-                X_imp = SimpleImputer(strategy='median').fit_transform(X)
-                mi = mutual_info_classif(X_imp, y, discrete_features=False)
-                return pd.DataFrame({'Feature': features, 'Mutual Information': mi}).sort_values('Mutual Information', ascending=False).head(20)
-            return pd.DataFrame()
-        mi_df = numerical_importance(data, importance_features)
-        top_feats = mi_df['Feature'].tolist() if not mi_df.empty else combo_candidates
-        num_top = st.slider("Top features to test", 5, min(30, len(top_feats)), 10, key="lr_combo_top")
-        candidates = top_feats[:num_top]
-        candidates = [c for c in candidates if c != 'FighterOddsNum']
-
-        data_fp = hash(str(data.shape))
-        if "lr_combo_results" not in st.session_state:
-            st.session_state.lr_combo_results = None
-            st.session_state.lr_combo_hash = data_fp
-        if st.session_state.lr_combo_hash != data_fp:
-            st.session_state.lr_combo_results = None
-            st.session_state.lr_combo_hash = data_fp
-
-        if len(candidates) >= 3:
-            if st.button("Compute LR 3‑Var Combos", key="lr_combo_btn"):
-                with st.spinner("Testing 3‑variable LR combos…"):
-                    hist = data[data['Win?'].isin(['Yes','No'])].copy()
-                    hist['WinNum'] = (hist['Win?'] == 'Yes').astype(int)
-                    results = []
-                    for combo in itertools.combinations(candidates, 3):
-                        sub = hist[list(combo) + ['WinNum']].dropna()
-                        if len(sub) < 10 or sub['WinNum'].nunique() < 2:
-                            continue
-                        X = sub[list(combo)].values
-                        y = sub['WinNum'].values
-                        try:
-                            lr = LogisticRegression(max_iter=1000)
-                            y_prob = cross_val_predict(lr, X, y, cv=5, method='predict_proba')[:, 1]
-                            bs = brier_score_loss(y, y_prob)
-                            results.append({'Variables': ', '.join(combo), 'Brier': bs})
-                        except:
-                            pass
-                    if results:
-                        st.session_state.lr_combo_results = pd.DataFrame(results).sort_values('Brier').head(20)
-                    else:
-                        st.warning("Could not evaluate any combination.")
-            if st.session_state.lr_combo_results is not None:
-                st.write("**Top 20 3‑Variable Combinations (Brier)**")
-                st.dataframe(st.session_state.lr_combo_results, use_container_width=True)
+        # ---- LR combo builder using ONLY adjperf diffs ----
+        st.subheader("LR 3‑Variable Combinations (Brier) – Adjperf Diffs Only")
+        # Only use adjperf diffs that have variance
+        combo_candidates = [c for c in combo_features if c != 'FighterOddsNum' and c in data.columns]
+        if len(combo_candidates) < 3:
+            st.warning("Not enough adjperf diff features to test (need at least 3).")
         else:
-            st.warning("Not enough features to test (need at least 3).")
+            # For importance, we use only these candidates
+            @st.cache_data
+            def adjperf_importance(_data, features):
+                hist = _data[_data['Win?'].isin(['Yes','No'])].copy()
+                hist['Target'] = (hist['Win?'] == 'Yes').astype(int)
+                X = hist[features].dropna()
+                y = hist.loc[X.index, 'Target']
+                if len(X) > 10:
+                    X_imp = SimpleImputer(strategy='median').fit_transform(X)
+                    mi = mutual_info_classif(X_imp, y, discrete_features=False)
+                    return pd.DataFrame({'Feature': features, 'Mutual Information': mi}).sort_values('Mutual Information', ascending=False).head(20)
+                return pd.DataFrame()
+            mi_df = adjperf_importance(data, combo_candidates)
+            top_feats = mi_df['Feature'].tolist() if not mi_df.empty else combo_candidates
+            num_top = st.slider("Top features to test", 5, min(30, len(top_feats)), 10, key="lr_combo_top_adj")
+            candidates = top_feats[:num_top]
+            candidates = [c for c in candidates if c != 'FighterOddsNum']
+
+            data_fp = hash(str(data.shape))
+            if "lr_combo_results_adj" not in st.session_state:
+                st.session_state.lr_combo_results_adj = None
+                st.session_state.lr_combo_hash_adj = data_fp
+            if st.session_state.lr_combo_hash_adj != data_fp:
+                st.session_state.lr_combo_results_adj = None
+                st.session_state.lr_combo_hash_adj = data_fp
+
+            if len(candidates) >= 3:
+                if st.button("Compute LR 3‑Var Combos (Adjperf Diffs)", key="lr_combo_btn_adj"):
+                    with st.spinner("Testing 3‑variable LR combos on adjperf diffs…"):
+                        hist = data[data['Win?'].isin(['Yes','No'])].copy()
+                        hist['WinNum'] = (hist['Win?'] == 'Yes').astype(int)
+                        results = []
+                        for combo in itertools.combinations(candidates, 3):
+                            sub = hist[list(combo) + ['WinNum']].dropna()
+                            if len(sub) < 10 or sub['WinNum'].nunique() < 2:
+                                continue
+                            X = sub[list(combo)].values
+                            y = sub['WinNum'].values
+                            try:
+                                lr = LogisticRegression(max_iter=1000)
+                                y_prob = cross_val_predict(lr, X, y, cv=5, method='predict_proba')[:, 1]
+                                bs = brier_score_loss(y, y_prob)
+                                results.append({'Variables': ', '.join(combo), 'Brier': bs})
+                            except:
+                                pass
+                        if results:
+                            st.session_state.lr_combo_results_adj = pd.DataFrame(results).sort_values('Brier').head(20)
+                        else:
+                            st.warning("Could not evaluate any combination.")
+                if st.session_state.lr_combo_results_adj is not None:
+                    st.write("**Top 20 3‑Variable Combinations (Brier) – Adjperf Diffs**")
+                    st.dataframe(st.session_state.lr_combo_results_adj, use_container_width=True)
+            else:
+                st.warning("Not enough adjperf diff features to test (need at least 3).")
 else:
     st.warning("Not enough numerical features for a 3D LR plot (need at least 3).")
 
 # =========================================================================
-# 3D KNN SCATTER & COMBO BUILDER
+# 3D KNN SCATTER & COMBO BUILDER (combo uses only adjperf diffs)
 # =========================================================================
 st.header("3D Weighted KNN Win/Loss Prediction (Platt‑scaled) & Best KNN Combinations")
 
@@ -789,64 +796,69 @@ if len(three_d_features) >= 3:
         else:
             st.info("KNN model not trained. Check status above.")
 
-        # KNN combo builder
-        st.subheader("KNN 3‑Variable Combinations (Brier, In‑Sample)")
-        combo_candidates_knn = [c for c in three_d_features if c != 'FighterOddsNum']
-        if not mi_df.empty:
-            top_features_knn = mi_df['Feature'].tolist()
+        # ---- KNN combo builder using ONLY adjperf diffs ----
+        st.subheader("KNN 3‑Variable Combinations (Brier, In‑Sample) – Adjperf Diffs Only")
+        # Same as LR combo builder, use combo_features
+        combo_candidates_knn = [c for c in combo_features if c != 'FighterOddsNum' and c in data.columns]
+        if len(combo_candidates_knn) < 3:
+            st.warning("Not enough adjperf diff features to test (need at least 3).")
         else:
-            top_features_knn = combo_candidates_knn
-        num_top_knn = st.slider("Top features to test", 5, min(30, len(top_features_knn)), 10, key="knn_combo_top")
-        candidates_knn = top_features_knn[:num_top_knn]
-        candidates_knn = [c for c in candidates_knn if c != 'FighterOddsNum']
-        k_combo = st.slider("KNN neighbors (combo builder)", 1, 20, 5, key="knn_combo_k")
+            # Reuse the importance from above or compute again
+            if not mi_df.empty:
+                top_features_knn = mi_df['Feature'].tolist()
+            else:
+                top_features_knn = combo_candidates_knn
+            num_top_knn = st.slider("Top features to test", 5, min(30, len(top_features_knn)), 10, key="knn_combo_top_adj")
+            candidates_knn = top_features_knn[:num_top_knn]
+            candidates_knn = [c for c in candidates_knn if c != 'FighterOddsNum']
+            k_combo = st.slider("KNN neighbors (combo builder)", 1, 20, 5, key="knn_combo_k_adj")
 
-        data_fp_knn = hash(str(data.shape))
-        if "knn_combo_results" not in st.session_state:
-            st.session_state.knn_combo_results = None
-            st.session_state.knn_combo_hash = data_fp_knn
-        if st.session_state.knn_combo_hash != data_fp_knn:
-            st.session_state.knn_combo_results = None
-            st.session_state.knn_combo_hash = data_fp_knn
+            data_fp_knn = hash(str(data.shape))
+            if "knn_combo_results_adj" not in st.session_state:
+                st.session_state.knn_combo_results_adj = None
+                st.session_state.knn_combo_hash_adj = data_fp_knn
+            if st.session_state.knn_combo_hash_adj != data_fp_knn:
+                st.session_state.knn_combo_results_adj = None
+                st.session_state.knn_combo_hash_adj = data_fp_knn
 
-        if len(candidates_knn) >= 3:
-            if st.button("Compute KNN 3‑Var Combos (In‑Sample)", key="knn_combo_btn"):
-                with st.spinner("Testing 3‑variable KNN combos (in‑sample)…"):
-                    hist_combo = data[data['Win?'].isin(['Yes','No'])].copy()
-                    hist_combo = hist_combo.loc[:, ~hist_combo.columns.duplicated()]
-                    hist_combo['WinNum'] = (hist_combo['Win?'] == 'Yes').astype(int)
-                    results = []
-                    for combo in itertools.combinations(candidates_knn, 3):
-                        c1 = get_first_col(hist_combo, combo[0])
-                        c2 = get_first_col(hist_combo, combo[1])
-                        c3 = get_first_col(hist_combo, combo[2])
-                        y = hist_combo['WinNum'].values
-                        mask = ~(np.isnan(c1) | np.isnan(c2) | np.isnan(c3))
-                        if mask.sum() < 10 or np.unique(y[mask]).size < 2:
-                            continue
-                        X = np.column_stack([c1[mask], c2[mask], c3[mask]])
-                        y_clean = y[mask]
-                        try:
-                            scaler_combo = StandardScaler()
-                            X_scaled = scaler_combo.fit_transform(X)
-                            base_knn_cv = KNeighborsClassifier(n_neighbors=k_combo, weights='distance')
-                            calibrated = CalibratedClassifierCV(base_knn_cv, method='sigmoid', cv=5)
-                            calibrated.fit(X_scaled, y_clean)
-                            y_prob = calibrated.predict_proba(X_scaled)[:, 1]
-                            y_prob = np.clip(y_prob, 0.1, 0.9)
-                            bs = brier_score_loss(y_clean, y_prob)
-                            results.append({'Variables': ', '.join(combo), 'Brier (In‑Sample)': bs})
-                        except:
-                            pass
-                    if results:
-                        st.session_state.knn_combo_results = pd.DataFrame(results).sort_values('Brier (In‑Sample)').head(20)
-                    else:
-                        st.warning("Could not evaluate any combination.")
-            if st.session_state.knn_combo_results is not None:
-                st.write("**Top 20 3‑Variable Combinations (Brier, In‑Sample)**")
-                st.dataframe(st.session_state.knn_combo_results, use_container_width=True)
-        else:
-            st.warning("Not enough features to test (need at least 3).")
+            if len(candidates_knn) >= 3:
+                if st.button("Compute KNN 3‑Var Combos (Adjperf Diffs, In‑Sample)", key="knn_combo_btn_adj"):
+                    with st.spinner("Testing 3‑variable KNN combos on adjperf diffs (in‑sample)…"):
+                        hist_combo = data[data['Win?'].isin(['Yes','No'])].copy()
+                        hist_combo = hist_combo.loc[:, ~hist_combo.columns.duplicated()]
+                        hist_combo['WinNum'] = (hist_combo['Win?'] == 'Yes').astype(int)
+                        results = []
+                        for combo in itertools.combinations(candidates_knn, 3):
+                            c1 = get_first_col(hist_combo, combo[0])
+                            c2 = get_first_col(hist_combo, combo[1])
+                            c3 = get_first_col(hist_combo, combo[2])
+                            y = hist_combo['WinNum'].values
+                            mask = ~(np.isnan(c1) | np.isnan(c2) | np.isnan(c3))
+                            if mask.sum() < 10 or np.unique(y[mask]).size < 2:
+                                continue
+                            X = np.column_stack([c1[mask], c2[mask], c3[mask]])
+                            y_clean = y[mask]
+                            try:
+                                scaler_combo = StandardScaler()
+                                X_scaled = scaler_combo.fit_transform(X)
+                                base_knn_cv = KNeighborsClassifier(n_neighbors=k_combo, weights='distance')
+                                calibrated = CalibratedClassifierCV(base_knn_cv, method='sigmoid', cv=5)
+                                calibrated.fit(X_scaled, y_clean)
+                                y_prob = calibrated.predict_proba(X_scaled)[:, 1]
+                                y_prob = np.clip(y_prob, 0.1, 0.9)
+                                bs = brier_score_loss(y_clean, y_prob)
+                                results.append({'Variables': ', '.join(combo), 'Brier (In‑Sample)': bs})
+                            except:
+                                pass
+                        if results:
+                            st.session_state.knn_combo_results_adj = pd.DataFrame(results).sort_values('Brier (In‑Sample)').head(20)
+                        else:
+                            st.warning("Could not evaluate any combination.")
+                if st.session_state.knn_combo_results_adj is not None:
+                    st.write("**Top 20 3‑Variable Combinations (Brier, In‑Sample) – Adjperf Diffs**")
+                    st.dataframe(st.session_state.knn_combo_results_adj, use_container_width=True)
+            else:
+                st.warning("Not enough adjperf diff features to test (need at least 3).")
 else:
     st.warning("Not enough numerical features for a 3D KNN plot (need at least 3).")
 
@@ -867,7 +879,7 @@ display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
 
 # =========================================================================
-# FEATURE IMPORTANCE (with deduplication)
+# FEATURE IMPORTANCE (use all new_features)
 # =========================================================================
 st.header("Top 20 Feature Importance (Current Filter Set)")
 hist_imp = data[data['Win?'].isin(['Yes', 'No'])].copy()
