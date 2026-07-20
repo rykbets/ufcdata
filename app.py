@@ -29,6 +29,7 @@ def load_data():
     return pd.read_parquet("data.parquet")
 
 data = load_data()
+original_data = data.copy()  # keep full data for restoring missing rows
 
 # ---------- Helper functions ----------
 def get_diff_range(df, col_name):
@@ -187,34 +188,27 @@ if opp_hometown != "All": filtered = filtered[filtered['Opponent_Hometown'] == o
 if event_country: filtered = filtered[filtered['EventCountry'].isin(event_country)]
 if new_wc: filtered = filtered[filtered['IsNewWeightClass'] == True]
 
-# ---- Title filters at FightID level ----
+# ---- Title filters: keep fight if at least one fighter matches, then restore missing rows ----
 filtered['Prev1_Title_clean'] = normalize_title_col(filtered.get('Prev1_Title', None))
 if 'Opponent_Prev1_Title' in filtered.columns:
     filtered['Opp_Prev1_Title_clean'] = normalize_title_col(filtered['Opponent_Prev1_Title'])
 
+# Keep FightIDs where at least one fighter passes the condition
 if prev_title != "All":
-    fight_groups = filtered.groupby('FightID')
-    keep_fights = []
-    for fid, group in fight_groups:
-        if (group['Prev1_Title_clean'] == prev_title.lower()).all():
-            keep_fights.append(fid)
-    filtered = filtered[filtered['FightID'].isin(keep_fights)]
+    fighter_mask = filtered['Prev1_Title_clean'] == prev_title.lower()
+    matching_fight_ids = filtered.loc[fighter_mask, 'FightID'].unique()
+    filtered = filtered[filtered['FightID'].isin(matching_fight_ids)]
 
 if opp_prev_title != "All" and 'Opp_Prev1_Title_clean' in filtered.columns:
-    fight_groups = filtered.groupby('FightID')
-    keep_fights = []
-    for fid, group in fight_groups:
-        if (group['Opp_Prev1_Title_clean'] == opp_prev_title.lower()).all():
-            keep_fights.append(fid)
-    filtered = filtered[filtered['FightID'].isin(keep_fights)]
+    fighter_mask = filtered['Opp_Prev1_Title_clean'] == opp_prev_title.lower()
+    matching_fight_ids = filtered.loc[fighter_mask, 'FightID'].unique()
+    filtered = filtered[filtered['FightID'].isin(matching_fight_ids)]
 
-# ---- Other outcome filters (also at FightID level to be safe) ----
-# For simplicity, keep row-wise filters for outcome categories that apply to individual fighters
-# But we'll ensure no broken pairs; we'll apply them after all numeric filters.
-# We'll keep the original row-wise application for these - it's fine as long as we later reconstruct pairs if needed.
-# However, to avoid dropping one side of a fight, we should also apply these at FightID level.
-# For now, we'll keep the original row-wise code (they are less likely to break pairs).
+# Re-add missing rows from original_data for the remaining FightIDs
+fids = filtered['FightID'].unique()
+filtered = original_data[original_data['FightID'].isin(fids)]
 
+# ---- Other outcome filters (row-wise) ----
 if prev1: filtered = filtered[filtered[prev1_col].isin(prev1)]
 if prev2: filtered = filtered[filtered[prev2_col].isin(prev2)]
 if prev3: filtered = filtered[filtered[prev3_col].isin(prev3)]
@@ -721,7 +715,7 @@ if not upcoming_data.empty:
             else:
                 st.info("KNN model not trained. Check status above.")
         else:
-            st.warning(f"Expected 2 rows for this fight, but got {len(fight_rows)}. Check your data.")
+            st.warning(f"Expected 2 rows for this fight, but got {len(fight_rows)}. This should not happen now.")
 else:
     st.write("No upcoming fights match the current filters.")
 
