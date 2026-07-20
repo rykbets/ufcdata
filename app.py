@@ -539,12 +539,12 @@ if len(three_d_features) >= 3:
 
             # ----- LR Win Probability Estimate -----
             st.subheader("LR Win Probability Estimate")
-            all_upcoming = data[data['Win?'].isna() | (data['Win?'] == '')]
-            if not all_upcoming.empty:
-                up_ids = all_upcoming['FightID'].unique()
-                chosen_id = st.selectbox("Select upcoming fight", sorted(up_ids), key="lr_up")
+            upcoming = data[data['Win?'].isna() | (data['Win?'] == '')]
+            if not upcoming.empty:
+                up_ids = sorted(upcoming['FightID'].unique())
+                chosen_id = st.selectbox("Select upcoming fight", up_ids, key="lr_up")
                 if chosen_id:
-                    up_rows = all_upcoming[all_upcoming['FightID'] == chosen_id]
+                    up_rows = upcoming[upcoming['FightID'] == chosen_id]
                     if len(up_rows) == 2:
                         fighter_row = up_rows.iloc[0]
 
@@ -559,8 +559,8 @@ if len(three_d_features) >= 3:
                         v2 = safe_val(y_lr)
                         v3 = safe_val(z_lr)
 
-                        up_val = np.array([[v1, v2, v3]])
-                        prob_lr = lr_model.predict_proba(up_val)[0, 1]
+                        up_arr = np.array([[v1, v2, v3]])
+                        prob_lr = lr_model.predict_proba(up_arr)[0, 1]
 
                         if recent_count > 0:
                             shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
@@ -575,6 +575,9 @@ if len(three_d_features) >= 3:
                             st.metric("LR shrunken", f"{shrunk_prob:.1%}")
             else:
                 st.write("No upcoming fights available.")
+
+    # --- LR 3‑Variable Combination Builder (Brier) ---
+    # (keep your existing combination builder code)
 
     # --- LR 3‑Variable Combination Builder (Brier) ---
     st.subheader("LR 3‑Variable Combinations (Brier)")
@@ -726,6 +729,47 @@ if len(three_d_features) >= 3:
             with col_m3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
+
+            # ----- KNN Win Probability Estimate -----
+            st.subheader("KNN Win Probability Estimate")
+            upcoming = data[data['Win?'].isna() | (data['Win?'] == '')]
+            if not upcoming.empty:
+                up_ids = sorted(upcoming['FightID'].unique())
+                chosen_id = st.selectbox("Select upcoming fight", up_ids, key="knn_up")
+                if chosen_id:
+                    up_rows = upcoming[upcoming['FightID'] == chosen_id]
+                    if len(up_rows) == 2:
+                        fighter_row = up_rows.iloc[0]
+                        means = X_train.mean(axis=0)
+                        vals = []
+                        for i, col_name in enumerate([x_knn, y_knn, z_knn]):
+                            raw = get_first_col(pd.DataFrame(fighter_row).T, col_name)[0]
+                            try:
+                                v = float(raw) if pd.notna(raw) else means[i]
+                            except (ValueError, TypeError):
+                                v = means[i]
+                            vals.append(v)
+                        up_arr = np.array([vals], dtype=np.float64)
+                        up_scaled = scaler.transform(up_arr)
+                        prob_knn = calibrated_knn.predict_proba(up_scaled)[0, 1]
+                        prob_knn = np.clip(prob_knn, 0.1, 0.9)
+
+                        if recent_count > 0:
+                            shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
+                        else:
+                            shrunk_recent = overall_wr
+                        shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_knn) / (prior_weight + 1)
+
+                        col_p1, col_p2 = st.columns(2)
+                        with col_p1:
+                            st.metric("KNN win prob", f"{prob_knn:.1%}")
+                        with col_p2:
+                            st.metric("KNN shrunken", f"{shrunk_prob:.1%}")
+            else:
+                st.write("No upcoming fights available.")
+
+    # --- KNN 3‑Variable Combination Builder (IN‑SAMPLE) ---
+    # (keep your existing combo builder unchanged)
 
             # ----- KNN Win Probability Estimate -----
             st.subheader("KNN Win Probability Estimate")
