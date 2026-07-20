@@ -859,30 +859,34 @@ else:
 
     # --- Numerical feature importance ---
     # Build the list of eligible numerical features directly from the current filtered data,
-    # using the same rules as `numerical_features` but without relying on a stale variable.
-    core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
-            'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev', 'Avg3DaysGap',
-            'FightNumber', 'Opponent_FightNumber', 'FighterOddsNum', 'PrevFighterOddsNum',
-            'CareerWinPct', 'Opponent_CareerWinPct',
-            'Prev7Wins', 'Opponent_Prev7Wins', 'Prev7Losses', 'Opponent_Prev7Losses',
-            'FighterColleyOrig', 'OpponentColleyOrig', 'ColleyOrig_Diff',
-            'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecay_Diff',
-            'FighterMasseyOrig', 'OpponentMasseyOrig', 'MasseyOrig_Diff',
-            'FighterMasseyDecay', 'OpponentMasseyDecay', 'MasseyDecay_Diff',
-            'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecay_Diff']
+    # using the same rules as `numerical_features` but completely fresh.
+    core_cols = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
+                 'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev', 'Avg3DaysGap',
+                 'FightNumber', 'Opponent_FightNumber', 'FighterOddsNum', 'PrevFighterOddsNum',
+                 'CareerWinPct', 'Opponent_CareerWinPct',
+                 'Prev7Wins', 'Opponent_Prev7Wins', 'Prev7Losses', 'Opponent_Prev7Losses',
+                 'FighterColleyOrig', 'OpponentColleyOrig', 'ColleyOrig_Diff',
+                 'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecay_Diff',
+                 'FighterMasseyOrig', 'OpponentMasseyOrig', 'MasseyOrig_Diff',
+                 'FighterMasseyDecay', 'OpponentMasseyDecay', 'MasseyDecay_Diff',
+                 'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecay_Diff']
     career_avg_cols = [c for c in data.columns if c.startswith('CareerAvg_') and not c.startswith('Opponent_CareerAvg_')]
     opp_career_avg_cols = [c for c in data.columns if c.startswith('Opponent_CareerAvg_')]
     diff_cols = [c for c in data.columns if c.endswith('_Diff')]
 
     eligible = list(dict.fromkeys(
-        c for c in core + career_avg_cols + opp_career_avg_cols + diff_cols
-        if c in data.columns and not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')
+        c for c in core_cols + career_avg_cols + opp_career_avg_cols + diff_cols
+        if c in data.columns
+        and not re.match(r'Prev\d+_', c)
+        and not c.startswith('Opponent_Prev')
         and data[c].nunique(dropna=True) >= 2
     ))
 
     if eligible:
         X_num = hist_imp[eligible].dropna()
         if len(X_num) > 10 and X_num.shape[1] > 0:
+            # Show how many fights are being used
+            st.caption(f"Computing importance on **{len(X_num)}** historical fights (after applying all sidebar filters).")
             imputer = SimpleImputer(strategy='median')
             X_imp = imputer.fit_transform(X_num)
             y_num = hist_imp.loc[X_num.index, 'Target']
@@ -891,9 +895,12 @@ else:
                 'Feature': eligible,
                 'Mutual Information': mi
             }).sort_values('Mutual Information', ascending=False).head(20)
+
+            # Use a dynamic chart key based on the current data hash to force a fresh render
+            chart_key = f"num_importance_{hash(str(data.shape))}"
             fig_num = px.bar(mi_df_num, x='Mutual Information', y='Feature', orientation='h',
                              title="Top 20 Numerical Features by Mutual Information with Win/Loss")
-            st.plotly_chart(fig_num, use_container_width=True)
+            st.plotly_chart(fig_num, use_container_width=True, key=chart_key)
         else:
             st.warning("Not enough complete rows for numerical importance.")
     else:
@@ -917,10 +924,11 @@ else:
                 'Feature': list(scores.keys()),
                 'Mutual Information': list(scores.values())
             }).sort_values('Mutual Information', ascending=False).head(20)
+            cat_chart_key = f"cat_importance_{hash(str(data.shape))}"
             fig_cat = px.bar(cat_mi_df, x='Mutual Information', y='Feature', orientation='h',
                              title="Top Categorical Features by Mutual Information with Win/Loss",
                              color_discrete_sequence=['#636efa'])
-            st.plotly_chart(fig_cat, use_container_width=True)
+            st.plotly_chart(fig_cat, use_container_width=True, key=cat_chart_key)
         else:
             st.warning("No categorical column had enough variation.")
     else:
