@@ -264,7 +264,7 @@ opp_prev_title = st.sidebar.selectbox("Opp Prev Fight Was Title?", ["All", "Yes"
 new_wc = st.sidebar.checkbox("New Weight Class", key="filter_new_wc") if 'IsNewWeightClass' in data.columns else False
 
 # =========================================================================
-# APPLY FILTERS (with robust checks)
+# APPLY FILTERS (with robust checks – ALL filters shown in debug)
 # =========================================================================
 filtered = data.copy()
 debug_info = []  # to collect counts
@@ -274,27 +274,195 @@ def filter_step(df, label, condition):
         before = len(df)
         df = df[condition]
         debug_info.append(f"{label}: {before} → {len(df)}")
+    else:
+        # Show that the filter was skipped (optional)
+        debug_info.append(f"{label}: SKIPPED (condition missing)")
     return df
 
-# 1. General
+# 1. General – pull from session state to ensure values are captured
+wc = st.session_state.get('filter_wc', [])
+stance = st.session_state.get('filter_stance', [])
+country = st.session_state.get('filter_country', [])
+sched_rounds = st.session_state.get('filter_sched', [])
+title_fight = st.session_state.get('filter_titlefight', "All")
+hometown = st.session_state.get('filter_hometown', "All")
+opp_hometown = st.session_state.get('filter_opphometown', "All")
+event_country = st.session_state.get('filter_event', [])
+new_wc = st.session_state.get('filter_new_wc', False)
+
+# Now apply each filter and log it
 if wc and 'WC' in filtered.columns:
     filtered = filter_step(filtered, "Weight Class", filtered['WC'].isin(wc))
+else:
+    debug_info.append("Weight Class: SKIPPED (no selection)")
 if stance and 'Stance' in filtered.columns:
     filtered = filter_step(filtered, "Stance", filtered['Stance'].isin(stance))
+else:
+    debug_info.append("Stance: SKIPPED (no selection)")
 if country and 'Country' in filtered.columns:
     filtered = filter_step(filtered, "Country", filtered['Country'].isin(country))
+else:
+    debug_info.append("Country: SKIPPED (no selection)")
 if sched_rounds and 'ScheduledRounds' in filtered.columns:
     filtered = filter_step(filtered, "Sched Rounds", filtered['ScheduledRounds'].isin(sched_rounds))
+else:
+    debug_info.append("Sched Rounds: SKIPPED (no selection)")
 if title_fight != "All" and 'Title' in filtered.columns:
     filtered = filter_step(filtered, "Title Fight", filtered['Title'] == title_fight)
+else:
+    debug_info.append("Title Fight: SKIPPED (set to All or column missing)")
 if hometown != "All" and 'HometownFighter' in filtered.columns:
     filtered = filter_step(filtered, "Hometown", filtered['HometownFighter'] == hometown)
+else:
+    debug_info.append("Hometown: SKIPPED (set to All or column missing)")
 if opp_hometown != "All" and 'Opponent_Hometown' in filtered.columns:
     filtered = filter_step(filtered, "Opp Hometown", filtered['Opponent_Hometown'] == opp_hometown)
+else:
+    debug_info.append("Opp Hometown: SKIPPED (set to All or column missing)")
 if event_country and 'EventCountry' in filtered.columns:
     filtered = filter_step(filtered, "Event Country", filtered['EventCountry'].isin(event_country))
+else:
+    debug_info.append("Event Country: SKIPPED (no selection)")
 if new_wc and 'IsNewWeightClass' in filtered.columns:
     filtered = filter_step(filtered, "New Weight Class", filtered['IsNewWeightClass'] == True)
+else:
+    debug_info.append("New Weight Class: SKIPPED (not checked or column missing)")
+
+# 2. Title filters (Prev Title)
+if 'Prev1_Title' in filtered.columns:
+    filtered['Prev1_Title_clean'] = normalize_title_col(filtered['Prev1_Title'])
+    prev_title = st.session_state.get('filter_prev_title', "All")
+    if prev_title != "All":
+        filtered = filter_step(filtered, "Prev Title", filtered['Prev1_Title_clean'] == prev_title.lower())
+    else:
+        debug_info.append("Prev Title: SKIPPED (set to All)")
+if 'Opponent_Prev1_Title' in filtered.columns:
+    filtered['Opp_Prev1_Title_clean'] = normalize_title_col(filtered['Opponent_Prev1_Title'])
+    opp_prev_title = st.session_state.get('filter_opp_prev_title', "All")
+    if opp_prev_title != "All":
+        filtered = filter_step(filtered, "Opp Prev Title", filtered['Opp_Prev1_Title_clean'] == opp_prev_title.lower())
+    else:
+        debug_info.append("Opp Prev Title: SKIPPED (set to All)")
+
+# 3. Fight numbers
+fn_min = st.session_state.get('filter_fn_min', 1)
+fn_max = st.session_state.get('filter_fn_max', 1000)
+ofn_min = st.session_state.get('filter_ofn_min', 1)
+ofn_max = st.session_state.get('filter_ofn_max', 1000)
+
+if 'FightNumber' in filtered.columns:
+    filtered = filter_step(filtered, "Fight #", (filtered['FightNumber'] >= fn_min) & (filtered['FightNumber'] <= fn_max))
+if 'Opponent_FightNumber' in filtered.columns:
+    filtered = filter_step(filtered, "Opp Fight #", (filtered['Opponent_FightNumber'] >= ofn_min) & (filtered['Opponent_FightNumber'] <= ofn_max))
+
+# 4. Physical, days, odds (pull from session state)
+age = st.session_state.get('filter_age', (0, 100))
+age_diff = st.session_state.get('filter_age_diff', (-100, 100))
+height_diff = st.session_state.get('filter_height_diff', (-50, 50))
+reach_diff = st.session_state.get('filter_reach_diff', (-50, 50))
+days = st.session_state.get('filter_days', (0, 1000))
+days_diff = st.session_state.get('filter_days_diff', (-1000, 1000))
+avg3_diff = st.session_state.get('filter_avg3_diff', (-1000, 1000))
+cwp_min = st.session_state.get('filter_cwp_min', -100)
+cwp_max = st.session_state.get('filter_cwp_max', 100)
+cur_odds = st.session_state.get('filter_cur_odds', (-1000, 1000))
+prev_odds = st.session_state.get('filter_prev_odds', (-1000, 1000))
+
+if 'Age' in filtered.columns:
+    filtered = filter_step(filtered, "Age", (filtered['Age'] >= age[0]) & (filtered['Age'] <= age[1]))
+if 'AgeDiff' in filtered.columns:
+    filtered = filter_step(filtered, "Age Diff", (filtered['AgeDiff'] >= age_diff[0]) & (filtered['AgeDiff'] <= age_diff[1]))
+if 'HeightDiff' in filtered.columns:
+    filtered = filter_step(filtered, "Height Diff", (filtered['HeightDiff'] >= height_diff[0]) & (filtered['HeightDiff'] <= height_diff[1]))
+if 'ReachDiff' in filtered.columns:
+    filtered = filter_step(filtered, "Reach Diff", (filtered['ReachDiff'] >= reach_diff[0]) & (filtered['ReachDiff'] <= reach_diff[1]))
+if 'DaysSincePrev' in filtered.columns:
+    filtered = filter_step(filtered, "Days Since Prev", (filtered['DaysSincePrev'] >= days[0]) & (filtered['DaysSincePrev'] <= days[1]))
+if 'DaysSincePrev_diff' in filtered.columns:
+    filtered = filter_step(filtered, "Days Since Prev Diff", (filtered['DaysSincePrev_diff'] >= days_diff[0]) & (filtered['DaysSincePrev_diff'] <= days_diff[1]))
+if 'Avg3DaysGap_diff' in filtered.columns:
+    filtered = filter_step(filtered, "Avg3 Gap Diff", (filtered['Avg3DaysGap_diff'] >= avg3_diff[0]) & (filtered['Avg3DaysGap_diff'] <= avg3_diff[1]))
+if 'CareerWinPct_diff' in filtered.columns and filtered['CareerWinPct_diff'].notna().any():
+    filtered = filter_step(filtered, "Career Win% Diff", (filtered['CareerWinPct_diff'] >= cwp_min) & (filtered['CareerWinPct_diff'] <= cwp_max))
+if 'FighterOddsNum' in filtered.columns and filtered['FighterOddsNum'].notna().any():
+    filtered = filter_step(filtered, "Fighter Odds", (filtered['FighterOddsNum'] >= cur_odds[0]) & (filtered['FighterOddsNum'] <= cur_odds[1]))
+if 'PrevFighterOddsNum' in filtered.columns and filtered['PrevFighterOddsNum'].notna().any():
+    filtered = filter_step(filtered, "Prev Fighter Odds", (filtered['PrevFighterOddsNum'] >= prev_odds[0]) & (filtered['PrevFighterOddsNum'] <= prev_odds[1]))
+
+# 5. Previous outcomes (fighter) – pull from session state
+prev1 = st.session_state.get('filter_prev1', [])
+prev2 = st.session_state.get('filter_prev2', [])
+prev3 = st.session_state.get('filter_prev3', [])
+career1 = st.session_state.get('filter_career1', [])
+career2 = st.session_state.get('filter_career2', [])
+career3 = st.session_state.get('filter_career3', [])
+
+if prev1 and prev1_col in filtered.columns:
+    filtered = filter_step(filtered, "Prev1 Outcome", filtered[prev1_col].isin(prev1))
+if prev2 and prev2_col in filtered.columns:
+    filtered = filter_step(filtered, "Prev2 Outcome", filtered[prev2_col].isin(prev2))
+if prev3 and prev3_col in filtered.columns:
+    filtered = filter_step(filtered, "Prev3 Outcome", filtered[prev3_col].isin(prev3))
+if career1 and career1_col in filtered.columns:
+    filtered = filter_step(filtered, "Career1 Outcome", filtered[career1_col].isin(career1))
+if career2 and career2_col in filtered.columns:
+    filtered = filter_step(filtered, "Career2 Outcome", filtered[career2_col].isin(career2))
+if career3 and career3_col in filtered.columns:
+    filtered = filter_step(filtered, "Career3 Outcome", filtered[career3_col].isin(career3))
+
+# 6. Opponent previous outcomes (shifted)
+opp_prev1 = st.session_state.get('filter_opp_prev1', [])
+opp_prev2 = st.session_state.get('filter_opp_prev2', [])
+opp_prev3 = st.session_state.get('filter_opp_prev3', [])
+
+for shift, wlist in [(1, opp_prev1), (2, opp_prev2), (3, opp_prev3)]:
+    col = f'Opponent_Prev{shift}_Outcome_raw'
+    if col in filtered.columns and wlist:
+        if skip_nc:
+            col_use = f'Opponent_Prev{shift}_Outcome_skipNC'
+            if col_use in filtered.columns:
+                filtered = filter_step(filtered, f"Opp Prev{shift} (skipNC)", filtered[col_use].isin(wlist))
+        else:
+            filtered = filter_step(filtered, f"Opp Prev{shift} (raw)", filtered[col].isin(wlist))
+
+# 7. Opponent career outcomes
+opp_career1 = st.session_state.get('filter_opp_career1', [])
+opp_career2 = st.session_state.get('filter_opp_career2', [])
+opp_career3 = st.session_state.get('filter_opp_career3', [])
+
+if opp_career1 and opp_career1_col in filtered.columns:
+    filtered = filter_step(filtered, "Opp Career1", filtered[opp_career1_col].isin(opp_career1))
+if opp_career2 and opp_career2_col in filtered.columns:
+    filtered = filter_step(filtered, "Opp Career2", filtered[opp_career2_col].isin(opp_career2))
+if opp_career3 and opp_career3_col in filtered.columns:
+    filtered = filter_step(filtered, "Opp Career3", filtered[opp_career3_col].isin(opp_career3))
+
+# 8. Ratings filters
+use_colley = st.session_state.get('filter_use_colley', False)
+use_massey = st.session_state.get('filter_use_massey', False)
+use_wmd = st.session_state.get('filter_use_wmd', False)
+
+if use_colley and 'ColleyDecayDiff' in filtered.columns and filtered['ColleyDecayDiff'].notna().any():
+    colley_range = st.session_state.get('filter_colley', (0, 1))
+    filtered = filter_step(filtered, "Colley Decay Diff", (filtered['ColleyDecayDiff'] >= colley_range[0]) & (filtered['ColleyDecayDiff'] <= colley_range[1]))
+if use_massey and 'MasseyDecayDiff' in filtered.columns and filtered['MasseyDecayDiff'].notna().any():
+    massey_range = st.session_state.get('filter_massey', (0, 1))
+    filtered = filter_step(filtered, "Massey Decay Diff", (filtered['MasseyDecayDiff'] >= massey_range[0]) & (filtered['MasseyDecayDiff'] <= massey_range[1]))
+if use_wmd and 'WeightedMasseyDecayDiff' in filtered.columns and filtered['WeightedMasseyDecayDiff'].notna().any():
+    wmd_range = st.session_state.get('filter_wmd', (0, 1))
+    filtered = filter_step(filtered, "Weighted Massey Decay Diff", (filtered['WeightedMasseyDecayDiff'] >= wmd_range[0]) & (filtered['WeightedMasseyDecayDiff'] <= wmd_range[1]))
+
+# Show debug info in a collapsible expander
+with st.sidebar.expander("🔍 Filter Debug (collapsible)", expanded=False):
+    st.write("Initial rows:", len(original_data))
+    st.write("Rows after all filters:", len(filtered))
+    for line in debug_info:
+        st.write(line)
+    if len(debug_info) == 0:
+        st.write("No filters applied.")
+
+# Overwrite data
+data = filtered
 
 # 2. Title filters (Prev Title)
 if 'Prev1_Title' in filtered.columns:
