@@ -335,6 +335,8 @@ if 'lr_train_status' not in st.session_state:
     st.session_state.lr_train_status = "Not trained"
 if 'knn_train_status' not in st.session_state:
     st.session_state.knn_train_status = "Not trained"
+if 'selected_fight_row' not in st.session_state:
+    st.session_state.selected_fight_row = None  # will store the selected fighter's row for probability display
 
 # Set default features to Age, Height, Reach
 default_lr = ['Age', 'Height', 'Reach']
@@ -540,7 +542,7 @@ else:
     st.info("Enable one or more rating gap filters to see the combined effect.")
 
 # =========================================================================
-# UPCOMING FIGHT MATCHUP (using matchup_data from original_data)
+# UPCOMING FIGHT MATCHUP (shows probabilities for the default features)
 # =========================================================================
 st.header("Upcoming Fight Matchup")
 
@@ -565,6 +567,8 @@ if not upcoming_display.empty:
         if len(fight_rows) == 2:
             f1_row = fight_rows.iloc[0]
             f2_row = fight_rows.iloc[1]
+            # Store the selected fighter's row for later use in scatter sections
+            st.session_state.selected_fight_row = f1_row
             st.write(f"### {f1_row['Fighter']} vs {f2_row['Fighter']}")
 
             def show_fighter_stats(row, label):
@@ -661,7 +665,7 @@ if not upcoming_display.empty:
 
             st.subheader(f"Model Win Probabilities for {f1_row['Fighter']}")
 
-            # LR
+            # LR (using default features)
             lr_model = st.session_state.lr_model
             if lr_model is not None and st.session_state.x_lr is not None:
                 def safe_val(row, col):
@@ -689,7 +693,7 @@ if not upcoming_display.empty:
             else:
                 st.info("LR model not trained. Check status above.")
 
-            # KNN
+            # KNN (using default features)
             calibrated_knn = st.session_state.calibrated_knn
             scaler = st.session_state.scaler
             X_train = st.session_state.X_train
@@ -727,7 +731,7 @@ else:
     st.write("No upcoming fights match the current filters.")
 
 # =========================================================================
-# 3D LR SCATTER & COMBO BUILDER (with metrics)
+# 3D LR SCATTER & COMBO BUILDER (with metrics + predicted probability)
 # =========================================================================
 st.header("3D LR Win/Loss Prediction & Best LR Combinations")
 
@@ -783,6 +787,29 @@ if len(three_d_features) >= 3:
                 with col_m3:
                     st.metric("Overall Win%", f"{overall_wr:.1f}%")
                     st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
+
+                # ---- Also show predicted win probability for selected fight (if any) ----
+                if st.session_state.selected_fight_row is not None:
+                    f1_row = st.session_state.selected_fight_row
+                    st.subheader(f"Predicted LR Win Probability for {f1_row['Fighter']} (using current features)")
+                    v1 = f1_row[x_lr] if pd.notna(f1_row[x_lr]) else 0.0
+                    v2 = f1_row[y_lr] if pd.notna(f1_row[y_lr]) else 0.0
+                    v3 = f1_row[z_lr] if pd.notna(f1_row[z_lr]) else 0.0
+                    try:
+                        prob_lr_fight = lr_model.predict_proba(np.array([[v1, v2, v3]]))[0, 1]
+                        overall_wr = st.session_state.overall_wr
+                        recent_wr = st.session_state.recent_wr
+                        recent_count = st.session_state.recent_count
+                        if recent_count > 0:
+                            shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
+                        else:
+                            shrunk_recent = overall_wr
+                        shrunk_lr_fight = (prior_weight * (shrunk_recent / 100) + prob_lr_fight) / (prior_weight + 1)
+                        st.write(f"**LR win probability:** {prob_lr_fight:.1%}  |  **shrunken:** {shrunk_lr_fight:.1%}")
+                    except Exception as e:
+                        st.error(f"Prediction error: {e}")
+                else:
+                    st.info("Select an upcoming fight in the Matchup section above to see LR prediction.")
             else:
                 st.info("No training data available for LR metrics.")
         else:
@@ -852,7 +879,7 @@ else:
     st.warning("Not enough numerical features for a 3D LR plot (need at least 3).")
 
 # =========================================================================
-# 3D KNN SCATTER & COMBO BUILDER (with metrics)
+# 3D KNN SCATTER & COMBO BUILDER (with metrics + predicted probability)
 # =========================================================================
 st.header("3D Weighted KNN Win/Loss Prediction (Platt‑scaled) & Best KNN Combinations")
 
@@ -910,6 +937,38 @@ if len(three_d_features) >= 3:
                 with col_m3:
                     st.metric("Overall Win%", f"{overall_wr:.1f}%")
                     st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
+
+                # ---- Also show predicted win probability for selected fight (if any) ----
+                if st.session_state.selected_fight_row is not None:
+                    f1_row = st.session_state.selected_fight_row
+                    st.subheader(f"Predicted KNN Win Probability for {f1_row['Fighter']} (using current features)")
+                    means_knn = X_knn.mean(axis=0)
+                    vals_knn = []
+                    for col_name in [x_knn, y_knn, z_knn]:
+                        raw = f1_row[col_name] if col_name in f1_row else np.nan
+                        try:
+                            v = float(raw) if pd.notna(raw) else means_knn[len(vals_knn)]
+                        except:
+                            v = means_knn[len(vals_knn)]
+                        vals_knn.append(v)
+                    try:
+                        up_arr = np.array([vals_knn], dtype=np.float64)
+                        up_scaled = scaler.transform(up_arr)
+                        prob_knn_fight = calibrated_knn.predict_proba(up_scaled)[0, 1]
+                        prob_knn_fight = np.clip(prob_knn_fight, 0.1, 0.9)
+                        overall_wr = st.session_state.overall_wr
+                        recent_wr = st.session_state.recent_wr
+                        recent_count = st.session_state.recent_count
+                        if recent_count > 0:
+                            shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
+                        else:
+                            shrunk_recent = overall_wr
+                        shrunk_knn_fight = (prior_weight * (shrunk_recent / 100) + prob_knn_fight) / (prior_weight + 1)
+                        st.write(f"**KNN win probability:** {prob_knn_fight:.1%}  |  **shrunken:** {shrunk_knn_fight:.1%}")
+                    except Exception as e:
+                        st.error(f"Prediction error: {e}")
+                else:
+                    st.info("Select an upcoming fight in the Matchup section above to see KNN prediction.")
             else:
                 st.info("No training data available for KNN metrics.")
         else:
@@ -1051,7 +1110,7 @@ else:
         st.warning("No categorical features available after filtering.")
 
 # =========================================================================
-# SPIDER CHART (unchanged)
+# SPIDER CHART (independent filters, unchanged)
 # =========================================================================
 st.header("Fight Similarity & Comparison (Independent Filters)")
 st.subheader("Spider Chart Filters (fighter data only)")
