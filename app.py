@@ -139,9 +139,9 @@ with st.sidebar.expander("Previous Outcomes", expanded=False):
     opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career)
     opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career)
 
-# ---------- Rating Gap Filters ----------
-with st.sidebar.expander("Rating Gap Filters", expanded=False):
-    st.caption("Enable any rating gap to restrict the data.")
+# ---------- Rating Gap Filters (only for the separate analysis) ----------
+with st.sidebar.expander("Rating Gap Analysis", expanded=False):
+    st.caption("Select a gap range to see the win rate for that subset. Does NOT affect models or upcoming fight selectors.")
     rating_systems = ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay','WeightedMasseyDecay']
     gap_filters = {}
     for sys in rating_systems:
@@ -161,7 +161,7 @@ with st.sidebar.expander("Rating Gap Filters", expanded=False):
         else:
             gap_filters[sys] = (False, None)
 
-# ---------- Apply all filters ----------
+# ---------- Apply main filters (NO gap filters applied here) ----------
 filtered = data.copy()
 
 if wc: filtered = filtered[filtered['WC'].isin(wc)]
@@ -220,19 +220,8 @@ if not data['PrevFighterOddsNum'].isna().all() and prev_odds != (0,0):
     filtered = filtered.dropna(subset=['PrevFighterOddsNum'])
     filtered = filtered[(filtered['PrevFighterOddsNum'] >= prev_odds[0]) & (filtered['PrevFighterOddsNum'] <= prev_odds[1])]
 
-# Apply rating gap filters globally
-for sys, (enabled, gap_range) in gap_filters.items():
-    if enabled:
-        diff_col = f'{sys}_Diff'
-        if diff_col in filtered.columns:
-            gap_min, gap_max = gap_range
-            filtered = filtered[(filtered[diff_col] >= gap_min) & (filtered[diff_col] <= gap_max)]
-
+# This is the main dataset – gap filters are NOT applied to it
 data = filtered
-
-# Debug upcoming count
-upcoming_check = data[data['Win?'].isna() | (data['Win?'] == '')]
-st.sidebar.write(f"Upcoming rows after filters: {len(upcoming_check)}")
 
 # ---------- Dashboard ----------
 st.title("UFC Pre‑Fight Performance Dashboard")
@@ -287,13 +276,35 @@ for result, col in zip(['Yes', 'No'], [col1, col2]):
             st.write(f"**Career Avg Ctrl Time:** {avg_ctrl:.0f}s | CTR/TD: {ctrtd:.1f}s")
         st.write(f"**Avg Age Diff:** {age_diff_mean:.1f} | **Avg Height Diff:** {height_diff_mean:.1f} in | **Avg Reach Diff:** {reach_diff_mean:.1f} in")
 
-# ---------- Rating Gap Status ----------
-st.header("Rating Gap Filters")
-active_gaps = [sys for sys, (enabled, _) in gap_filters.items() if enabled]
-if active_gaps:
-    st.success(f"Data restricted to fights satisfying: {', '.join(active_gaps)}")
+# ---------- Rating Gap Analysis (independent) ----------
+st.header("Rating Gap Analysis")
+conditions = []
+active_systems = []
+for sys, (enabled, gap_range) in gap_filters.items():
+    if enabled:
+        diff_col = f'{sys}_Diff'
+        if diff_col in data.columns:
+            gap_min, gap_max = gap_range
+            conditions.append( (data[diff_col] >= gap_min) & (data[diff_col] <= gap_max) )
+            active_systems.append(sys)
+
+if conditions:
+    combined_mask = conditions[0]
+    for cond in conditions[1:]:
+        combined_mask = combined_mask & cond
+    gap_fights = data[combined_mask]
+    total_gap = len(gap_fights)
+    wins_gap = (gap_fights['Win?'] == 'Yes').sum()
+    win_rate_gap = wins_gap / total_gap * 100 if total_gap > 0 else 0.0
+
+    st.subheader("Combined Gap Filter")
+    st.caption(f"Filters active: {', '.join(active_systems)}")
+    colg1, colg2, colg3 = st.columns(3)
+    colg1.metric("Fights in gap", total_gap)
+    colg2.metric("Wins", wins_gap)
+    colg3.metric("Win Rate", f"{win_rate_gap:.1f}%")
 else:
-    st.info("No rating gap filters active – showing all fights.")
+    st.info("Enable one or more rating gap filters to see the combined effect.")
 
 # ---------- Matchup area ----------
 st.header("Upcoming Fight Matchup")
@@ -474,13 +485,14 @@ st.header("3D LR Win/Loss Prediction & Best LR Combinations")
 
 three_d_features = [c for c in numerical_features if c in data.columns and data[c].nunique(dropna=True) >= 2]
 if len(three_d_features) >= 3:
+    # Default selections so model always runs
     col1, col2, col3 = st.columns(3)
     with col1:
-        x_lr = st.selectbox("X", three_d_features, key="lr_x")
+        x_lr = st.selectbox("X", three_d_features, index=0, key="lr_x")
     with col2:
-        y_lr = st.selectbox("Y", three_d_features, key="lr_y")
+        y_lr = st.selectbox("Y", three_d_features, index=min(1, len(three_d_features)-1), key="lr_y")
     with col3:
-        z_lr = st.selectbox("Z", three_d_features, key="lr_z")
+        z_lr = st.selectbox("Z", three_d_features, index=min(2, len(three_d_features)-1), key="lr_z")
 
     if x_lr and y_lr and z_lr:
         plot_data = data[[x_lr, y_lr, z_lr, 'DetailedResult', 'Fight']].copy()
@@ -541,7 +553,7 @@ if len(three_d_features) >= 3:
                 else:
                     train_means[col2] = 0
 
-            # ===== LR Win Probability Estimate =====
+            # ----- LR Win Probability Estimate -----
             st.subheader("LR Win Probability Estimate")
             upcoming = data[data['Win?'].isna() | (data['Win?'] == '')]
             if not upcoming.empty:
@@ -655,11 +667,11 @@ st.header("3D Weighted KNN Win/Loss Prediction (Platt‑scaled) & Best KNN Combi
 if len(three_d_features) >= 3:
     col1_knn, col2_knn, col3_knn = st.columns(3)
     with col1_knn:
-        x_knn = st.selectbox("X", three_d_features, key="knn_x")
+        x_knn = st.selectbox("X", three_d_features, index=0, key="knn_x")
     with col2_knn:
-        y_knn = st.selectbox("Y", three_d_features, key="knn_y")
+        y_knn = st.selectbox("Y", three_d_features, index=min(1, len(three_d_features)-1), key="knn_y")
     with col3_knn:
-        z_knn = st.selectbox("Z", three_d_features, key="knn_z")
+        z_knn = st.selectbox("Z", three_d_features, index=min(2, len(three_d_features)-1), key="knn_z")
 
     if x_knn and y_knn and z_knn:
         plot_data_knn = data[[x_knn, y_knn, z_knn, 'DetailedResult', 'Fight']].copy()
@@ -731,7 +743,7 @@ if len(three_d_features) >= 3:
                 st.metric("Overall Win%", f"{overall_wr:.1f}%")
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
-            # ===== KNN Win Probability Estimate =====
+            # ----- KNN Win Probability Estimate -----
             st.subheader("KNN Win Probability Estimate")
             upcoming = data[data['Win?'].isna() | (data['Win?'] == '')]
             if not upcoming.empty:
