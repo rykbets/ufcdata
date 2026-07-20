@@ -458,6 +458,30 @@ if not upcoming_display.empty:
                     if col in row:
                         st.write(f"**{col}:** {row[col]:.2f}" if isinstance(row[col], (int, float)) else f"**{col}:** {row[col]}")
                 st.write("---")
+                
+                # ---- Show adjperf stats (pre‑fight) ----
+                st.write("**Adjusted Performance (pre‑fight, from past data)**")
+                adjperf_cols = [c for c in row.index if c.startswith('adjperf_') and not c.endswith('_diff') and 'Opponent_' not in c]
+                if adjperf_cols:
+                    # Get opponent's corresponding adjperf values
+                    opp_adjperf = {}
+                    for c in adjperf_cols:
+                        opp_c = f'Opponent_{c}'
+                        if opp_c in row.index:
+                            opp_adjperf[c] = row[opp_c]
+                    # Build table
+                    data_dict = {'Fighter': {}, 'Opponent': {}, 'Diff': {}}
+                    for c in adjperf_cols:
+                        data_dict['Fighter'][c] = row[c]
+                        data_dict['Opponent'][c] = opp_adjperf.get(c, np.nan)
+                        diff_c = f'{c}_diff'
+                        if diff_c in row.index:
+                            data_dict['Diff'][c] = row[diff_c]
+                    df_adj = pd.DataFrame(data_dict).T
+                    st.dataframe(df_adj, use_container_width=True)
+                else:
+                    st.write("No adjperf columns found.")
+                st.write("---")
 
             colA, colB = st.columns(2)
             with colA:
