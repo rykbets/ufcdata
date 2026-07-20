@@ -21,7 +21,7 @@ st.set_page_config(page_title="UFC Pre‑Fight Dashboard (Adjusted)", layout="wi
 # ============================================================
 # 🔑 YOUR PARQUET FILE ID – replace with your actual ID
 # ============================================================
-PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # adjust to your new Parquet ID
+PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"   # adjust to your new Parquet ID
 
 @st.cache_data
 def load_data():
