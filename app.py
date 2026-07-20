@@ -27,7 +27,7 @@ def load_data():
     if os.path.exists("all_fights_adjperf.parquet"):
         return pd.read_parquet("all_fights_adjperf.parquet")
     # Otherwise try Drive download (you need to set your file ID)
-    PARQUET_FILE_ID = "YOUR_NEW_FILE_ID_HERE"   # replace with your actual ID
+    PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"   # replace with your actual ID
     gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
     return pd.read_parquet("data.parquet")
 
