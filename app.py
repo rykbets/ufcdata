@@ -175,7 +175,7 @@ with st.sidebar.expander("Rating Gap Analysis", expanded=False):
         else:
             gap_filters[sys] = (False, None)
 
-# ---------- Apply filters ----------
+# ---------- Apply main filters ----------
 filtered = data.copy()
 
 if wc: filtered = filtered[filtered['WC'].isin(wc)]
@@ -249,7 +249,6 @@ for sys, (enabled, gap_range) in gap_filters.items():
             gap_min, gap_max = gap_range
             filtered = filtered[(filtered[diff_col] >= gap_min) & (filtered[diff_col] <= gap_max)]
 
-# Keep this as the working dataset for model training and analysis
 data = filtered
 
 # For matchup display, get both fighters from original_data for the surviving FightIDs
@@ -1109,7 +1108,7 @@ else:
         st.warning("No categorical features available after filtering.")
 
 # =========================================================================
-# SPIDER CHART (independent filters, using original_data)
+# SPIDER CHART (similarity only, no LR/KNN models)
 # =========================================================================
 st.header("Fight Similarity & Comparison (Independent Filters)")
 st.subheader("Spider Chart Filters (fighter data only)")
@@ -1125,15 +1124,16 @@ with col_sp2:
     spider_title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"], key="spider_title")
     spider_hometown = st.selectbox("Hometown", ["All", "Yes", "No"], key="spider_home")
     spider_new_wc = st.checkbox("New Weight Class", key="spider_new_wc")
-    spider_skip_nc = st.checkbox("Skip NC outcomes", key="spider_skip_nc")
     spider_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
+    # No skip_nc needed here because we only use historical fights for similarity
 
-if spider_skip_nc:
-    spider_prev1_col = 'Prev1_Outcome_skipNC'; spider_prev2_col = 'Prev2_Outcome_skipNC'; spider_prev3_col = 'Prev3_Outcome_skipNC'
-    spider_career1_col = 'Career1_Outcome_skipNC'; spider_career2_col = 'Career2_Outcome_skipNC'; spider_career3_col = 'Career3_Outcome_skipNC'
-else:
-    spider_prev1_col = 'Prev1_Outcome_raw'; spider_prev2_col = 'Prev2_Outcome_raw'; spider_prev3_col = 'Prev3_Outcome_raw'
-    spider_career1_col = 'Career1_Outcome_raw'; spider_career2_col = 'Career2_Outcome_raw'; spider_career3_col = 'Career3_Outcome_raw'
+# For previous outcomes in the spider chart we'll use the raw columns (no skip NC)
+spider_prev1_col = 'Prev1_Outcome_raw'
+spider_prev2_col = 'Prev2_Outcome_raw'
+spider_prev3_col = 'Prev3_Outcome_raw'
+spider_career1_col = 'Career1_Outcome_raw'
+spider_career2_col = 'Career2_Outcome_raw'
+spider_career3_col = 'Career3_Outcome_raw'
 
 all_outcomes_raw_spider = sorted(original_data[spider_prev1_col].dropna().unique())
 all_outcomes_career_spider = sorted(original_data[spider_career1_col].dropna().unique())
@@ -1171,151 +1171,113 @@ if spider_career3: mask &= spider_data[spider_career3_col].isin(spider_career3)
 # Apply the "Prev Title" filter at the FIGHT level (keep if at least one fighter matches)
 spider_data['Prev1_Title_clean'] = normalize_title_col(spider_data.get('Prev1_Title', None))
 if spider_prev_title != "All":
-    # Find FightIDs where at least one fighter matches
     fighter_mask = spider_data['Prev1_Title_clean'] == spider_prev_title.lower()
     matching_fight_ids = spider_data.loc[fighter_mask, 'FightID'].unique()
-    # Keep only rows for those FightIDs (regardless of whether they individually matched)
     mask &= spider_data['FightID'].isin(matching_fight_ids)
 
 # Apply all masks to get the filtered set (may have incomplete rows)
 filtered_spider = spider_data[mask]
 
-# Now, for the FightIDs that survived, pull BOTH rows from original_data to guarantee pairs
+# For the FightIDs that survived, pull BOTH rows from original_data to guarantee pairs
 surviving_spider_fight_ids = filtered_spider['FightID'].unique()
 spider_data = original_data[original_data['FightID'].isin(surviving_spider_fight_ids)]
 
-# Proceed with the rest of the spider chart (unchanged)
+# ---- Now similarity analysis ----
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
+spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
 
 if spider_upcoming.empty:
     st.write("No upcoming fights after spider filters.")
 else:
-    # ... rest of spider chart remains the same ...
+    # Ensure both fighters per upcoming fight
     fight_counts = spider_upcoming.groupby('FightID').size()
     complete_ids = fight_counts[fight_counts == 2].index
     spider_upcoming = spider_upcoming[spider_upcoming['FightID'].isin(complete_ids)]
     if spider_upcoming.empty:
         st.warning("No upcoming fight has both fighters after spider filters.")
     else:
-        spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].sort_values('FightDate')
-        numeric_cols = [c for c in spider_upcoming.columns if pd.api.types.is_numeric_dtype(spider_upcoming[c])]
+        # Let user select variables for similarity
+        # We'll use the same numerical_features list but filtered to those present in original_data
+        numeric_cols = [c for c in spider_data.columns if pd.api.types.is_numeric_dtype(spider_data[c])]
         clean_cols = [c for c in numeric_cols if not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')]
         wanted_keys = [
             'Age', 'Height', 'Reach',
             'DaysSincePrev', 'Avg3DaysGap',
             'FightNumber', 'Opponent_FightNumber',
             'FighterOddsNum', 'PrevFighterOddsNum',
-            'CareerWinPct', 'Prev7Wins', 'Prev7Losses', 'Opponent_Prev7Wins', 'Opponent_Prev7Losses',
+            'CareerWinPct', 'Prev7Wins', 'Prev7Losses',
             'FighterColley', 'OpponentColley', 'FighterMassey', 'OpponentMassey', 'FighterWeightedMassey', 'OpponentWeightedMassey',
             'CareerAvg_', 'Opponent_CareerAvg_',
             '_Diff'
         ]
         spider_vars = sorted([c for c in clean_cols if any(c.startswith(k) or k in c for k in wanted_keys)])
         if not spider_vars:
-            st.warning("No numeric variables found.")
+            st.warning("No numeric variables found for similarity.")
         else:
-            selected_vars = st.multiselect("Select variables for models", spider_vars, default=spider_vars[:5], max_selections=8, key="spider_vars")
+            selected_vars = st.multiselect("Select variables for similarity", spider_vars, default=spider_vars[:5], max_selections=8, key="spider_vars")
         if selected_vars:
-            train_spider = spider_hist.dropna(subset=selected_vars)
-            if len(train_spider) < 10 or train_spider['Win?'].nunique() < 2:
-                st.warning("Not enough historical data to train models.")
+            # Prepare data for similarity: use historical fights and upcoming fights
+            # Standardize the selected variables using the historical data
+            hist_sub = spider_hist[selected_vars].dropna()
+            if len(hist_sub) < 2:
+                st.warning("Not enough historical data to compute similarity.")
             else:
-                train_spider['target'] = (train_spider['Win?'] == 'Yes').astype(int)
-                X_train = train_spider[selected_vars].values.astype(np.float64)
-                y_train = train_spider['target'].values
-
-                lr_spider = LogisticRegression(max_iter=1000)
-                lr_spider.fit(X_train, y_train)
-                y_prob_lr_in = lr_spider.predict_proba(X_train)[:, 1]
-                ll_lr_spider = log_loss(y_train, y_prob_lr_in)
-                bs_lr_spider = brier_score_loss(y_train, y_prob_lr_in)
-
-                k_spider = st.slider("KNN neighbors", min_value=1, max_value=20, value=5, key="knn_spider")
-                scaler_knn = StandardScaler()
-                X_scaled = scaler_knn.fit_transform(X_train)
-                base_knn = KNeighborsClassifier(n_neighbors=k_spider, weights='distance')
-                calibrated_knn = CalibratedClassifierCV(base_knn, method='sigmoid', cv=5)
-                calibrated_knn.fit(X_scaled, y_train)
-                y_prob_knn_in = calibrated_knn.predict_proba(X_scaled)[:, 1]
-                y_prob_knn_in = np.clip(y_prob_knn_in, 0.1, 0.9)
-                ll_knn_spider = log_loss(y_train, y_prob_knn_in)
-                bs_knn_spider = brier_score_loss(y_train, y_prob_knn_in)
-
-                col_sm1, col_sm2 = st.columns(2)
-                with col_sm1:
-                    st.metric("LogReg Log‑loss", f"{ll_lr_spider:.3f}")
-                    st.metric("LogReg Brier", f"{bs_lr_spider:.3f}")
-                with col_sm2:
-                    st.metric("KNN Log‑loss", f"{ll_knn_spider:.3f}")
-                    st.metric("KNN Brier", f"{bs_knn_spider:.3f}")
-
-                up_ids = sorted(spider_upcoming['FightID'].unique())
-                chosen_fight = st.selectbox("Choose an upcoming fight", up_ids, key="spider_fight")
-                if chosen_fight:
-                    fight_rows = spider_upcoming[spider_upcoming['FightID'] == chosen_fight]
+                scaler_sim = StandardScaler()
+                scaler_sim.fit(hist_sub)
+                
+                # For each upcoming fight, compute similarity to historical fights
+                upcoming_ids = spider_upcoming['FightID'].unique()
+                selected_fight_spider = st.selectbox("Choose an upcoming fight for similarity", upcoming_ids)
+                if selected_fight_spider:
+                    fight_rows = spider_upcoming[spider_upcoming['FightID'] == selected_fight_spider]
                     f1 = fight_rows.iloc[0]
                     f2 = fight_rows.iloc[1]
-
-                    radar_vals = []
-                    for var in selected_vars:
-                        if var.endswith('_Diff') or var in {'AgeDiff','HeightDiff','ReachDiff'}:
-                            val = f1[var] if pd.notna(f1[var]) else 0
-                        else:
-                            v1 = f1[var] if pd.notna(f1[var]) else 0
-                            v2 = f2[var] if pd.notna(f2[var]) else 0
-                            val = v1 - v2
-                        radar_vals.append(val)
-                    fig = go.Figure(go.Scatterpolar(r=radar_vals, theta=selected_vars, fill='toself',
-                                                    name=f"{f1['Fighter']} advantage"))
-                    fig.update_layout(polar=dict(radialaxis=dict(visible=True)),
-                                      title=f"Advantage: {f1['Fighter']} vs {f2['Fighter']}")
-                    st.plotly_chart(fig, use_container_width=True)
-
-                    means = X_train.mean(axis=0)
+                    st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
+                    
+                    # Compute similarity for f1 (you can also choose f2)
+                    # We'll use the same approach as the main app: for each variable, use f1's value (or 0 if missing)
                     up_vals = []
-                    for i, var in enumerate(selected_vars):
+                    for var in selected_vars:
                         raw = f1[var]
                         try:
-                            v = float(raw) if pd.notna(raw) else means[i]
-                        except (ValueError, TypeError):
-                            v = means[i]
+                            v = float(raw) if pd.notna(raw) else 0.0
+                        except:
+                            v = 0.0
                         up_vals.append(v)
                     up_vec = np.array([up_vals], dtype=np.float64)
-                    prob_lr_f1 = lr_spider.predict_proba(up_vec)[0, 1]
-                    up_scaled = scaler_knn.transform(up_vec)
-                    prob_knn_f1 = calibrated_knn.predict_proba(up_scaled)[0, 1]
-                    prob_knn_f1 = np.clip(prob_knn_f1, 0.1, 0.9)
-
-                    overall_wr_spider = (spider_hist['Win?'] == 'Yes').mean() * 100 if len(spider_hist) > 0 else 0.0
-                    recent_spider = spider_hist.tail(recent_window)
-                    recent_wr_spider = (recent_spider['Win?'] == 'Yes').mean() * 100 if len(recent_spider) > 0 else 0.0
-                    recent_count_spider = len(recent_spider)
-                    if recent_count_spider > 0:
-                        shrunk_recent = (prior_weight * overall_wr_spider + recent_count_spider * recent_wr_spider) / (prior_weight + recent_count_spider)
-                    else:
-                        shrunk_recent = overall_wr_spider
-                    shrunk_lr = (prior_weight * (shrunk_recent / 100) + prob_lr_f1) / (prior_weight + 1)
-                    shrunk_knn = (prior_weight * (shrunk_recent / 100) + prob_knn_f1) / (prior_weight + 1)
-
-                    col_sp1, col_sp2, col_sp3 = st.columns(3)
-                    with col_sp1:
-                        st.metric("LogReg", f"{prob_lr_f1:.1%}")
-                        st.metric("LogReg shrunken", f"{shrunk_lr:.1%}")
-                    with col_sp2:
-                        st.metric("KNN", f"{prob_knn_f1:.1%}")
-                        st.metric("KNN shrunken", f"{shrunk_knn:.1%}")
-                    with col_sp3:
-                        st.metric("Overall Win% (filtered)", f"{overall_wr_spider:.1f}%")
-                        st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr_spider:.1f}%")
-
-                    st.subheader(f"Most Similar Historical Fights (from last {recent_window} fights)")
-                    scaler_sim = StandardScaler()
-                    X_scaled_sim = scaler_sim.fit_transform(X_train)
-                    up_scaled_sim = scaler_sim.transform(up_vec)
-                    dists = cdist(up_scaled_sim, X_scaled_sim, 'euclidean').flatten()
-                    sim_scores = 100 * (1 - dists / (dists.max() or 1))
-                    sim_df = train_spider[['FightDate', 'Fighter', 'Opponent', 'Win?']].copy()
+                    up_scaled = scaler_sim.transform(up_vec)
+                    
+                    # Scale the historical data
+                    hist_scaled = scaler_sim.transform(hist_sub)
+                    
+                    # Compute Euclidean distances
+                    dists = cdist(up_scaled, hist_scaled, 'euclidean').flatten()
+                    # Normalize to similarity score (0-100)
+                    max_dist = dists.max() if dists.max() > 0 else 1.0
+                    sim_scores = 100 * (1 - dists / max_dist)
+                    
+                    # Get historical fight outcomes for the similar fights
+                    sim_df = spider_hist.loc[hist_sub.index, ['FightDate', 'Fighter', 'Opponent', 'Win?']].copy()
                     sim_df['Similarity'] = sim_scores.round(1)
-                    sim_df = sim_df.sort_values('FightDate', ascending=False).head(recent_window)
-                    top_sim = sim_df.sort_values('Similarity', ascending=False).head(20)
-                    st.dataframe(top_sim, use_container_width=True)
+                    sim_df = sim_df.sort_values('Similarity', ascending=False)
+                    
+                    # Show histogram of similarity scores and win rate for >=90 similarity
+                    st.subheader("Similarity Distribution")
+                    fig_hist = px.histogram(sim_df, x='Similarity', nbins=20, title="Similarity Scores of Historical Fights")
+                    st.plotly_chart(fig_hist, use_container_width=True)
+                    
+                    # Win rate for fights with similarity >= 90
+                    high_sim = sim_df[sim_df['Similarity'] >= 90]
+                    if len(high_sim) > 0:
+                        wins_high = (high_sim['Win?'] == 'Yes').sum()
+                        win_rate_high = wins_high / len(high_sim) * 100
+                        st.subheader(f"Win Rate for Similarity ≥ 90%")
+                        st.metric("Fights with similarity ≥ 90", len(high_sim))
+                        st.metric("Win Rate", f"{win_rate_high:.1f}%")
+                        st.dataframe(high_sim.head(20))
+                    else:
+                        st.write("No historical fights with similarity ≥ 90%.")
+                    
+                    # Show top 20 most similar fights
+                    st.subheader("Top 20 Most Similar Historical Fights")
+                    st.dataframe(sim_df.head(20))
