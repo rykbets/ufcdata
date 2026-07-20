@@ -96,6 +96,69 @@ exclude_combo = [
 combo_candidates = [c for c in new_features if c not in exclude_combo]
 
 # =========================================================================
+# INITIALIZE SESSION STATE (must be done before any usage)
+# =========================================================================
+if 'lr_model' not in st.session_state:
+    st.session_state.lr_model = None
+if 'calibrated_knn' not in st.session_state:
+    st.session_state.calibrated_knn = None
+if 'scaler' not in st.session_state:
+    st.session_state.scaler = None
+if 'X_train' not in st.session_state:
+    st.session_state.X_train = None
+if 'y_train_knn' not in st.session_state:
+    st.session_state.y_train_knn = None
+if 'overall_wr' not in st.session_state:
+    st.session_state.overall_wr = 0.0
+if 'recent_wr' not in st.session_state:
+    st.session_state.recent_wr = 0.0
+if 'recent_count' not in st.session_state:
+    st.session_state.recent_count = 0
+if 'lr_train_status' not in st.session_state:
+    st.session_state.lr_train_status = "Not trained"
+if 'knn_train_status' not in st.session_state:
+    st.session_state.knn_train_status = "Not trained"
+if 'selected_fight_row' not in st.session_state:
+    st.session_state.selected_fight_row = None
+if 'lr_feature_names' not in st.session_state:
+    st.session_state.lr_feature_names = []
+if 'knn_feature_names' not in st.session_state:
+    st.session_state.knn_feature_names = []
+if 'x_lr' not in st.session_state:
+    st.session_state.x_lr = None
+if 'y_lr' not in st.session_state:
+    st.session_state.y_lr = None
+if 'z_lr' not in st.session_state:
+    st.session_state.z_lr = None
+if 'x_knn' not in st.session_state:
+    st.session_state.x_knn = None
+if 'y_knn' not in st.session_state:
+    st.session_state.y_knn = None
+if 'z_knn' not in st.session_state:
+    st.session_state.z_knn = None
+if 'knn_model_k' not in st.session_state:
+    st.session_state.knn_model_k = 5
+if 'lr_combo_results' not in st.session_state:
+    st.session_state.lr_combo_results = None
+if 'knn_combo_results' not in st.session_state:
+    st.session_state.knn_combo_results = None
+
+# Set default features if three_d_features exists
+if len(three_d_features) >= 3:
+    if st.session_state.x_lr is None:
+        st.session_state.x_lr = three_d_features[0]
+    if st.session_state.y_lr is None:
+        st.session_state.y_lr = three_d_features[1]
+    if st.session_state.z_lr is None:
+        st.session_state.z_lr = three_d_features[2]
+    if st.session_state.x_knn is None:
+        st.session_state.x_knn = three_d_features[0]
+    if st.session_state.y_knn is None:
+        st.session_state.y_knn = three_d_features[1]
+    if st.session_state.z_knn is None:
+        st.session_state.z_knn = three_d_features[2]
+
+# =========================================================================
 # Sidebar Filters
 # =========================================================================
 st.sidebar.title("Filters")
@@ -355,13 +418,141 @@ surviving_fight_ids = data['FightID'].unique()
 matchup_data = original_data[original_data['FightID'].isin(surviving_fight_ids)]
 
 # =========================================================================
-# Now the rest of the dashboard – same as before
+# COMMON DEFINITIONS
 # =========================================================================
-# (The rest – performance summary, matchup with adjperf table, 3D plots, etc. – is identical to the previous version. I'll keep it short here.)
-# ...
+def detailed_result(row):
+    win_raw = row.get('Win?')
+    if win_raw is None or pd.isna(win_raw) or str(win_raw).strip().lower() in ('', 'none', 'nan'):
+        return 'Upcoming'
+    win_val = str(win_raw).strip()
+    method = str(row.get('Method', '')).strip().lower()
+    if 'dq' in method or 'disqualif' in method:
+        return 'Win by DQ' if win_val == 'Yes' else 'Loss by DQ'
+    if win_val in ('No Contest', 'NC'):
+        return 'No Contest'
+    if win_val == 'Draw':
+        return 'Draw'
+    if win_val == 'Yes':
+        return 'Win'
+    if win_val == 'No':
+        return 'Loss'
+    return 'Upcoming'
 
-# But since the user said "rewrite the script", I'll include the full remaining code below.
-# (I already have it from earlier; I'll paste it in the full answer.)
+data['DetailedResult'] = data.apply(detailed_result, axis=1)
+data['Fight'] = data['Fighter'].astype(str) + ' vs ' + data['Opponent'].astype(str)
+
+color_map = {
+    'Win': 'green',
+    'Loss': 'red',
+    'Win by DQ': 'limegreen',
+    'Loss by DQ': 'darkred',
+    'No Contest': 'purple',
+    'Upcoming': 'blue',
+    'Draw': 'gray'
+}
+
+prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight_global")
+recent_window = st.sidebar.slider("Recent fights window", 1, 100, 50, key="recent_win_global")
+
+# =========================================================================
+# TRAIN MODELS ON FILTERED DATA
+# =========================================================================
+def train_models_on_filtered():
+    x_lr = st.session_state.x_lr
+    y_lr = st.session_state.y_lr
+    z_lr = st.session_state.z_lr
+    x_knn = st.session_state.x_knn
+    y_knn = st.session_state.y_knn
+    z_knn = st.session_state.z_knn
+    k_knn = st.session_state.knn_model_k
+
+    # LR
+    if x_lr is None or y_lr is None or z_lr is None:
+        st.session_state.lr_model = None
+        st.session_state.lr_train_status = "LR features not set."
+        st.session_state.y_train_lr = None
+        st.session_state.lr_feature_names = []
+    else:
+        hist = data[data['Win?'].isin(['Yes','No'])].copy()
+        sub = hist[[x_lr, y_lr, z_lr, 'Win?']].dropna()
+        if len(sub) < 10:
+            st.session_state.lr_model = None
+            st.session_state.lr_train_status = f"LR: only {len(sub)} rows (need ≥10)."
+            st.session_state.y_train_lr = None
+            st.session_state.lr_feature_names = []
+        elif sub['Win?'].nunique() < 2:
+            st.session_state.lr_model = None
+            st.session_state.lr_train_status = "LR: need both Win and Loss."
+            st.session_state.y_train_lr = None
+            st.session_state.lr_feature_names = []
+        else:
+            try:
+                sub['target'] = (sub['Win?'] == 'Yes').astype(int)
+                X = sub[[x_lr, y_lr, z_lr]].values
+                y = sub['target'].values
+                lr = LogisticRegression(max_iter=1000)
+                lr.fit(X, y)
+                st.session_state.lr_model = lr
+                st.session_state.lr_train_status = f"LR trained on {len(sub)} fights."
+                st.session_state.y_train_lr = y
+                st.session_state.X_train_lr = X
+                st.session_state.lr_feature_names = [x_lr, y_lr, z_lr]
+            except Exception as e:
+                st.session_state.lr_model = None
+                st.session_state.lr_train_status = f"LR error: {str(e)}"
+                st.session_state.y_train_lr = None
+                st.session_state.lr_feature_names = []
+
+    # KNN
+    if x_knn is None or y_knn is None or z_knn is None:
+        st.session_state.calibrated_knn = None
+        st.session_state.knn_train_status = "KNN features not set."
+        st.session_state.y_train_knn = None
+        st.session_state.knn_feature_names = []
+    else:
+        hist = data[data['Win?'].isin(['Yes','No'])].copy()
+        c1 = get_first_col(hist, x_knn)
+        c2 = get_first_col(hist, y_knn)
+        c3 = get_first_col(hist, z_knn)
+        win_col = hist['Win?']
+        if isinstance(win_col, pd.DataFrame):
+            win_vals = win_col.iloc[:, 0].values
+        else:
+            win_vals = win_col.values
+        train_df = pd.DataFrame({'f1': c1, 'f2': c2, 'f3': c3, 'Win?': win_vals}).dropna()
+        if len(train_df) < 10:
+            st.session_state.calibrated_knn = None
+            st.session_state.knn_train_status = f"KNN: only {len(train_df)} rows (need ≥10)."
+            st.session_state.y_train_knn = None
+            st.session_state.knn_feature_names = []
+        elif train_df['Win?'].nunique() < 2:
+            st.session_state.calibrated_knn = None
+            st.session_state.knn_train_status = "KNN: need both Win and Loss."
+            st.session_state.y_train_knn = None
+            st.session_state.knn_feature_names = []
+        else:
+            try:
+                X = train_df[['f1','f2','f3']].values.astype(np.float64)
+                y = (train_df['Win?'] == 'Yes').astype(int).values
+                scaler = StandardScaler()
+                X_scaled = scaler.fit_transform(X)
+                base_knn = KNeighborsClassifier(n_neighbors=k_knn, weights='distance')
+                calibrated = CalibratedClassifierCV(base_knn, method='sigmoid', cv=5)
+                calibrated.fit(X_scaled, y)
+                st.session_state.calibrated_knn = calibrated
+                st.session_state.scaler = scaler
+                st.session_state.X_train = X
+                st.session_state.y_train_knn = y
+                st.session_state.knn_train_status = f"KNN trained on {len(train_df)} fights."
+                st.session_state.knn_feature_names = [x_knn, y_knn, z_knn]
+            except Exception as e:
+                st.session_state.calibrated_knn = None
+                st.session_state.knn_train_status = f"KNN error: {str(e)}"
+                st.session_state.y_train_knn = None
+                st.session_state.knn_feature_names = []
+
+# Train models now
+train_models_on_filtered()
 
 # =========================================================================
 # PERFORMANCE SUMMARY
@@ -620,7 +811,6 @@ if len(three_d_features) >= 3:
 
         # ---- LR combo builder using combo_candidates (excludes ratings/win-pct) ----
         st.subheader("LR 3‑Variable Combinations (Cross‑Validated Brier)")
-        # Use combo_candidates defined earlier
         candidates = [c for c in combo_candidates if c in data.columns and c != 'FighterOddsNum']
         if len(candidates) < 3:
             st.warning("Not enough features to test (need at least 3).")
