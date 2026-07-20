@@ -555,58 +555,42 @@ if len(three_d_features) >= 3:
             # ----- LR Win Probability Estimate (guaranteed to appear) -----
             st.subheader("LR Win Probability Estimate")
             
-            # Build upcoming list using gap filters
-            temp = data.copy()
-            for sys, (enabled, gap_range) in gap_filters.items():
-                if enabled:
-                    diff_col = f'{sys}_Diff'
-                    if diff_col in temp.columns:
-                        gap_min, gap_max = gap_range
-                        mask = (
-                            ((temp[diff_col] >= gap_min) & (temp[diff_col] <= gap_max))
-                            | (temp['Win?'].isna() | (temp['Win?'] == ''))
-                        )
-                        temp = temp[mask]
+            # Re‑use the upcoming fight already selected in the match‑up area
+            if selected_fight and lr_model is not None:
+                # Get the rows for the selected fight from the filtered `data`
+                fight_rows = data[data['FightID'] == selected_fight]
+                if len(fight_rows) == 2:
+                    fighter_row = fight_rows.iloc[0]
             
-            upcoming_lr = temp[temp['Win?'].isna() | (temp['Win?'] == '')]
-            fight_counts = upcoming_lr.groupby('FightID').size()
-            upcoming_lr = upcoming_lr[upcoming_lr['FightID'].isin(fight_counts[fight_counts == 2].index)]
-            
-            if not upcoming_lr.empty:
-                up_ids = sorted(upcoming_lr['FightID'].unique())
-                chosen_id = st.radio("Select upcoming fight", up_ids, key="lr_radio_unique_1")
-                if chosen_id and lr_model is not None:
-                    up_rows = upcoming_lr[upcoming_lr['FightID'] == chosen_id]
-                    if len(up_rows) == 2:
-                        fighter_row = up_rows.iloc[0]
-            
-                        def safe_val(col):
-                            try:
-                                val = fighter_row[col]
-                                return val if pd.notna(val) else train_means.get(col, 0)
-                            except:
-                                return train_means.get(col, 0)
-            
-                        v1 = safe_val(x_lr)
-                        v2 = safe_val(y_lr)
-                        v3 = safe_val(z_lr)
-            
+                    def safe_val(col):
                         try:
-                            prob = lr_model.predict_proba(np.array([[v1, v2, v3]]))[0, 1]
-                            if recent_count > 0:
-                                shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
-                            else:
-                                shrunk_recent = overall_wr
-                            shrunk = (prior_weight * (shrunk_recent / 100) + prob) / (prior_weight + 1)
-                            st.markdown(f"**LR win probability:** {prob:.1%}  \n**LR shrunken:** {shrunk:.1%}")
-                        except Exception as e:
-                            st.error(f"Calculation error: {e}")
-                    else:
-                        st.warning("Selected fight does not have both fighters in the gap‑filtered data.")
-                elif chosen_id and lr_model is None:
-                    st.warning("Model not trained – cannot compute probability.")
+                            val = fighter_row[col]
+                            return val if pd.notna(val) else train_means.get(col, 0)
+                        except:
+                            return train_means.get(col, 0)
+            
+                    v1 = safe_val(x_lr)
+                    v2 = safe_val(y_lr)
+                    v3 = safe_val(z_lr)
+            
+                    try:
+                        prob = lr_model.predict_proba(np.array([[v1, v2, v3]]))[0, 1]
+            
+                        if recent_count > 0:
+                            shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
+                        else:
+                            shrunk_recent = overall_wr
+                        shrunk = (prior_weight * (shrunk_recent / 100) + prob) / (prior_weight + 1)
+            
+                        st.markdown(f"**LR win probability:** {prob:.1%}  \n**LR shrunken:** {shrunk:.1%}")
+                    except Exception as e:
+                        st.error(f"Calculation error: {e}")
+                else:
+                    st.warning("Selected fight does not have both fighters in the current filtered data.")
+            elif selected_fight and lr_model is None:
+                st.warning("LR model not trained.")
             else:
-                st.write("No upcoming fights available after applying gap filters.")
+                st.write("No upcoming fight selected in the match‑up panel.")
 
     # --- LR 3‑Variable Combination Builder (Brier) ---
     st.subheader("LR 3‑Variable Combinations (Brier)")
