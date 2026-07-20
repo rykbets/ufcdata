@@ -555,58 +555,53 @@ if len(three_d_features) >= 3:
             # ----- LR Win Probability Estimate (guaranteed to appear) -----
             st.subheader("LR Win Probability Estimate")
             
-            # Apply gap filters to a temporary copy (only for upcoming fight selection)
-            temp_data = data.copy()
+            # Build upcoming list using gap filters
+            temp = data.copy()
             for sys, (enabled, gap_range) in gap_filters.items():
                 if enabled:
                     diff_col = f'{sys}_Diff'
-                    if diff_col in temp_data.columns:
+                    if diff_col in temp.columns:
                         gap_min, gap_max = gap_range
                         mask = (
-                            ((temp_data[diff_col] >= gap_min) & (temp_data[diff_col] <= gap_max))
-                            | (temp_data['Win?'].isna() | (temp_data['Win?'] == ''))
+                            ((temp[diff_col] >= gap_min) & (temp[diff_col] <= gap_max))
+                            | (temp['Win?'].isna() | (temp['Win?'] == ''))
                         )
-                        temp_data = temp_data[mask]
+                        temp = temp[mask]
             
-            upcoming_lr = temp_data[temp_data['Win?'].isna() | (temp_data['Win?'] == '')]
-            fight_counts = upcoming_lr.groupby('FightID').size()
-            valid_ids = fight_counts[fight_counts == 2].index
-            upcoming_lr = upcoming_lr[upcoming_lr['FightID'].isin(valid_ids)]
+            upcoming = temp[temp['Win?'].isna() | (temp['Win?'] == '')]
+            fight_counts = upcoming.groupby('FightID').size()
+            upcoming = upcoming[upcoming['FightID'].isin(fight_counts[fight_counts == 2].index)]
             
-            if not upcoming_lr.empty:
-                up_ids = sorted(upcoming_lr['FightID'].unique())
-                chosen_id = st.radio("Select upcoming fight", up_ids, key="lr_radio")
-                if chosen_id:
-                    up_rows = upcoming_lr[upcoming_lr['FightID'] == chosen_id]
-                    if len(up_rows) == 2:
-                        fighter_row = up_rows.iloc[0]
+            if not upcoming.empty:
+                up_ids = sorted(upcoming['FightID'].unique())
+                chosen = st.radio("Select upcoming fight", up_ids, key="lr_radio")
+                st.write(f"### Debug: You selected {chosen}")   # <-- confirms selection is live
             
+                # ---- probability calculation ----
+                if chosen and lr_model is not None:
+                    rows = upcoming[upcoming['FightID'] == chosen]
+                    if len(rows) == 2:
+                        fighter_row = rows.iloc[0]
                         def safe_val(col):
                             try:
                                 val = fighter_row[col]
                                 return val if pd.notna(val) else train_means.get(col, 0)
                             except:
                                 return train_means.get(col, 0)
-            
                         v1 = safe_val(x_lr)
                         v2 = safe_val(y_lr)
                         v3 = safe_val(z_lr)
-            
                         try:
-                            up_arr = np.array([[v1, v2, v3]])
-                            prob_lr = lr_model.predict_proba(up_arr)[0, 1]
-            
-                            if recent_count > 0:
-                                shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
-                            else:
-                                shrunk_recent = overall_wr
-                            shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
-            
-                            st.write(f"**LR win probability:** {prob_lr:.1%}")
-                            st.write(f"**LR shrunken probability:** {shrunk_prob:.1%}")
-                            st.success("Probability calculated successfully.")
+                            prob = lr_model.predict_proba(np.array([[v1, v2, v3]]))[0, 1]
+                            shrunk = (prior_weight * (shrunk_recent/100) + prob) / (prior_weight + 1) if recent_count > 0 else prob
+                            # display as markdown
+                            st.markdown(f"**LR win probability:** {prob:.1%}  \n**LR shrunken:** {shrunk:.1%}")
                         except Exception as e:
-                            st.error(f"Error computing LR probability: {e}")
+                            st.error(f"Calculation error: {e}")
+                    else:
+                        st.warning("Selected fight does not have both fighters in the gap‑filtered data.")
+                elif chosen and lr_model is None:
+                    st.warning("Model not trained – cannot compute probability.")
             else:
                 st.write("No upcoming fights available after applying gap filters.")
 
