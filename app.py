@@ -602,14 +602,11 @@ if len(three_d_features) >= 3:
                                 shrunk_recent = overall_wr
                             shrunk_prob = (prior_weight * (shrunk_recent / 100) + prob_lr) / (prior_weight + 1)
             
-                            col_p1, col_p2 = st.columns(2)
-                            with col_p1:
-                                st.metric("LR win prob", f"{prob_lr:.1%}")
-                            with col_p2:
-                                st.metric("LR shrunken", f"{shrunk_prob:.1%}")
+                            st.write(f"**LR win probability:** {prob_lr:.1%}")
+                            st.write(f"**LR shrunken probability:** {shrunk_prob:.1%}")
+                            st.success("Probability calculated successfully.")
                         except Exception as e:
                             st.error(f"Error computing LR probability: {e}")
-                            st.write(f"Feature values: {v1}, {v2}, {v3}")
             else:
                 st.write("No upcoming fights available after applying gap filters.")
 
