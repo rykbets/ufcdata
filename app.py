@@ -18,22 +18,23 @@ from scipy.spatial.distance import cdist
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
-# ============================================================
-# 🔑 ONLY THIS ID IS NEEDED – the Parquet must contain all columns
-# ============================================================
 PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← replace with your actual Parquet ID
 
-# ---------- Cached data loader ----------
 @st.cache_data
 def load_data():
     gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
     data = pd.read_parquet("data.parquet")
-    upcoming = data[data['Win?'].isna()]
-    if len(upcoming) % 2 != 0:
-        st.warning(f"⚠️ Upcoming rows: {len(upcoming)} (should be even)")
     return data
 
 data = load_data()
+
+# Helper for dynamic gap slider ranges
+def get_diff_range(df, col_name):
+    if col_name in df.columns:
+        vals = df[col_name].dropna()
+        if len(vals) > 0:
+            return float(vals.min()), float(vals.max())
+    return -1.0, 1.0
 
 # ---------- Sidebar Filters ----------
 st.sidebar.title("Filters")
@@ -136,18 +137,22 @@ with st.sidebar.expander("Previous Outcomes", expanded=False):
     opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career)
     opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career)
 
-# ---------- Rating Gap Analysis Filters (NEW – independent per rating) ----------
+# ---------- Rating Gap Analysis Filters (dynamic ranges) ----------
 with st.sidebar.expander("Rating Gap Analysis", expanded=False):
     st.caption("Enable any rating gap filter. Only fights within ALL selected ranges are counted.")
     rating_systems = ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay','WeightedMasseyDecay']
-    gap_filters = {}  # will store (enabled, gap_range) for each system
+    gap_filters = {}
     for sys in rating_systems:
         enabled = st.checkbox(f"Use {sys}", key=f"gap_enable_{sys}")
         if enabled:
+            diff_col = f'{sys}_Diff'
+            min_val, max_val = get_diff_range(data, diff_col)
+            default_min = max(min_val, 0.0)
+            default_max = min(max_val, 0.05) if max_val >= 0.05 else max_val
             gap_range = st.slider(
                 f"{sys} gap range",
-                min_value=-1.0, max_value=1.0,
-                value=(0.0, 0.05), step=0.01,
+                min_value=min_val, max_value=max_val,
+                value=(default_min, default_max), step=0.01,
                 key=f"gap_range_{sys}"
             )
             gap_filters[sys] = (True, gap_range)
@@ -268,10 +273,9 @@ for result, col in zip(['Yes', 'No'], [col1, col2]):
             st.write(f"**Career Avg Ctrl Time:** {avg_ctrl:.0f}s | CTR/TD: {ctrtd:.1f}s")
         st.write(f"**Avg Age Diff:** {age_diff_mean:.1f} | **Avg Height Diff:** {height_diff_mean:.1f} in | **Avg Reach Diff:** {reach_diff_mean:.1f} in")
 
-# ---------- Rating Gap Analysis (NEW – combined intersection) ----------
+# ---------- Rating Gap Analysis ----------
 st.header("Rating Gap Analysis")
 
-# Collect all enabled gap conditions
 conditions = []
 active_systems = []
 for sys, (enabled, gap_range) in gap_filters.items():
@@ -285,7 +289,6 @@ for sys, (enabled, gap_range) in gap_filters.items():
             st.warning(f"Column {diff_col} not found, ignoring {sys}.")
 
 if conditions:
-    # Intersection of all enabled gaps
     combined_mask = conditions[0]
     for cond in conditions[1:]:
         combined_mask = combined_mask & cond
@@ -846,18 +849,13 @@ else:
 # FEATURE IMPORTANCE CHARTS (Numerical & Categorical)
 # =========================================================================
 st.header("Top 20 Feature Importance (Current Filter Set)")
-
-# Only use historical fights for importance
 hist_imp = data[data['Win?'].isin(['Yes', 'No'])].copy()
 if len(hist_imp) < 10:
     st.warning("Too few historical fights after filtering to compute importance.")
 else:
     hist_imp['Target'] = (hist_imp['Win?'] == 'Yes').astype(int)
 
-    # --- Numerical feature importance ---
-    # Use the SAME list of features that are available in the 3D scatterplot (three_d_features)
-    # three_d_features is already defined earlier and contains all eligible numeric columns.
-    # We'll filter out only columns that are not present in hist_imp.
+    # Numerical – use the same features as the 3D scatterplot
     num_features = [c for c in three_d_features if c in hist_imp.columns]
     if num_features:
         X_num = hist_imp[num_features].dropna()
@@ -866,10 +864,7 @@ else:
             X_imp = imputer.fit_transform(X_num)
             y_num = hist_imp.loc[X_num.index, 'Target']
             mi = mutual_info_classif(X_imp, y_num, discrete_features=False)
-            mi_df_num = pd.DataFrame({
-                'Feature': num_features,
-                'Mutual Information': mi
-            }).sort_values('Mutual Information', ascending=False).head(20)
+            mi_df_num = pd.DataFrame({'Feature': num_features, 'Mutual Information': mi}).sort_values('Mutual Information', ascending=False).head(20)
             fig_num = px.bar(mi_df_num, x='Mutual Information', y='Feature', orientation='h',
                              title="Top 20 Numerical Features by Mutual Information with Win/Loss")
             st.plotly_chart(fig_num, use_container_width=True)
@@ -878,10 +873,9 @@ else:
     else:
         st.warning("No numerical features available after filtering.")
 
-    # --- Categorical feature importance (separate) ---
+    # Categorical (separate)
     st.subheader("Categorical Feature Importance with Win/Loss")
-    potential_cat_cols = ['WC','Stance','Country','EventCountry','Title',
-                          'ScheduledRounds','HometownFighter','Opponent_Hometown']
+    potential_cat_cols = ['WC','Stance','Country','EventCountry','Title','ScheduledRounds','HometownFighter','Opponent_Hometown']
     categorical_cols = [c for c in potential_cat_cols if c in hist_imp.columns and hist_imp[c].nunique(dropna=True) > 1]
     if categorical_cols:
         scores = {}
@@ -892,10 +886,7 @@ else:
             codes, _ = pd.factorize(sub[col])
             scores[col] = mutual_info_score(codes, sub['Target'])
         if scores:
-            cat_mi_df = pd.DataFrame({
-                'Feature': list(scores.keys()),
-                'Mutual Information': list(scores.values())
-            }).sort_values('Mutual Information', ascending=False).head(20)
+            cat_mi_df = pd.DataFrame({'Feature': list(scores.keys()), 'Mutual Information': list(scores.values())}).sort_values('Mutual Information', ascending=False).head(20)
             fig_cat = px.bar(cat_mi_df, x='Mutual Information', y='Feature', orientation='h',
                              title="Top Categorical Features by Mutual Information with Win/Loss",
                              color_discrete_sequence=['#636efa'])
@@ -904,6 +895,7 @@ else:
             st.warning("No categorical column had enough variation.")
     else:
         st.warning("No categorical features available after filtering.")
+
 # =========================================================================
 # SPIDER CHART – FIGHTER‑SIDE FILTERS + LR + CALIBRATED KNN + SHRINKAGE + SIMILARITY
 # =========================================================================
