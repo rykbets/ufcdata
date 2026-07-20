@@ -4,7 +4,6 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import re
-import os
 import gdown
 import itertools
 from sklearn.linear_model import LogisticRegression
@@ -18,25 +17,17 @@ from sklearn.model_selection import cross_val_predict
 from scipy.spatial.distance import cdist
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
-# st.cache_data.clear()   # ← uncomment only for the first run after uploading a new Parquet
 
-# ============================================================
-# 🔑 YOUR GOOGLE DRIVE FILE IDS – replace with your actual IDs
-# ============================================================
-PARQUET_FILE_ID = "1UIAgg0cHBW5TMekpoohpiP23Fd6aeqg8"   # ← all_fights.parquet ID
+PARQUET_FILE_ID = "YOUR_PARQUET_FILE_ID"   # ← replace with your actual ID
 
-# ---------- Cached data loader – instant ----------
 @st.cache_data
 def load_data():
     gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
-    data = pd.read_parquet("data.parquet")
-    return data
+    return pd.read_parquet("data.parquet")
 
 data = load_data()
 
-# All columns are already present – no further computation needed.
-
-# ---------- Sidebar Filters ----------
+# ---------- Sidebar Filters (unchanged) ----------
 st.sidebar.title("Filters")
 
 with st.sidebar.expander("General", expanded=True):
@@ -108,11 +99,9 @@ with st.sidebar.expander("Odds", expanded=False):
 
 new_wc = st.sidebar.checkbox("New Weight Class")
 skip_nc = st.sidebar.checkbox("Skip NC outcomes")
-
 prev_title = st.sidebar.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"])
 opp_prev_title = st.sidebar.selectbox("Opp Prev Fight Was Title?", ["All", "Yes", "No"])
 
-# Previous outcome columns
 if skip_nc:
     prev1_col = 'Prev1_Outcome_skipNC'; prev2_col = 'Prev2_Outcome_skipNC'; prev3_col = 'Prev3_Outcome_skipNC'
     career1_col = 'Career1_Outcome_skipNC'; career2_col = 'Career2_Outcome_skipNC'; career3_col = 'Career3_Outcome_skipNC'
@@ -139,17 +128,11 @@ with st.sidebar.expander("Previous Outcomes", expanded=False):
     opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career)
     opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career)
 
-# ---------- Rating Gap Analysis Filters ----------
 with st.sidebar.expander("Rating Gap Analysis", expanded=False):
-    rating_system = st.selectbox("Rating system",
-                                 ['ColleyOrig', 'ColleyDecay', 'MasseyOrig', 'MasseyDecay'],
-                                 key="gap_system")
-    gap_range = st.slider("Rating gap range",
-                          min_value=0.0, max_value=1.0,
-                          value=(0.0, 0.05), step=0.01, key="gap_range")
+    rating_system = st.selectbox("Rating system", ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay'], key="gap_system")
+    gap_range = st.slider("Rating gap range", min_value=0.0, max_value=1.0, value=(0.0, 0.05), step=0.01, key="gap_range")
 
 # ---------- Apply filters ----------
-# (we need to work on a copy so that the full data remains untouched)
 filtered = data.copy()
 
 if wc: filtered = filtered[filtered['WC'].isin(wc)]
@@ -207,8 +190,12 @@ if not data['PrevFighterOddsNum'].isna().all() and prev_odds != (0,0):
     filtered = filtered.dropna(subset=['PrevFighterOddsNum'])
     filtered = filtered[(filtered['PrevFighterOddsNum'] >= prev_odds[0]) & (filtered['PrevFighterOddsNum'] <= prev_odds[1])]
 
-# From here on, we use `filtered` as the data for all displays & models.
-data = filtered   # keep variable name consistent
+data = filtered   # keep the name consistent
+
+# ---------- Dashboard (unchanged, use existing code from previous working version) ----------
+# ... paste here your Performance Summary, Rating Gap Analysis, Matchup, Last20,
+#     LR/KNN, Feature Importance, Spider Chart, etc.
+# They all work because 'data' has exactly the same columns as before.
 
 # ---------- Main Dashboard ----------
 st.title("UFC Pre‑Fight Performance Dashboard")
