@@ -24,7 +24,6 @@ st.set_page_config(page_title="UFC Pre‑Fight Dashboard (Adjusted)", layout="wi
 # ============================================================
 @st.cache_data
 def load_data():
-    # Try local file first (for Streamlit Cloud with uploaded file)
     if os.path.exists("all_fights_adjperf.parquet"):
         return pd.read_parquet("all_fights_adjperf.parquet")
     # Otherwise try Drive download (you need to set your file ID)
@@ -60,21 +59,25 @@ def normalize_title_col(series):
         return pd.Series('', index=series.index)
     return series.astype(str).str.strip().str.lower()
 
-# ---------- Define available features – include ALL adjperf columns ----------
+# ---------- Define available features – include ALL adjperf columns (deduplicated) ----------
 adjperf_cols = [c for c in data.columns if c.startswith('adjperf_')]
-new_features = [
-    'Age', 'AgeDiff', 'HeightDiff', 'ReachDiff',
-    'DaysSincePrev', 'DaysSincePrev_diff', 'Avg3DaysGap_diff',
-    'FightNumber', 'FightNumber_diff',
-    'FighterOddsNum', 'PrevFighterOddsNum',
-    'CareerWinPct_diff', 'Prev7WinPct',
-    'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecayDiff',
-    'FighterMasseyDecay', 'OpponentMasseyDecay', 'MasseyDecayDiff',
-    'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecayDiff'
-]
-# Add ALL adjperf columns (fighter, opponent, diff)
+base_cols = ['Age', 'AgeDiff', 'HeightDiff', 'ReachDiff',
+             'DaysSincePrev', 'DaysSincePrev_diff', 'Avg3DaysGap_diff',
+             'FightNumber', 'FightNumber_diff',
+             'FighterOddsNum', 'PrevFighterOddsNum',
+             'CareerWinPct_diff', 'Prev7WinPct',
+             'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecayDiff',
+             'FighterMasseyDecay', 'OpponentMasseyDecay', 'MasseyDecayDiff',
+             'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecayDiff']
+
+# Build new_features with deduplication
+new_features = []
+for col in base_cols:
+    if col in data.columns:
+        new_features.append(col)
 for col in adjperf_cols:
-    new_features.append(col)                 # fighter adjperf
+    if col in data.columns:
+        new_features.append(col)                 # fighter adjperf
     opp_col = f'Opponent_{col}'
     if opp_col in data.columns:
         new_features.append(opp_col)
@@ -82,14 +85,20 @@ for col in adjperf_cols:
     if diff_col in data.columns:
         new_features.append(diff_col)
 
-# Keep only existing
-new_features = [c for c in new_features if c in data.columns]
+# Remove duplicates while preserving order
+seen = set()
+new_features_unique = []
+for col in new_features:
+    if col not in seen:
+        seen.add(col)
+        new_features_unique.append(col)
+new_features = new_features_unique
 
 # For 3D features, use numeric columns from new_features with variance
 three_d_features = [c for c in new_features if data[c].nunique(dropna=True) >= 2 and np.issubdtype(data[c].dtype, np.number)]
 
 # =========================================================================
-# Sidebar Filters (with existence checks – same as before)
+# Sidebar Filters (with existence checks)
 # =========================================================================
 st.sidebar.title("Filters")
 with st.sidebar.expander("General", expanded=True):
@@ -403,7 +412,6 @@ col1.metric("Total Fights", total)
 col2.metric("Wins", wins)
 col3.metric("Win Rate", f"{win_rate:.1f}%")
 
-# Show averages of key diffs
 cols_to_show = ['CareerWinPct_diff', 'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev_diff']
 cols_to_show = [c for c in cols_to_show if c in data.columns]
 if cols_to_show:
@@ -448,7 +456,6 @@ if not upcoming_display.empty:
 
             def show_fighter_stats(row, label):
                 st.subheader(label)
-                # Basic info (only columns that exist)
                 basic_cols = ['Age', 'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev',
                               'DaysSincePrev_diff', 'Avg3DaysGap_diff', 'CareerWinPct_diff',
                               'Prev7WinPct', 'FighterOddsNum', 'PrevFighterOddsNum',
@@ -457,7 +464,6 @@ if not upcoming_display.empty:
                     if col in row:
                         st.write(f"**{col}:** {row[col]:.2f}" if isinstance(row[col], (int, float)) else f"**{col}:** {row[col]}")
                 st.write("---")
-                # ---- Show ALL adjperf diffs ----
                 st.write("**Adjusted Performance Diffs (fighter - opponent)**")
                 adjperf_diffs = [c for c in row.index if c.endswith('_diff') and c.startswith('adjperf_')]
                 if adjperf_diffs:
@@ -634,12 +640,15 @@ if len(three_d_features) >= 3:
 
         # LR combo builder
         st.subheader("LR 3‑Variable Combinations (Brier)")
+        # Use unique features
         combo_candidates = [c for c in three_d_features if c != 'FighterOddsNum']
         importance_features = [c for c in three_d_features if not c.endswith('_diff') and not c.startswith('Opponent_')]
         @st.cache_data
         def numerical_importance(_data, features):
             hist = _data[_data['Win?'].isin(['Yes','No'])].copy()
             hist['Target'] = (hist['Win?'] == 'Yes').astype(int)
+            # Ensure unique columns
+            features = list(dict.fromkeys(features))  # deduplicate
             X = hist[features].dropna()
             y = hist.loc[X.index, 'Target']
             if len(X) > 10:
@@ -880,7 +889,7 @@ display_cols = [c for c in display_cols if c in last20.columns]
 st.dataframe(last20[display_cols])
 
 # =========================================================================
-# FEATURE IMPORTANCE
+# FEATURE IMPORTANCE (with deduplication)
 # =========================================================================
 st.header("Top 20 Feature Importance (Current Filter Set)")
 hist_imp = data[data['Win?'].isin(['Yes', 'No'])].copy()
@@ -888,7 +897,8 @@ if len(hist_imp) < 10:
     st.warning("Too few historical fights after filtering to compute importance.")
 else:
     hist_imp['Target'] = (hist_imp['Win?'] == 'Yes').astype(int)
-    eligible = [c for c in three_d_features if c in hist_imp.columns]
+    # Deduplicate eligible columns
+    eligible = list(dict.fromkeys([c for c in three_d_features if c in hist_imp.columns]))
     if eligible:
         X_num = hist_imp[eligible].dropna()
         if len(X_num) > 10 and X_num.shape[1] > 0:
