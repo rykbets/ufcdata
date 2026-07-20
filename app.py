@@ -32,6 +32,10 @@ data = load_data()
 original_data = data.copy()
 
 # ---------- Helper functions ----------
+def safe_col(df, col):
+    """Return column if exists, else None"""
+    return col if col in df.columns else None
+
 def get_diff_range(df, col_name):
     if col_name not in df.columns:
         return -1.0, 1.0
@@ -53,7 +57,7 @@ def normalize_title_col(series):
         return pd.Series('', index=series.index)
     return series.astype(str).str.strip().str.lower()
 
-# ---------- Define expected columns ----------
+# ---------- Define available features ----------
 adjperf_cols = [c for c in data.columns if c.startswith('adjperf_')]
 new_features = [
     'Age', 'AgeDiff', 'HeightDiff', 'ReachDiff',
@@ -72,9 +76,10 @@ for col in adjperf_cols:
 # Keep only existing
 new_features = [c for c in new_features if c in data.columns]
 
+# For 3D features, use numeric columns from new_features with variance
 three_d_features = [c for c in new_features if data[c].nunique(dropna=True) >= 2 and np.issubdtype(data[c].dtype, np.number)]
 
-# ---------- Sidebar Filters ----------
+# ---------- Sidebar Filters with existence checks ----------
 st.sidebar.title("Filters")
 with st.sidebar.expander("General", expanded=True):
     wc = st.multiselect("Weight Class", sorted(data['WC'].dropna().unique())) if 'WC' in data.columns else []
@@ -87,16 +92,10 @@ with st.sidebar.expander("General", expanded=True):
     event_country = st.multiselect("Event Country", sorted(data['EventCountry'].dropna().unique())) if 'EventCountry' in data.columns else []
 
 with st.sidebar.expander("Fight Numbers", expanded=False):
-    if 'FightNumber' in data.columns:
-        fn_min = st.number_input("Min Fight #", value=1, min_value=1, max_value=int(data['FightNumber'].max()))
-        fn_max = st.number_input("Max Fight #", value=int(data['FightNumber'].max()))
-    else:
-        fn_min, fn_max = 1, 1000
-    if 'Opponent_FightNumber' in data.columns:
-        ofn_min = st.number_input("Opp Min Fight #", value=1)
-        ofn_max = st.number_input("Opp Max Fight #", value=int(data['Opponent_FightNumber'].max()))
-    else:
-        ofn_min, ofn_max = 1, 1000
+    fn_min = st.number_input("Min Fight #", value=1, min_value=1, max_value=int(data['FightNumber'].max())) if 'FightNumber' in data.columns else 1
+    fn_max = st.number_input("Max Fight #", value=int(data['FightNumber'].max())) if 'FightNumber' in data.columns else 1000
+    ofn_min = st.number_input("Opp Min Fight #", value=1) if 'Opponent_FightNumber' in data.columns else 1
+    ofn_max = st.number_input("Opp Max Fight #", value=int(data['Opponent_FightNumber'].max())) if 'Opponent_FightNumber' in data.columns else 1000
 
 with st.sidebar.expander("Career Win % Diff", expanded=False):
     if 'CareerWinPct_diff' in data.columns:
@@ -106,52 +105,25 @@ with st.sidebar.expander("Career Win % Diff", expanded=False):
         cwp_min, cwp_max = -100, 100
 
 with st.sidebar.expander("Physical Attributes", expanded=False):
-    if 'Age' in data.columns:
-        age = st.slider("Age", int(data['Age'].min()), int(data['Age'].max()), (int(data['Age'].min()), int(data['Age'].max())))
-    else:
-        age = (0, 100)
-    if 'AgeDiff' in data.columns:
-        age_diff = st.slider("Age Diff", int(data['AgeDiff'].min()), int(data['AgeDiff'].max()), (int(data['AgeDiff'].min()), int(data['AgeDiff'].max())))
-    else:
-        age_diff = (-100, 100)
-    if 'HeightDiff' in data.columns:
-        height_diff = st.slider("Height Diff (in)", int(data['HeightDiff'].min()), int(data['HeightDiff'].max()), (int(data['HeightDiff'].min()), int(data['HeightDiff'].max())))
-    else:
-        height_diff = (-50, 50)
-    if 'ReachDiff' in data.columns:
-        reach_diff = st.slider("Reach Diff (in)", int(data['ReachDiff'].min()), int(data['ReachDiff'].max()), (int(data['ReachDiff'].min()), int(data['ReachDiff'].max())))
-    else:
-        reach_diff = (-50, 50)
+    age = st.slider("Age", int(data['Age'].min()), int(data['Age'].max()), (int(data['Age'].min()), int(data['Age'].max()))) if 'Age' in data.columns else (0,100)
+    age_diff = st.slider("Age Diff", int(data['AgeDiff'].min()), int(data['AgeDiff'].max()), (int(data['AgeDiff'].min()), int(data['AgeDiff'].max()))) if 'AgeDiff' in data.columns else (-100,100)
+    height_diff = st.slider("Height Diff (in)", int(data['HeightDiff'].min()), int(data['HeightDiff'].max()), (int(data['HeightDiff'].min()), int(data['HeightDiff'].max()))) if 'HeightDiff' in data.columns else (-50,50)
+    reach_diff = st.slider("Reach Diff (in)", int(data['ReachDiff'].min()), int(data['ReachDiff'].max()), (int(data['ReachDiff'].min()), int(data['ReachDiff'].max()))) if 'ReachDiff' in data.columns else (-50,50)
 
 with st.sidebar.expander("Days & Gaps", expanded=False):
-    if 'DaysSincePrev' in data.columns:
-        days = st.slider("Days Since Prev", int(data['DaysSincePrev'].min()), int(data['DaysSincePrev'].max()), (int(data['DaysSincePrev'].min()), int(data['DaysSincePrev'].max())))
-    else:
-        days = (0, 1000)
-    if 'DaysSincePrev_diff' in data.columns:
-        days_diff = st.slider("Days Since Prev Diff", int(data['DaysSincePrev_diff'].min()), int(data['DaysSincePrev_diff'].max()), (int(data['DaysSincePrev_diff'].min()), int(data['DaysSincePrev_diff'].max())))
-    else:
-        days_diff = (-1000, 1000)
-    if 'Avg3DaysGap_diff' in data.columns:
-        avg3_diff = st.slider("Avg3DaysGap Diff", int(data['Avg3DaysGap_diff'].min()), int(data['Avg3DaysGap_diff'].max()), (int(data['Avg3DaysGap_diff'].min()), int(data['Avg3DaysGap_diff'].max())))
-    else:
-        avg3_diff = (-1000, 1000)
+    days = st.slider("Days Since Prev", int(data['DaysSincePrev'].min()), int(data['DaysSincePrev'].max()), (int(data['DaysSincePrev'].min()), int(data['DaysSincePrev'].max()))) if 'DaysSincePrev' in data.columns else (0,1000)
+    days_diff = st.slider("Days Since Prev Diff", int(data['DaysSincePrev_diff'].min()), int(data['DaysSincePrev_diff'].max()), (int(data['DaysSincePrev_diff'].min()), int(data['DaysSincePrev_diff'].max()))) if 'DaysSincePrev_diff' in data.columns else (-1000,1000)
+    avg3_diff = st.slider("Avg3DaysGap Diff", int(data['Avg3DaysGap_diff'].min()), int(data['Avg3DaysGap_diff'].max()), (int(data['Avg3DaysGap_diff'].min()), int(data['Avg3DaysGap_diff'].max()))) if 'Avg3DaysGap_diff' in data.columns else (-1000,1000)
 
 with st.sidebar.expander("Odds", expanded=False):
-    if 'FighterOddsNum' in data.columns:
-        cur_odds = st.slider("Fighter Odds", int(data['FighterOddsNum'].min()), int(data['FighterOddsNum'].max()), (int(data['FighterOddsNum'].min()), int(data['FighterOddsNum'].max())), step=10)
-    else:
-        cur_odds = (-1000, 1000)
-    if 'PrevFighterOddsNum' in data.columns:
-        prev_odds = st.slider("Prev Fighter Odds", int(data['PrevFighterOddsNum'].min()), int(data['PrevFighterOddsNum'].max()), (int(data['PrevFighterOddsNum'].min()), int(data['PrevFighterOddsNum'].max())), step=10)
-    else:
-        prev_odds = (-1000, 1000)
+    cur_odds = st.slider("Fighter Odds", int(data['FighterOddsNum'].min()), int(data['FighterOddsNum'].max()), (int(data['FighterOddsNum'].min()), int(data['FighterOddsNum'].max())), step=10) if 'FighterOddsNum' in data.columns else (-1000,1000)
+    prev_odds = st.slider("Prev Fighter Odds", int(data['PrevFighterOddsNum'].min()), int(data['PrevFighterOddsNum'].max()), (int(data['PrevFighterOddsNum'].min()), int(data['PrevFighterOddsNum'].max())), step=10) if 'PrevFighterOddsNum' in data.columns else (-1000,1000)
 
 new_wc = st.sidebar.checkbox("New Weight Class") if 'IsNewWeightClass' in data.columns else False
 prev_title = st.sidebar.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"])
 opp_prev_title = st.sidebar.selectbox("Opp Prev Fight Was Title?", ["All", "Yes", "No"])
 
-# ---------- Apply main filters ----------
+# ---------- Apply filters ----------
 filtered = data.copy()
 
 if wc and 'WC' in filtered.columns: filtered = filtered[filtered['WC'].isin(wc)]
@@ -164,6 +136,7 @@ if opp_hometown != "All" and 'Opponent_Hometown' in filtered.columns: filtered =
 if event_country and 'EventCountry' in filtered.columns: filtered = filtered[filtered['EventCountry'].isin(event_country)]
 if new_wc and 'IsNewWeightClass' in filtered.columns: filtered = filtered[filtered['IsNewWeightClass'] == True]
 
+# Title filters
 if 'Prev1_Title' in filtered.columns:
     filtered['Prev1_Title_clean'] = normalize_title_col(filtered['Prev1_Title'])
     if prev_title != "All":
@@ -173,6 +146,7 @@ if 'Opponent_Prev1_Title' in filtered.columns:
     if opp_prev_title != "All":
         filtered = filtered[filtered['Opp_Prev1_Title_clean'] == opp_prev_title.lower()]
 
+# Numeric filters
 if 'FightNumber' in filtered.columns:
     filtered = filtered[(filtered['FightNumber'] >= fn_min) & (filtered['FightNumber'] <= fn_max)]
 if 'Opponent_FightNumber' in filtered.columns:
@@ -265,7 +239,11 @@ if 'knn_train_status' not in st.session_state:
 if 'selected_fight_row' not in st.session_state:
     st.session_state.selected_fight_row = None
 
-# Set default features: use first three from three_d_features
+# Store feature names to avoid mismatch
+if 'lr_feature_names' not in st.session_state:
+    st.session_state.lr_feature_names = []
+
+# Set default features
 if len(three_d_features) >= 3:
     default_lr = three_d_features[:3]
     default_knn = three_d_features[:3]
@@ -296,7 +274,7 @@ if len(full_hist) > 0:
     st.session_state.recent_count = len(recent)
 
 # =========================================================================
-# TRAIN MODELS ON FILTERED DATA
+# TRAIN MODELS ON FILTERED DATA (store feature names)
 # =========================================================================
 def train_models_on_filtered():
     x_lr = st.session_state.x_lr
@@ -312,6 +290,7 @@ def train_models_on_filtered():
         st.session_state.lr_model = None
         st.session_state.lr_train_status = "LR features not set."
         st.session_state.y_train_lr = None
+        st.session_state.lr_feature_names = []
     else:
         hist = data[data['Win?'].isin(['Yes','No'])].copy()
         sub = hist[[x_lr, y_lr, z_lr, 'Win?']].dropna()
@@ -319,10 +298,12 @@ def train_models_on_filtered():
             st.session_state.lr_model = None
             st.session_state.lr_train_status = f"LR: only {len(sub)} rows (need ≥10)."
             st.session_state.y_train_lr = None
+            st.session_state.lr_feature_names = []
         elif sub['Win?'].nunique() < 2:
             st.session_state.lr_model = None
             st.session_state.lr_train_status = "LR: need both Win and Loss."
             st.session_state.y_train_lr = None
+            st.session_state.lr_feature_names = []
         else:
             try:
                 sub['target'] = (sub['Win?'] == 'Yes').astype(int)
@@ -334,16 +315,19 @@ def train_models_on_filtered():
                 st.session_state.lr_train_status = f"LR trained on {len(sub)} fights."
                 st.session_state.y_train_lr = y
                 st.session_state.X_train_lr = X
+                st.session_state.lr_feature_names = [x_lr, y_lr, z_lr]
             except Exception as e:
                 st.session_state.lr_model = None
                 st.session_state.lr_train_status = f"LR error: {str(e)}"
                 st.session_state.y_train_lr = None
+                st.session_state.lr_feature_names = []
 
     # KNN
     if x_knn is None or y_knn is None or z_knn is None:
         st.session_state.calibrated_knn = None
         st.session_state.knn_train_status = "KNN features not set."
         st.session_state.y_train_knn = None
+        st.session_state.knn_feature_names = []
     else:
         hist = data[data['Win?'].isin(['Yes','No'])].copy()
         c1 = get_first_col(hist, x_knn)
@@ -359,10 +343,12 @@ def train_models_on_filtered():
             st.session_state.calibrated_knn = None
             st.session_state.knn_train_status = f"KNN: only {len(train_df)} rows (need ≥10)."
             st.session_state.y_train_knn = None
+            st.session_state.knn_feature_names = []
         elif train_df['Win?'].nunique() < 2:
             st.session_state.calibrated_knn = None
             st.session_state.knn_train_status = "KNN: need both Win and Loss."
             st.session_state.y_train_knn = None
+            st.session_state.knn_feature_names = []
         else:
             try:
                 X = train_df[['f1','f2','f3']].values.astype(np.float64)
@@ -377,10 +363,12 @@ def train_models_on_filtered():
                 st.session_state.X_train = X
                 st.session_state.y_train_knn = y
                 st.session_state.knn_train_status = f"KNN trained on {len(train_df)} fights."
+                st.session_state.knn_feature_names = [x_knn, y_knn, z_knn]
             except Exception as e:
                 st.session_state.calibrated_knn = None
                 st.session_state.knn_train_status = f"KNN error: {str(e)}"
                 st.session_state.y_train_knn = None
+                st.session_state.knn_feature_names = []
 
 # Train models now
 train_models_on_filtered()
@@ -404,20 +392,23 @@ col1.metric("Total Fights", total)
 col2.metric("Wins", wins)
 col3.metric("Win Rate", f"{win_rate:.1f}%")
 
-col1, col2 = st.columns(2)
-for result, col in zip(['Yes', 'No'], [col1, col2]):
-    subset = data[data['Win?'] == result]
-    if len(subset) == 0: continue
-    label = "Winners" if result == 'Yes' else "Losers"
-    with col:
-        st.subheader(label)
-        # Show means of selected features for winners/losers
-        for feat in ['CareerWinPct_diff', 'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev_diff']:
-            if feat in subset.columns:
-                st.write(f"**{feat}:** {subset[feat].mean():.2f}")
+# Show averages of key diffs
+cols_to_show = ['CareerWinPct_diff', 'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev_diff']
+cols_to_show = [c for c in cols_to_show if c in data.columns]
+if cols_to_show:
+    colA, colB = st.columns(2)
+    for result, col in zip(['Yes', 'No'], [colA, colB]):
+        subset = data[data['Win?'] == result]
+        if len(subset) == 0: continue
+        label = "Winners" if result == 'Yes' else "Losers"
+        with col:
+            st.subheader(label)
+            for feat in cols_to_show:
+                if feat in subset.columns:
+                    st.write(f"**{feat}:** {subset[feat].mean():.2f}")
 
 # =========================================================================
-# UPCOMING FIGHT MATCHUP
+# UPCOMING FIGHT MATCHUP (with column guards)
 # =========================================================================
 st.header("Upcoming Fight Matchup")
 
@@ -447,40 +438,26 @@ if not upcoming_display.empty:
             def show_fighter_stats(row, label):
                 st.subheader(label)
                 # Only show columns that exist
-                if 'Age' in row:
-                    st.write(f"**Age:** {row['Age']}")
-                if 'AgeDiff' in row:
-                    st.write(f"**AgeDiff:** {row['AgeDiff']:.1f}")
-                if 'HeightDiff' in row:
-                    st.write(f"**HeightDiff:** {row['HeightDiff']:.1f} in")
-                if 'ReachDiff' in row:
-                    st.write(f"**ReachDiff:** {row['ReachDiff']:.1f} in")
-                if 'DaysSincePrev' in row:
-                    st.write(f"**DaysSincePrev:** {row['DaysSincePrev']:.0f}")
-                if 'DaysSincePrev_diff' in row:
-                    st.write(f"**DaysSincePrev_diff:** {row['DaysSincePrev_diff']:.0f}")
-                if 'Avg3DaysGap_diff' in row:
-                    st.write(f"**Avg3DaysGap_diff:** {row['Avg3DaysGap_diff']:.0f}")
-                if 'CareerWinPct_diff' in row:
-                    st.write(f"**CareerWinPct_diff:** {row['CareerWinPct_diff']:.1%}")
-                if 'Prev7WinPct' in row:
-                    st.write(f"**Prev7WinPct:** {row['Prev7WinPct']:.1%}")
-                if 'FighterOddsNum' in row:
-                    st.write(f"**FighterOddsNum:** {row['FighterOddsNum']:.0f}")
-                if 'PrevFighterOddsNum' in row:
-                    st.write(f"**PrevFighterOddsNum:** {row['PrevFighterOddsNum']:.0f}")
-                if 'ColleyDecayDiff' in row:
-                    st.write(f"**ColleyDecayDiff:** {row['ColleyDecayDiff']:.3f}")
-                if 'MasseyDecayDiff' in row:
-                    st.write(f"**MasseyDecayDiff:** {row['MasseyDecayDiff']:.3f}")
-                if 'WeightedMasseyDecayDiff' in row:
-                    st.write(f"**WeightedMasseyDecayDiff:** {row['WeightedMasseyDecayDiff']:.3f}")
-                # Show some adjperf diffs for key stats
+                if 'Age' in row: st.write(f"**Age:** {row['Age']}")
+                if 'AgeDiff' in row: st.write(f"**AgeDiff:** {row['AgeDiff']:.1f}")
+                if 'HeightDiff' in row: st.write(f"**HeightDiff:** {row['HeightDiff']:.1f} in")
+                if 'ReachDiff' in row: st.write(f"**ReachDiff:** {row['ReachDiff']:.1f} in")
+                if 'DaysSincePrev' in row: st.write(f"**DaysSincePrev:** {row['DaysSincePrev']:.0f}")
+                if 'DaysSincePrev_diff' in row: st.write(f"**DaysSincePrev_diff:** {row['DaysSincePrev_diff']:.0f}")
+                if 'Avg3DaysGap_diff' in row: st.write(f"**Avg3DaysGap_diff:** {row['Avg3DaysGap_diff']:.0f}")
+                if 'CareerWinPct_diff' in row: st.write(f"**CareerWinPct_diff:** {row['CareerWinPct_diff']:.1%}")
+                if 'Prev7WinPct' in row: st.write(f"**Prev7WinPct:** {row['Prev7WinPct']:.1%}")
+                if 'FighterOddsNum' in row: st.write(f"**FighterOddsNum:** {row['FighterOddsNum']:.0f}")
+                if 'PrevFighterOddsNum' in row: st.write(f"**PrevFighterOddsNum:** {row['PrevFighterOddsNum']:.0f}")
+                if 'ColleyDecayDiff' in row: st.write(f"**ColleyDecayDiff:** {row['ColleyDecayDiff']:.3f}")
+                if 'MasseyDecayDiff' in row: st.write(f"**MasseyDecayDiff:** {row['MasseyDecayDiff']:.3f}")
+                if 'WeightedMasseyDecayDiff' in row: st.write(f"**WeightedMasseyDecayDiff:** {row['WeightedMasseyDecayDiff']:.3f}")
+                # Show some adjperf diffs
                 key_stats = ['adjperf_KD', 'adjperf_SS', 'adjperf_TD', 'adjperf_Subs', 'adjperf_Ctrl']
                 for ks in key_stats:
-                    diff_col = f'{ks}_diff'
-                    if diff_col in row:
-                        st.write(f"**{diff_col}:** {row[diff_col]:.2f}")
+                    if f'{ks}_diff' in row:
+                        st.write(f"**{ks}_diff:** {row[f'{ks}_diff']:.2f}")
+                st.write("---")
 
             colA, colB = st.columns(2)
             with colA:
@@ -490,18 +467,21 @@ if not upcoming_display.empty:
 
             st.subheader(f"Model Win Probabilities for {f1_row['Fighter']}")
 
-            # LR
+            # LR – use stored feature names
             lr_model = st.session_state.lr_model
-            if lr_model is not None and st.session_state.x_lr is not None:
+            lr_feats = st.session_state.lr_feature_names
+            if lr_model is not None and len(lr_feats) == 3:
                 def safe_val(row, col):
+                    if col not in row.index:
+                        return 0.0
                     try:
                         val = row[col]
                         return val if pd.notna(val) else 0.0
                     except:
                         return 0.0
-                v1 = safe_val(f1_row, st.session_state.x_lr)
-                v2 = safe_val(f1_row, st.session_state.y_lr)
-                v3 = safe_val(f1_row, st.session_state.z_lr)
+                v1 = safe_val(f1_row, lr_feats[0])
+                v2 = safe_val(f1_row, lr_feats[1])
+                v3 = safe_val(f1_row, lr_feats[2])
                 try:
                     prob_lr = lr_model.predict_proba(np.array([[v1, v2, v3]]))[0, 1]
                     overall_wr = st.session_state.overall_wr
@@ -516,17 +496,18 @@ if not upcoming_display.empty:
                 except Exception as e:
                     st.error(f"LR probability error: {e}")
             else:
-                st.info("LR model not trained. Check status above.")
+                st.info("LR model not trained or feature mismatch. Check status above.")
 
-            # KNN
+            # KNN – use stored feature names
             calibrated_knn = st.session_state.calibrated_knn
             scaler = st.session_state.scaler
             X_train = st.session_state.X_train
-            if calibrated_knn is not None and scaler is not None and st.session_state.x_knn is not None:
+            knn_feats = st.session_state.get('knn_feature_names', [])
+            if calibrated_knn is not None and scaler is not None and len(knn_feats) == 3 and X_train is not None:
                 means_knn = X_train.mean(axis=0) if X_train is not None else np.zeros(3)
                 vals_knn = []
-                for i, col_name in enumerate([st.session_state.x_knn, st.session_state.y_knn, st.session_state.z_knn]):
-                    raw = get_first_col(pd.DataFrame(f1_row).T, col_name)[0]
+                for i, col_name in enumerate(knn_feats):
+                    raw = f1_row[col_name] if col_name in f1_row else np.nan
                     try:
                         v = float(raw) if pd.notna(raw) else means_knn[i]
                     except:
@@ -549,14 +530,14 @@ if not upcoming_display.empty:
                 except Exception as e:
                     st.error(f"KNN probability error: {e}")
             else:
-                st.info("KNN model not trained. Check status above.")
+                st.info("KNN model not trained or feature mismatch. Check status above.")
         else:
             st.warning(f"Expected 2 rows for this fight, but got {len(fight_rows)}. Check data.")
 else:
     st.write("No upcoming fights match the current filters.")
 
 # =========================================================================
-# 3D LR SCATTER & COMBO BUILDER
+# 3D LR SCATTER & COMBO BUILDER (with feature name consistency)
 # =========================================================================
 st.header("3D LR Win/Loss Prediction & Best LR Combinations")
 
@@ -616,22 +597,24 @@ if len(three_d_features) >= 3:
                 if st.session_state.selected_fight_row is not None:
                     f1_row = st.session_state.selected_fight_row
                     st.subheader(f"Predicted LR Win Probability for {f1_row['Fighter']} (using current features)")
-                    v1 = f1_row[x_lr] if pd.notna(f1_row[x_lr]) else 0.0
-                    v2 = f1_row[y_lr] if pd.notna(f1_row[y_lr]) else 0.0
-                    v3 = f1_row[z_lr] if pd.notna(f1_row[z_lr]) else 0.0
-                    try:
-                        prob_lr_fight = lr_model.predict_proba(np.array([[v1, v2, v3]]))[0, 1]
-                        overall_wr = st.session_state.overall_wr
-                        recent_wr = st.session_state.recent_wr
-                        recent_count = st.session_state.recent_count
-                        if recent_count > 0:
-                            shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
-                        else:
-                            shrunk_recent = overall_wr
-                        shrunk_lr_fight = (prior_weight * (shrunk_recent / 100) + prob_lr_fight) / (prior_weight + 1)
-                        st.write(f"**LR win probability:** {prob_lr_fight:.1%}  |  **shrunken:** {shrunk_lr_fight:.1%}")
-                    except Exception as e:
-                        st.error(f"Prediction error: {e}")
+                    lr_feats = st.session_state.lr_feature_names
+                    if len(lr_feats) == 3:
+                        v1 = f1_row[lr_feats[0]] if lr_feats[0] in f1_row else 0.0
+                        v2 = f1_row[lr_feats[1]] if lr_feats[1] in f1_row else 0.0
+                        v3 = f1_row[lr_feats[2]] if lr_feats[2] in f1_row else 0.0
+                        try:
+                            prob_lr_fight = lr_model.predict_proba(np.array([[v1, v2, v3]]))[0, 1]
+                            overall_wr = st.session_state.overall_wr
+                            recent_wr = st.session_state.recent_wr
+                            recent_count = st.session_state.recent_count
+                            if recent_count > 0:
+                                shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
+                            else:
+                                shrunk_recent = overall_wr
+                            shrunk_lr_fight = (prior_weight * (shrunk_recent / 100) + prob_lr_fight) / (prior_weight + 1)
+                            st.write(f"**LR win probability:** {prob_lr_fight:.1%}  |  **shrunken:** {shrunk_lr_fight:.1%}")
+                        except Exception as e:
+                            st.error(f"Prediction error: {e}")
             else:
                 st.info("No training data available for LR metrics.")
         else:
@@ -698,7 +681,7 @@ else:
     st.warning("Not enough numerical features for a 3D LR plot (need at least 3).")
 
 # =========================================================================
-# 3D KNN SCATTER & COMBO BUILDER
+# 3D KNN SCATTER & COMBO BUILDER (with feature name consistency)
 # =========================================================================
 st.header("3D Weighted KNN Win/Loss Prediction (Platt‑scaled) & Best KNN Combinations")
 
@@ -761,31 +744,35 @@ if len(three_d_features) >= 3:
                 if st.session_state.selected_fight_row is not None:
                     f1_row = st.session_state.selected_fight_row
                     st.subheader(f"Predicted KNN Win Probability for {f1_row['Fighter']} (using current features)")
-                    means_knn = X_knn.mean(axis=0)
-                    vals_knn = []
-                    for col_name in [x_knn, y_knn, z_knn]:
-                        raw = f1_row[col_name] if col_name in f1_row else np.nan
+                    knn_feats = st.session_state.get('knn_feature_names', [])
+                    if len(knn_feats) == 3:
+                        means_knn = X_knn.mean(axis=0)
+                        vals_knn = []
+                        for i, col_name in enumerate(knn_feats):
+                            raw = f1_row[col_name] if col_name in f1_row else np.nan
+                            try:
+                                v = float(raw) if pd.notna(raw) else means_knn[i]
+                            except:
+                                v = means_knn[i]
+                            vals_knn.append(v)
                         try:
-                            v = float(raw) if pd.notna(raw) else means_knn[len(vals_knn)]
-                        except:
-                            v = means_knn[len(vals_knn)]
-                        vals_knn.append(v)
-                    try:
-                        up_arr = np.array([vals_knn], dtype=np.float64)
-                        up_scaled = scaler.transform(up_arr)
-                        prob_knn_fight = calibrated_knn.predict_proba(up_scaled)[0, 1]
-                        prob_knn_fight = np.clip(prob_knn_fight, 0.1, 0.9)
-                        overall_wr = st.session_state.overall_wr
-                        recent_wr = st.session_state.recent_wr
-                        recent_count = st.session_state.recent_count
-                        if recent_count > 0:
-                            shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
-                        else:
-                            shrunk_recent = overall_wr
-                        shrunk_knn_fight = (prior_weight * (shrunk_recent / 100) + prob_knn_fight) / (prior_weight + 1)
-                        st.write(f"**KNN win probability:** {prob_knn_fight:.1%}  |  **shrunken:** {shrunk_knn_fight:.1%}")
-                    except Exception as e:
-                        st.error(f"Prediction error: {e}")
+                            up_arr = np.array([vals_knn], dtype=np.float64)
+                            up_scaled = scaler.transform(up_arr)
+                            prob_knn_fight = calibrated_knn.predict_proba(up_scaled)[0, 1]
+                            prob_knn_fight = np.clip(prob_knn_fight, 0.1, 0.9)
+                            overall_wr = st.session_state.overall_wr
+                            recent_wr = st.session_state.recent_wr
+                            recent_count = st.session_state.recent_count
+                            if recent_count > 0:
+                                shrunk_recent = (prior_weight * overall_wr + recent_count * recent_wr) / (prior_weight + recent_count)
+                            else:
+                                shrunk_recent = overall_wr
+                            shrunk_knn_fight = (prior_weight * (shrunk_recent / 100) + prob_knn_fight) / (prior_weight + 1)
+                            st.write(f"**KNN win probability:** {prob_knn_fight:.1%}  |  **shrunken:** {shrunk_knn_fight:.1%}")
+                        except Exception as e:
+                            st.error(f"Prediction error: {e}")
+                    else:
+                        st.info("KNN features not set correctly.")
             else:
                 st.info("No training data available for KNN metrics.")
         else:
@@ -869,12 +856,13 @@ else:
 # =========================================================================
 st.header("Last 20 Fights")
 last20 = data.sort_values('FightDate', ascending=False).head(20)
+# Show a subset of columns
 display_cols = ['FightDate','Fighter','Opponent','Win?','Method']
-# Add some columns if they exist
-for col in ['Age','AgeDiff','HeightDiff','ReachDiff','CareerWinPct_diff','Prev7WinPct','ColleyDecayDiff','MasseyDecayDiff','WeightedMasseyDecayDiff']:
+# Add key new features if they exist
+for col in ['AgeDiff','HeightDiff','ReachDiff','CareerWinPct_diff','Prev7WinPct','ColleyDecayDiff','MasseyDecayDiff','WeightedMasseyDecayDiff']:
     if col in last20.columns:
         display_cols.append(col)
-# Add some adjperf diffs
+# Add adjperf diffs
 for ks in ['adjperf_KD', 'adjperf_SS', 'adjperf_TD']:
     if f'{ks}_diff' in last20.columns:
         display_cols.append(f'{ks}_diff')
@@ -909,7 +897,7 @@ else:
         st.warning("No numerical features available after filtering.")
 
 # =========================================================================
-# SPIDER CHART (with column checks)
+# SPIDER CHART (using available features)
 # =========================================================================
 st.header("Fight Similarity & Comparison (Independent Filters)")
 st.subheader("Spider Chart Filters (fighter data only)")
@@ -927,30 +915,6 @@ with col_sp2:
     spider_new_wc = st.checkbox("New Weight Class", key="spider_new_wc") if 'IsNewWeightClass' in original_data.columns else False
     spider_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
 
-# We need Prev1_Title for spider – if it doesn't exist, skip that filter
-# We'll also skip outcome filters if columns missing
-spider_prev1_col = 'Prev1_Outcome_raw'
-spider_prev2_col = 'Prev2_Outcome_raw'
-spider_prev3_col = 'Prev3_Outcome_raw'
-spider_career1_col = 'Career1_Outcome_raw'
-spider_career2_col = 'Career2_Outcome_raw'
-spider_career3_col = 'Career3_Outcome_raw'
-
-# Only show outcome filters if columns exist
-if all(c in original_data.columns for c in [spider_prev1_col, spider_prev2_col, spider_prev3_col,
-                                            spider_career1_col, spider_career2_col, spider_career3_col]):
-    all_outcomes_raw_spider = sorted(original_data[spider_prev1_col].dropna().unique())
-    all_outcomes_career_spider = sorted(original_data[spider_career1_col].dropna().unique())
-    with st.expander("Previous Outcomes (Spider)"):
-        spider_prev1 = st.multiselect("Prev Fight 1", all_outcomes_raw_spider, key="spider_prev1")
-        spider_prev2 = st.multiselect("Prev Fight 2", all_outcomes_raw_spider, key="spider_prev2")
-        spider_prev3 = st.multiselect("Prev Fight 3", all_outcomes_raw_spider, key="spider_prev3")
-        spider_career1 = st.multiselect("Career F1", all_outcomes_career_spider, key="spider_career1")
-        spider_career2 = st.multiselect("Career F2", all_outcomes_career_spider, key="spider_career2")
-        spider_career3 = st.multiselect("Career F3", all_outcomes_career_spider, key="spider_career3")
-else:
-    spider_prev1 = spider_prev2 = spider_prev3 = spider_career1 = spider_career2 = spider_career3 = []
-
 # Start with original_data
 spider_data = original_data.copy()
 mask = pd.Series(True, index=spider_data.index)
@@ -964,13 +928,7 @@ if spider_hometown != "All" and 'HometownFighter' in spider_data.columns: mask &
 if spider_event_country and 'EventCountry' in spider_data.columns: mask &= spider_data['EventCountry'].isin(spider_event_country)
 if spider_new_wc and 'IsNewWeightClass' in spider_data.columns: mask &= spider_data['IsNewWeightClass'] == True
 
-if spider_prev1 and spider_prev1_col in spider_data.columns: mask &= spider_data[spider_prev1_col].isin(spider_prev1)
-if spider_prev2 and spider_prev2_col in spider_data.columns: mask &= spider_data[spider_prev2_col].isin(spider_prev2)
-if spider_prev3 and spider_prev3_col in spider_data.columns: mask &= spider_data[spider_prev3_col].isin(spider_prev3)
-if spider_career1 and spider_career1_col in spider_data.columns: mask &= spider_data[spider_career1_col].isin(spider_career1)
-if spider_career2 and spider_career2_col in spider_data.columns: mask &= spider_data[spider_career2_col].isin(spider_career2)
-if spider_career3 and spider_career3_col in spider_data.columns: mask &= spider_data[spider_career3_col].isin(spider_career3)
-
+# Title filter at fight level
 if 'Prev1_Title' in spider_data.columns:
     spider_data['Prev1_Title_clean'] = normalize_title_col(spider_data['Prev1_Title'])
     if spider_prev_title != "All":
@@ -994,8 +952,9 @@ else:
     if spider_upcoming.empty:
         st.warning("No upcoming fight has both fighters after spider filters.")
     else:
-        # Use only the new features for similarity (those that exist)
+        # Use available features for similarity (exclude IDs and non-numeric)
         sim_features = [c for c in new_features if c in spider_data.columns and c not in ['FightNumber', 'FightNumber_diff']]
+        sim_features = [c for c in sim_features if c not in ['Win?', 'Method', 'Round', 'Title']]
         if not sim_features:
             st.warning("No numeric features for similarity.")
         else:
