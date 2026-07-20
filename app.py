@@ -20,13 +20,13 @@ from scipy.spatial.distance import cdist
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
 # ============================================================
-# 🔑 GOOGLE DRIVE FILE IDS – replace with your actual IDs
+# 🔑 YOUR GOOGLE DRIVE FILE IDS – REPLACE THE LAST ONE WITH YOURS
 # ============================================================
 MAIN_FILE_ID            = "1eWDGGS8qQdLWvS_dgJ-HqObsr4ie9RcD"
 UPCOMING_FILE_ID        = "1mUyNR2WLHQjC8IuvG7RA6LoXPjJq3aZ1"
-ALL_RATINGS_FILE_ID     = "1lS5Af0gIxMyiK8p-QQYXqA5_sdcVxUab"   # ← paste your all_ratings.csv ID
+ALL_RATINGS_FILE_ID     = "1lS5Af0gIxMyiK8p-QQYXqA5_sdcVxUab"   # ← replace me
 
-# ---------- Cached data loader ----------
+# ---------- Cached data loader (full) ----------
 @st.cache_data
 def load_full_data():
     gdown.download(f"https://drive.google.com/uc?id={MAIN_FILE_ID}", "ufc_all_data.csv", quiet=True)
@@ -62,7 +62,7 @@ def load_full_data():
                 df_up = df_up[df.columns]
                 df = pd.concat([df, df_up], ignore_index=True)
 
-    # ---------- Preprocessing ----------
+    # Preprocessing
     df['FightDate'] = pd.to_datetime(df['FightID'].str[:10])
     for col in ['FighterOddsBFO', 'OpponentOddsBFO']:
         if col not in df.columns:
@@ -93,7 +93,7 @@ def load_full_data():
     fight_totals.sort_values(['Fighter','FightDate'], inplace=True)
     fight_totals['FightNumber'] = fight_totals.groupby('Fighter').cumcount() + 1
 
-    # DaysSincePrev, Avg3DaysGap (vectorised)
+    # DaysSincePrev, Avg3DaysGap
     fight_totals['DaysSincePrev'] = fight_totals.groupby('Fighter')['FightDate'].diff().dt.days
     fight_totals['Avg3DaysGap'] = (
         fight_totals.groupby('Fighter')['DaysSincePrev']
@@ -101,18 +101,17 @@ def load_full_data():
         .reset_index(level=0, drop=True)
     )
 
-    # Opponent FightNumber & Hometown
+    # Opponent info
     opp_info = fight_totals[['FightID','Fighter','FightNumber','HometownFighter']].rename(
         columns={'Fighter':'Opponent', 'FightNumber':'Opponent_FightNumber', 'HometownFighter':'Opponent_Hometown'}
     )
     fight_totals = fight_totals.merge(opp_info, on=['FightID','Opponent'], how='left')
 
-    # ---------- DEFENSIVE STATS ----------
+    # Defensive stats
     opp_fight_stats = fight_totals[['FightID','Fighter','SS','SSA','TS','TSA','TD','TDA',
                                     'Subs','Reversals','KD','DSL','DSA','CSL','CSA','GSL','GSA','Ctrl']].copy()
     opp_fight_stats.rename(columns={'Fighter':'Opponent'}, inplace=True)
-    for col in ['SS','SSA','TS','TSA','TD','TDA','Subs','Reversals','KD','DSL','DSA',
-                'CSL','CSA','GSL','GSA','Ctrl']:
+    for col in ['SS','SSA','TS','TSA','TD','TDA','Subs','Reversals','KD','DSL','DSA','CSL','CSA','GSL','GSA','Ctrl']:
         opp_fight_stats.rename(columns={col: f'Def_{col}'}, inplace=True)
     fight_totals = fight_totals.merge(opp_fight_stats, on=['FightID','Opponent'], how='left')
 
@@ -126,11 +125,10 @@ def load_full_data():
             try: return int(s.replace('+',''))
             except: return np.nan
         return np.nan
-
     fight_totals['FighterOddsNum'] = fight_totals['FighterOddsBFO'].apply(parse_american_odds)
     fight_totals['OpponentOddsNum'] = fight_totals['OpponentOddsBFO'].apply(parse_american_odds)
 
-    # Physical differences
+    # Physical diffs
     pairs = fight_totals.merge(
         fight_totals[['FightID','Fighter','Age','Height','Reach']],
         left_on=['FightID','Opponent'], right_on=['FightID','Fighter'],
@@ -142,18 +140,14 @@ def load_full_data():
     pairs['ReachDiff'] = pairs['Reach'] - pairs['Reach_opp']
     fight_totals = pairs.copy()
 
-    # ---------- Career averages (fast cumsum) ----------
+    # Career averages
     career_stat_cols = ['SS','SSA','TS','TSA','TD','TDA','Subs','Reversals','KD','DSL','DSA']
-    if 'Ctrl' in fight_totals.columns:
-        career_stat_cols.append('Ctrl')
-
+    if 'Ctrl' in fight_totals.columns: career_stat_cols.append('Ctrl')
     for col in career_stat_cols:
         if col in fight_totals.columns:
             fight_totals[f'cum_{col}'] = fight_totals.groupby('Fighter')[col].cumsum()
             fight_totals[f'prev_cum_{col}'] = fight_totals.groupby('Fighter')[f'cum_{col}'].shift(1).fillna(0)
-
     fight_totals['prev_fights_count'] = fight_totals.groupby('Fighter').cumcount()
-
     for col in career_stat_cols:
         if col in fight_totals.columns:
             fight_totals[f'CareerAvg_{col}'] = (
@@ -167,20 +161,18 @@ def load_full_data():
     fight_totals['prev_wins'] = fight_totals.groupby('Fighter')['cum_wins'].shift(1).fillna(0)
     fight_totals['CareerWinPct'] = (fight_totals['prev_wins'] / fight_totals['prev_fights_count'].replace(0, np.nan)) * 100
 
-    # Forward‑fill career stats
     avg_cols = [f'CareerAvg_{c}' for c in career_stat_cols] + ['CareerWinPct']
     fight_totals[avg_cols] = fight_totals.groupby('Fighter')[avg_cols].ffill().bfill()
 
-    # ---------- DERIVED CAREER RATIOS ----------
+    # Derived ratios
     fight_totals['CareerAvg_TS_Acc'] = (fight_totals['CareerAvg_TS'] / fight_totals['CareerAvg_TSA'].replace(0, np.nan)) * 100
     fight_totals['CareerAvg_TD_Acc'] = (fight_totals['CareerAvg_TD'] / fight_totals['CareerAvg_TDA'].replace(0, np.nan)) * 100
     fight_totals['CareerAvg_DS_Acc'] = (fight_totals['CareerAvg_DSL'] / fight_totals['CareerAvg_DSA'].replace(0, np.nan)) * 100
     fight_totals['CareerAvg_DSL_per_KD'] = fight_totals['CareerAvg_DSL'] / fight_totals['CareerAvg_KD'].replace(0, np.nan)
     fight_totals['CareerAvg_Ctrl_per_TD'] = fight_totals['CareerAvg_Ctrl'] / fight_totals['CareerAvg_TD'].replace(0, np.nan) if 'CareerAvg_Ctrl' in fight_totals.columns else np.nan
 
-    # ---------- Defensive career averages (fast) ----------
-    def_cols = ['Def_SS','Def_SSA','Def_TS','Def_TSA','Def_TD','Def_TDA',
-                'Def_Subs','Def_Reversals','Def_KD','Def_DSL','Def_DSA','Def_Ctrl']
+    # Defensive career averages
+    def_cols = ['Def_SS','Def_SSA','Def_TS','Def_TSA','Def_TD','Def_TDA','Def_Subs','Def_Reversals','Def_KD','Def_DSL','Def_DSA','Def_Ctrl']
     for col in [c for c in def_cols if c in fight_totals.columns]:
         fight_totals[f'cum_{col}'] = fight_totals.groupby('Fighter')[col].cumsum()
         fight_totals[f'prev_cum_{col}'] = fight_totals.groupby('Fighter')[f'cum_{col}'].shift(1).fillna(0)
@@ -189,7 +181,6 @@ def load_full_data():
         )
         fight_totals[f'CareerAvg_{col}'] = fight_totals.groupby('Fighter')[f'CareerAvg_{col}'].ffill().bfill()
 
-    # Defensive ratios
     if 'CareerAvg_Def_TS' in fight_totals.columns:
         fight_totals['CareerAvg_Def_TS_Acc'] = (fight_totals['CareerAvg_Def_TS'] / fight_totals['CareerAvg_Def_TSA'].replace(0, np.nan)) * 100
         fight_totals['CareerAvg_Def_TD_Acc'] = (fight_totals['CareerAvg_Def_TD'] / fight_totals['CareerAvg_Def_TDA'].replace(0, np.nan)) * 100
@@ -197,12 +188,11 @@ def load_full_data():
         fight_totals['CareerAvg_Def_DSL_per_KD'] = fight_totals['CareerAvg_Def_DSL'] / fight_totals['CareerAvg_Def_KD'].replace(0, np.nan)
         fight_totals['CareerAvg_Def_Ctrl_per_TD'] = fight_totals['CareerAvg_Def_Ctrl'] / fight_totals['CareerAvg_Def_TD'].replace(0, np.nan)
 
-    # ---------- Opponent career averages (merge) ----------
+    # Opponent career averages
     opp_career = fight_totals[['FightID','Fighter'] + avg_cols].copy()
     opp_career.rename(columns={'Fighter':'Opponent', **{c: f'Opponent_{c}' for c in avg_cols}}, inplace=True)
     fight_totals = fight_totals.merge(opp_career, on=['FightID','Opponent'], how='left')
 
-    # Opponent defensive ratios
     if 'Opponent_CareerAvg_Def_TS' in fight_totals.columns:
         fight_totals['Opponent_CareerAvg_Def_TS_Acc'] = (fight_totals['Opponent_CareerAvg_Def_TS'] / fight_totals['Opponent_CareerAvg_Def_TSA'].replace(0, np.nan)) * 100
         fight_totals['Opponent_CareerAvg_Def_TD_Acc'] = (fight_totals['Opponent_CareerAvg_Def_TD'] / fight_totals['Opponent_CareerAvg_Def_TDA'].replace(0, np.nan)) * 100
@@ -212,100 +202,75 @@ def load_full_data():
 
     # Opponent days & gaps
     opp_days = fight_totals[['FightID','Fighter','DaysSincePrev','Avg3DaysGap']].copy()
-    opp_days.rename(columns={'Fighter':'Opponent', 'DaysSincePrev':'Opponent_DaysSincePrev', 'Avg3DaysGap':'Opponent_Avg3DaysGap'}, inplace=True)
+    opp_days.rename(columns={'Fighter':'Opponent','DaysSincePrev':'Opponent_DaysSincePrev','Avg3DaysGap':'Opponent_Avg3DaysGap'}, inplace=True)
     fight_totals = fight_totals.merge(opp_days, on=['FightID','Opponent'], how='left')
 
-    # ---------- FAST PREV7 WINS / LOSSES (rolling sum) ----------
+    # Prev7Wins / Prev7Losses
     fight_totals['is_win'] = (fight_totals['Win?'] == 'Yes').astype(int)
     fight_totals['is_loss'] = (fight_totals['Win?'] == 'No').astype(int)
-
     def rolling_last7(group):
         group = group.sort_values('FightDate')
         group['Prev7Wins'] = group['is_win'].rolling(7, min_periods=0).sum().shift(1).fillna(0).astype(int)
         group['Prev7Losses'] = group['is_loss'].rolling(7, min_periods=0).sum().shift(1).fillna(0).astype(int)
         return group[['Prev7Wins', 'Prev7Losses']]
-
     prev7 = fight_totals.groupby('Fighter', group_keys=False).apply(rolling_last7).reset_index(drop=True)
     fight_totals[['Prev7Wins', 'Prev7Losses']] = prev7
-
     opp_prev7 = fight_totals[['FightID','Fighter','Prev7Wins','Prev7Losses']].rename(
-        columns={'Fighter':'Opponent', 'Prev7Wins':'Opponent_Prev7Wins', 'Prev7Losses':'Opponent_Prev7Losses'}
-    )
+        columns={'Fighter':'Opponent','Prev7Wins':'Opponent_Prev7Wins','Prev7Losses':'Opponent_Prev7Losses'})
     fight_totals = fight_totals.merge(opp_prev7, on=['FightID','Opponent'], how='left')
 
-    # ---------- LOAD ALL RATINGS (time‑aware) ----------
+    # ---------- LOAD ALL RATINGS ----------
+    ratings_loaded = False
     if ALL_RATINGS_FILE_ID.strip() and ALL_RATINGS_FILE_ID != "YOUR_ALL_RATINGS_FILE_ID":
         try:
             gdown.download(f"https://drive.google.com/uc?id={ALL_RATINGS_FILE_ID}", "all_ratings.csv", quiet=True)
             ratings_df = pd.read_csv("all_ratings.csv")
-            # Merge for fighter (pre‑fight / final rating)
             fight_totals = fight_totals.merge(ratings_df, on=['FightID','Fighter'], how='left')
             for col in ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay']:
                 fight_totals.rename(columns={col: f'Fighter{col}'}, inplace=True)
-            # Merge for opponent
             opp_ratings = ratings_df.rename(columns={'Fighter':'Opponent'})
             opp_ratings = opp_ratings.rename(columns={c: f'Opponent{c}' for c in ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay']})
             fight_totals = fight_totals.merge(opp_ratings, on=['FightID','Opponent'], how='left')
-            # Fill missing
             for col in ['FighterColleyOrig','FighterColleyDecay','FighterMasseyOrig','FighterMasseyDecay',
                         'OpponentColleyOrig','OpponentColleyDecay','OpponentMasseyOrig','OpponentMasseyDecay']:
                 if col in fight_totals.columns:
                     median_val = fight_totals[col].median()
-                    if pd.isna(median_val):
-                        median_val = 0.5
+                    if pd.isna(median_val): median_val = 0.5
                     fight_totals[col].fillna(median_val, inplace=True)
-            # Differentials
             for system in ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay']:
-                f_col = f'Fighter{system}'
-                o_col = f'Opponent{system}'
+                f_col, o_col = f'Fighter{system}', f'Opponent{system}'
                 if f_col in fight_totals.columns and o_col in fight_totals.columns:
                     fight_totals[f'{system}_Diff'] = fight_totals[f_col] - fight_totals[o_col]
+            ratings_loaded = True
         except Exception as e:
-            st.sidebar.warning(f"⚠️ Advanced ratings not loaded: {e}")
-            for system in ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay']:
-                fight_totals[f'Fighter{system}'] = 0.5
-                fight_totals[f'Opponent{system}'] = 0.5
-                fight_totals[f'{system}_Diff'] = 0.0
-    else:
+            st.sidebar.warning(f"Ratings not loaded: {e}")
+    if not ratings_loaded:
         for system in ['ColleyOrig','ColleyDecay','MasseyOrig','MasseyDecay']:
             fight_totals[f'Fighter{system}'] = 0.5
             fight_totals[f'Opponent{system}'] = 0.5
             fight_totals[f'{system}_Diff'] = 0.0
 
-    # ---------- DIFFERENTIALS (other stats) ----------
+    # ---------- OTHER DIFFERENTIALS ----------
     diff_pairs = [
-        ('CareerAvg_SS', 'Opponent_CareerAvg_SS'),
-        ('CareerAvg_SSA', 'Opponent_CareerAvg_SSA'),
-        ('CareerAvg_TS', 'Opponent_CareerAvg_TS'),
-        ('CareerAvg_TSA', 'Opponent_CareerAvg_TSA'),
-        ('CareerAvg_TD', 'Opponent_CareerAvg_TD'),
-        ('CareerAvg_TDA', 'Opponent_CareerAvg_TDA'),
-        ('CareerAvg_Subs', 'Opponent_CareerAvg_Subs'),
-        ('CareerAvg_Reversals', 'Opponent_CareerAvg_Reversals'),
-        ('CareerAvg_KD', 'Opponent_CareerAvg_KD'),
-        ('CareerAvg_DSL', 'Opponent_CareerAvg_DSL'),
-        ('CareerAvg_Ctrl', 'Opponent_CareerAvg_Ctrl'),
-        ('CareerWinPct', 'Opponent_CareerWinPct'),
-        ('DaysSincePrev', 'Opponent_DaysSincePrev'),
-        ('Avg3DaysGap', 'Opponent_Avg3DaysGap'),
-        ('CareerAvg_TS_Acc', 'Opponent_CareerAvg_TS_Acc'),
-        ('CareerAvg_TD_Acc', 'Opponent_CareerAvg_TD_Acc'),
-        ('CareerAvg_DS_Acc', 'Opponent_CareerAvg_DS_Acc'),
-        ('CareerAvg_DSL_per_KD', 'Opponent_CareerAvg_DSL_per_KD'),
-        ('CareerAvg_Ctrl_per_TD', 'Opponent_CareerAvg_Ctrl_per_TD'),
-        ('CareerAvg_Def_TS_Acc', 'Opponent_CareerAvg_Def_TS_Acc'),
-        ('CareerAvg_Def_TD_Acc', 'Opponent_CareerAvg_Def_TD_Acc'),
-        ('CareerAvg_Def_DS_Acc', 'Opponent_CareerAvg_Def_DS_Acc'),
-        ('CareerAvg_Def_DSL_per_KD', 'Opponent_CareerAvg_Def_DSL_per_KD'),
-        ('CareerAvg_Def_Ctrl_per_TD', 'Opponent_CareerAvg_Def_Ctrl_per_TD'),
-        ('Prev7Wins', 'Opponent_Prev7Wins'),
-        ('Prev7Losses', 'Opponent_Prev7Losses'),
+        ('CareerAvg_SS','Opponent_CareerAvg_SS'), ('CareerAvg_SSA','Opponent_CareerAvg_SSA'),
+        ('CareerAvg_TS','Opponent_CareerAvg_TS'), ('CareerAvg_TSA','Opponent_CareerAvg_TSA'),
+        ('CareerAvg_TD','Opponent_CareerAvg_TD'), ('CareerAvg_TDA','Opponent_CareerAvg_TDA'),
+        ('CareerAvg_Subs','Opponent_CareerAvg_Subs'), ('CareerAvg_Reversals','Opponent_CareerAvg_Reversals'),
+        ('CareerAvg_KD','Opponent_CareerAvg_KD'), ('CareerAvg_DSL','Opponent_CareerAvg_DSL'),
+        ('CareerAvg_Ctrl','Opponent_CareerAvg_Ctrl'), ('CareerWinPct','Opponent_CareerWinPct'),
+        ('DaysSincePrev','Opponent_DaysSincePrev'), ('Avg3DaysGap','Opponent_Avg3DaysGap'),
+        ('CareerAvg_TS_Acc','Opponent_CareerAvg_TS_Acc'), ('CareerAvg_TD_Acc','Opponent_CareerAvg_TD_Acc'),
+        ('CareerAvg_DS_Acc','Opponent_CareerAvg_DS_Acc'), ('CareerAvg_DSL_per_KD','Opponent_CareerAvg_DSL_per_KD'),
+        ('CareerAvg_Ctrl_per_TD','Opponent_CareerAvg_Ctrl_per_TD'),
+        ('CareerAvg_Def_TS_Acc','Opponent_CareerAvg_Def_TS_Acc'), ('CareerAvg_Def_TD_Acc','Opponent_CareerAvg_Def_TD_Acc'),
+        ('CareerAvg_Def_DS_Acc','Opponent_CareerAvg_Def_DS_Acc'), ('CareerAvg_Def_DSL_per_KD','Opponent_CareerAvg_Def_DSL_per_KD'),
+        ('CareerAvg_Def_Ctrl_per_TD','Opponent_CareerAvg_Def_Ctrl_per_TD'),
+        ('Prev7Wins','Opponent_Prev7Wins'), ('Prev7Losses','Opponent_Prev7Losses'),
     ]
     for f_col, o_col in diff_pairs:
         if f_col in fight_totals.columns and o_col in fight_totals.columns:
             fight_totals[f'{f_col}_Diff'] = fight_totals[f_col] - fight_totals[o_col]
 
-    # Career SS accuracy
     if 'CareerAvg_SS' in fight_totals.columns and 'CareerAvg_SSA' in fight_totals.columns:
         fight_totals['CareerAvg_SS_Acc'] = (
             (fight_totals['CareerAvg_SS'] / fight_totals['CareerAvg_SSA'].replace(0, np.nan)) * 100
@@ -313,22 +278,21 @@ def load_full_data():
 
     fight_totals['prev_fights_count'] = fight_totals['FightNumber'] - 1
 
-    # Previous fight stats (shifts)
+    # Previous fight shifts (outcomes)
     for shift in [1,2,3]:
         for col in ['Win?','Method','Round','WC','Title'] + agg_cols + ['AgeDiff','HeightDiff','ReachDiff']:
             fight_totals[f'Prev{shift}_{col}'] = fight_totals.groupby('Fighter')[col].shift(shift)
         fight_totals.rename(columns={f'Prev{shift}_Win?': f'Prev{shift}_Win'}, inplace=True)
 
-    # Outcome classification helpers (unchanged)
+    # Outcome classification
     def extract_round_from_method(method_str):
         if not isinstance(method_str, str): return None
         m = re.search(r'[Rr]ound\s*(\d)', method_str)
         if m: return int(m.group(1))
         numbers = re.findall(r'\d+', method_str)
-        if numbers:
-            for n in reversed(numbers):
-                n_int = int(n)
-                if 1 <= n_int <= 5: return n_int
+        for n in reversed(numbers):
+            n_int = int(n)
+            if 1 <= n_int <= 5: return n_int
         return None
 
     def classify_method_detailed(method_str, win, end_round=None):
@@ -452,8 +416,6 @@ def load_full_data():
 # Load all data
 all_fights = load_full_data()
 all_fights_display = all_fights[all_fights['FightDate'] >= '2015-01-01'].copy()
-
-# Clean categorical columns
 for col in ['EventCountry', 'Country', 'Stance', 'WC', 'Title', 'ScheduledRounds']:
     if col in all_fights_display.columns:
         all_fights_display[col] = all_fights_display[col].fillna('').astype(str)
@@ -726,7 +688,7 @@ if not upcoming_data_unfiltered.empty:
                 pw = int(row['Prev7Wins']) if pd.notna(row['Prev7Wins']) else 0
                 pl = int(row['Prev7Losses']) if pd.notna(row['Prev7Losses']) else 0
                 st.write(f"**Career Win %:** {row['CareerWinPct']:.1f}% | **Prev 7 Record:** {pw}‑{pl}")
-                st.write(f"**Ratings:** ColleyOrig {row['FighterColleyOrig']:.4f} / ColleyDecay {row['FighterColleyDecay']:.4f} / MasseyOrig {row['FighterMasseyOrig']:.4f} / MasseyDecay {row['FighterMasseyDecay']:.4f}")
+                st.write(f"**Ratings:** CO {row['FighterColleyOrig']:.4f} / CD {row['FighterColleyDecay']:.4f} / MO {row['FighterMasseyOrig']:.4f} / MD {row['FighterMasseyDecay']:.4f}")
                 st.write(f"**Odds (Fighter/Opp):** {row['FighterOddsBFO']} / {row['OpponentOddsBFO']}")
 
                 st.write("**Career Averages (offence):**")
@@ -756,22 +718,22 @@ if not upcoming_data_unfiltered.empty:
 
                 st.write("**Current Bout Differences:**")
                 diff_items = []
-                for diff_col, unit in [('AgeDiff','yrs'),('HeightDiff','in'),('ReachDiff','in')]:
-                    if diff_col in row:
-                        diff_items.append(f"{diff_col}: {row[diff_col]:+.1f} {unit}" if pd.notna(row[diff_col]) else f"{diff_col}: --")
+                for diff_col2, unit in [('AgeDiff','yrs'),('HeightDiff','in'),('ReachDiff','in')]:
+                    if diff_col2 in row:
+                        diff_items.append(f"{diff_col2}: {row[diff_col2]:+.1f} {unit}" if pd.notna(row[diff_col2]) else f"{diff_col2}: --")
                 st.write(" · ".join(diff_items) if diff_items else "N/A")
 
                 st.write("**Previous Outcomes (Fighter):**")
                 prev_outs = []
-                for shift, col in [(1, prev1_col), (2, prev2_col), (3, prev3_col)]:
-                    val = row[col] if pd.notna(row[col]) else '--'
+                for shift, col2 in [(1, prev1_col), (2, prev2_col), (3, prev3_col)]:
+                    val = row[col2] if pd.notna(row[col2]) else '--'
                     prev_outs.append(f"Prev {shift}: {val}")
                 st.write(" · ".join(prev_outs))
 
                 st.write("**Career Milestones (Fighter):**")
                 career_outs = []
-                for shift, col in [(1, career1_col), (2, career2_col), (3, career3_col)]:
-                    val = row[col] if pd.notna(row[col]) else '--'
+                for shift, col2 in [(1, career1_col), (2, career2_col), (3, career3_col)]:
+                    val = row[col2] if pd.notna(row[col2]) else '--'
                     career_outs.append(f"F{shift}: {val}")
                 st.write(" · ".join(career_outs))
 
@@ -788,8 +750,8 @@ if not upcoming_data_unfiltered.empty:
                 st.write("**Opponent Career Milestones:**")
                 opp_career_outs = []
                 for shift in [1,2,3]:
-                    col = f'Opponent_Career{shift}_Outcome_skipNC' if skip_nc else f'Opponent_Career{shift}_Outcome_raw'
-                    val = row[col] if col in row and pd.notna(row[col]) else '--'
+                    col2 = f'Opponent_Career{shift}_Outcome_skipNC' if skip_nc else f'Opponent_Career{shift}_Outcome_raw'
+                    val = row[col2] if col2 in row and pd.notna(row[col2]) else '--'
                     opp_career_outs.append(f"F{shift}: {val}")
                 st.write(" · ".join(opp_career_outs) if opp_career_outs else "N/A")
 
@@ -827,7 +789,6 @@ core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
         'FightNumber', 'Opponent_FightNumber', 'FighterOddsNum', 'PrevFighterOddsNum',
         'CareerWinPct', 'Opponent_CareerWinPct',
         'Prev7Wins', 'Opponent_Prev7Wins', 'Prev7Losses', 'Opponent_Prev7Losses',
-        # New ratings
         'FighterColleyOrig', 'OpponentColleyOrig', 'ColleyOrig_Diff',
         'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecay_Diff',
         'FighterMasseyOrig', 'OpponentMasseyOrig', 'MasseyOrig_Diff',
@@ -944,11 +905,11 @@ if len(three_d_features) >= 3:
                 st.metric(f"Recent Win% (last {recent_window})", f"{recent_wr:.1f}%")
 
             train_means = {}
-            for col in (x_lr, y_lr, z_lr):
-                if col in hist_base.columns:
-                    train_means[col] = hist_base[col].mean()
+            for col2 in (x_lr, y_lr, z_lr):
+                if col2 in hist_base.columns:
+                    train_means[col2] = hist_base[col2].mean()
                 else:
-                    train_means[col] = 0
+                    train_means[col2] = 0
 
             st.subheader("LR Win Probability Estimate")
             all_upcoming = all_fights_display[
@@ -962,12 +923,12 @@ if len(three_d_features) >= 3:
                     if len(up_rows) == 2:
                         fighter_row = up_rows.iloc[0]
 
-                        def safe_val(col):
+                        def safe_val(col2):
                             try:
-                                val = fighter_row[col]
-                                return val if pd.notna(val) else train_means[col]
+                                val = fighter_row[col2]
+                                return val if pd.notna(val) else train_means[col2]
                             except (KeyError, ValueError):
-                                return train_means[col]
+                                return train_means[col2]
 
                         v1 = safe_val(x_lr)
                         v2 = safe_val(y_lr)
@@ -1372,7 +1333,7 @@ else:
             'FightNumber', 'Opponent_FightNumber',
             'FighterOddsNum', 'PrevFighterOddsNum',
             'CareerWinPct', 'Prev7Wins', 'Prev7Losses', 'Opponent_Prev7Wins', 'Opponent_Prev7Losses',
-            'FighterColley', 'OpponentColley', 'Colley', 'FighterMassey', 'OpponentMassey', 'Massey',
+            'FighterColley', 'OpponentColley', 'FighterMassey', 'OpponentMassey',
             'CareerAvg_', 'Opponent_CareerAvg_',
             '_Diff'
         ]
