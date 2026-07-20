@@ -1,5 +1,4 @@
 import streamlit as st
-import pandas as pdimport streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -247,7 +246,7 @@ for sys, (enabled, gap_range) in gap_filters.items():
             gap_min, gap_max = gap_range
             filtered = filtered[(filtered[diff_col] >= gap_min) & (filtered[diff_col] <= gap_max)]
 
-data = filtered  # This is the filtered dataset used for display and training
+data = filtered  # This is the filtered dataset
 
 # =========================================================================
 # COMMON DEFINITIONS
@@ -521,9 +520,11 @@ def train_models_on_filtered():
 train_models_on_filtered()
 
 # =========================================================================
-# UPCOMING FIGHT MATCHUP (with status messages)
+# UPCOMING FIGHT MATCHUP
 # =========================================================================
 st.header("Upcoming Fight Matchup")
+
+# Show training status
 if st.session_state.lr_train_status and "error" not in st.session_state.lr_train_status.lower():
     st.success(f"LR: {st.session_state.lr_train_status}")
 else:
@@ -534,6 +535,8 @@ else:
     st.error(f"KNN: {st.session_state.knn_train_status}")
 
 upcoming_data = data[data['Win?'].isna() | (data['Win?'] == '')]
+st.write(f"**Number of upcoming fights after filters:** {len(upcoming_data)}")
+
 if not upcoming_data.empty:
     upcoming_fight_ids = sorted(upcoming_data['FightID'].unique())
     selected_fight = st.selectbox("Choose an upcoming fight", upcoming_fight_ids)
@@ -697,7 +700,12 @@ if not upcoming_data.empty:
             else:
                 st.info("KNN model not trained. Check status above.")
 else:
-    st.write("No upcoming fights in the dataset.")
+    st.write("No upcoming fights match the current filters.")
+
+# =========================================================================
+# The rest of the script (3D plots, last fights, feature importance, spider) stays exactly as before
+# =========================================================================
+# ... (append the remaining sections from your original script, they are unchanged)
 
 # =========================================================================
 # 3D LR SCATTER & COMBO BUILDER (unchanged)
