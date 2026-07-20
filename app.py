@@ -849,24 +849,46 @@ else:
 # FEATURE IMPORTANCE CHARTS (Numerical & Categorical)
 # =========================================================================
 st.header("Top 20 Feature Importance (Current Filter Set)")
+
+# Only historical fights from the already filtered data
 hist_imp = data[data['Win?'].isin(['Yes', 'No'])].copy()
 if len(hist_imp) < 10:
     st.warning("Too few historical fights after filtering to compute importance.")
 else:
     hist_imp['Target'] = (hist_imp['Win?'] == 'Yes').astype(int)
 
-    # Numerical – use the same features as the 3D scatterplot (three_d_features)
-    num_features = [c for c in three_d_features if c in hist_imp.columns]
-    if num_features:
-        X_num = hist_imp[num_features].dropna()
+    # --- Numerical feature importance ---
+    # Build the list of eligible numerical features directly from the current filtered data,
+    # using the same rules as `numerical_features` but without relying on a stale variable.
+    core = ['Age', 'Height', 'Reach', 'Age_opp', 'Height_opp', 'Reach_opp',
+            'AgeDiff', 'HeightDiff', 'ReachDiff', 'DaysSincePrev', 'Avg3DaysGap',
+            'FightNumber', 'Opponent_FightNumber', 'FighterOddsNum', 'PrevFighterOddsNum',
+            'CareerWinPct', 'Opponent_CareerWinPct',
+            'Prev7Wins', 'Opponent_Prev7Wins', 'Prev7Losses', 'Opponent_Prev7Losses',
+            'FighterColleyOrig', 'OpponentColleyOrig', 'ColleyOrig_Diff',
+            'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecay_Diff',
+            'FighterMasseyOrig', 'OpponentMasseyOrig', 'MasseyOrig_Diff',
+            'FighterMasseyDecay', 'OpponentMasseyDecay', 'MasseyDecay_Diff',
+            'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecay_Diff']
+    career_avg_cols = [c for c in data.columns if c.startswith('CareerAvg_') and not c.startswith('Opponent_CareerAvg_')]
+    opp_career_avg_cols = [c for c in data.columns if c.startswith('Opponent_CareerAvg_')]
+    diff_cols = [c for c in data.columns if c.endswith('_Diff')]
+
+    eligible = list(dict.fromkeys(
+        c for c in core + career_avg_cols + opp_career_avg_cols + diff_cols
+        if c in data.columns and not re.match(r'Prev\d+_', c) and not c.startswith('Opponent_Prev')
+        and data[c].nunique(dropna=True) >= 2
+    ))
+
+    if eligible:
+        X_num = hist_imp[eligible].dropna()
         if len(X_num) > 10 and X_num.shape[1] > 0:
             imputer = SimpleImputer(strategy='median')
             X_imp = imputer.fit_transform(X_num)
             y_num = hist_imp.loc[X_num.index, 'Target']
-            # Fix random_state for reproducibility
             mi = mutual_info_classif(X_imp, y_num, discrete_features=False, random_state=42)
             mi_df_num = pd.DataFrame({
-                'Feature': num_features,
+                'Feature': eligible,
                 'Mutual Information': mi
             }).sort_values('Mutual Information', ascending=False).head(20)
             fig_num = px.bar(mi_df_num, x='Mutual Information', y='Feature', orientation='h',
@@ -877,9 +899,10 @@ else:
     else:
         st.warning("No numerical features available after filtering.")
 
-    # Categorical (separate)
+    # --- Categorical feature importance (separate) ---
     st.subheader("Categorical Feature Importance with Win/Loss")
-    potential_cat_cols = ['WC','Stance','Country','EventCountry','Title','ScheduledRounds','HometownFighter','Opponent_Hometown']
+    potential_cat_cols = ['WC','Stance','Country','EventCountry','Title',
+                          'ScheduledRounds','HometownFighter','Opponent_Hometown']
     categorical_cols = [c for c in potential_cat_cols if c in hist_imp.columns and hist_imp[c].nunique(dropna=True) > 1]
     if categorical_cols:
         scores = {}
@@ -890,7 +913,10 @@ else:
             codes, _ = pd.factorize(sub[col])
             scores[col] = mutual_info_score(codes, sub['Target'])
         if scores:
-            cat_mi_df = pd.DataFrame({'Feature': list(scores.keys()), 'Mutual Information': list(scores.values())}).sort_values('Mutual Information', ascending=False).head(20)
+            cat_mi_df = pd.DataFrame({
+                'Feature': list(scores.keys()),
+                'Mutual Information': list(scores.values())
+            }).sort_values('Mutual Information', ascending=False).head(20)
             fig_cat = px.bar(cat_mi_df, x='Mutual Information', y='Feature', orientation='h',
                              title="Top Categorical Features by Mutual Information with Win/Loss",
                              color_discrete_sequence=['#636efa'])
