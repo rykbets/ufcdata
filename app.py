@@ -2,11 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
 import re
 import itertools
 import gdown
-import hashlib
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.calibration import CalibratedClassifierCV
@@ -342,7 +340,6 @@ def train_models_cached(df, x_lr, y_lr, z_lr, x_knn, y_knn, z_knn, k_knn):
         'X_train': None, 'y_train_knn': None,
         'y_train_lr': None, 'X_train_lr': None
     }
-
     # LR
     if x_lr and y_lr and z_lr and all(c in df.columns for c in [x_lr, y_lr, z_lr]):
         hist = df[df['Win?'].isin(['Yes','No'])].copy()
@@ -362,7 +359,6 @@ def train_models_cached(df, x_lr, y_lr, z_lr, x_knn, y_knn, z_knn, k_knn):
                 result['lr_train_status'] = f"LR error: {e}"
         else:
             result['lr_train_status'] = "LR needs ≥10 rows with both Win/Loss."
-
     # KNN
     if x_knn and y_knn and z_knn and all(c in df.columns for c in [x_knn, y_knn, z_knn]):
         hist = df[df['Win?'].isin(['Yes','No'])].copy()
@@ -387,24 +383,19 @@ def train_models_cached(df, x_lr, y_lr, z_lr, x_knn, y_knn, z_knn, k_knn):
                 result['knn_train_status'] = f"KNN error: {e}"
         else:
             result['knn_train_status'] = "KNN needs ≥10 rows with both Win/Loss."
-
     return result
 
-# Get current feature selections
 x_lr = st.session_state.x_lr; y_lr = st.session_state.y_lr; z_lr = st.session_state.z_lr
 x_knn = st.session_state.x_knn; y_knn = st.session_state.y_knn; z_knn = st.session_state.z_knn
 k_knn = st.session_state.knn_model_k
 
-# Train models (cached)
 train_result = train_models_cached(filtered, x_lr, y_lr, z_lr, x_knn, y_knn, z_knn, k_knn)
 
-# Update session state
 st.session_state.lr_model = train_result['lr_model']
 st.session_state.lr_train_status = train_result['lr_train_status']
 st.session_state.lr_feature_names = train_result['lr_feature_names']
 st.session_state.y_train_lr = train_result.get('y_train_lr')
 st.session_state.X_train_lr = train_result.get('X_train_lr')
-
 st.session_state.calibrated_knn = train_result['calibrated_knn']
 st.session_state.scaler = train_result['scaler']
 st.session_state.knn_train_status = train_result['knn_train_status']
@@ -412,7 +403,7 @@ st.session_state.knn_feature_names = train_result['knn_feature_names']
 st.session_state.X_train = train_result['X_train']
 st.session_state.y_train_knn = train_result['y_train_knn']
 
-# Compute overall/recent win rates
+# Win rates
 hist_for_wr = filtered[filtered['Win?'].isin(['Yes','No'])].copy()
 if len(hist_for_wr) > 0:
     st.session_state.overall_wr = (hist_for_wr['Win?'] == 'Yes').mean() * 100
@@ -444,7 +435,6 @@ if lr_status and "error" not in lr_status.lower():
     st.success(f"✅ LR: {lr_status}")
 else:
     st.error(f"❌ LR: {lr_status}")
-
 knn_status = st.session_state.knn_train_status
 if knn_status and "error" not in knn_status.lower():
     st.success(f"✅ KNN: {knn_status}")
@@ -486,7 +476,7 @@ if not upcoming_display.empty:
                     st.dataframe(df_adj)
 
 # -----------------------------------------------
-# 3D LR SCATTER (plus win probability for selected fight)
+# 3D LR SCATTER + WIN PROBABILITY
 # -----------------------------------------------
 st.header("3D LR Win/Loss Prediction & Best LR Combinations")
 if len(three_d_features) >= 3:
@@ -509,7 +499,7 @@ if len(three_d_features) >= 3:
         st.warning("Not enough data for 3D LR plot.")
 
     # LR metrics and win probability for selected fight
-    if st.session_state.lr_model and hasattr(st.session_state, 'y_train_lr') and st.session_state.y_train_lr is not None:
+    if st.session_state.lr_model and st.session_state.y_train_lr is not None:
         X_lr = st.session_state.X_train_lr; y_true = st.session_state.y_train_lr
         if X_lr is not None and len(X_lr) > 0:
             y_prob = st.session_state.lr_model.predict_proba(X_lr)[:,1]
@@ -518,8 +508,6 @@ if len(three_d_features) >= 3:
             col_m1.metric("LR Log‑loss", f"{ll:.3f}")
             col_m2.metric("LR Brier", f"{bs:.3f}")
             col_m3.metric("Overall Win%", f"{st.session_state.overall_wr:.1f}%")
-
-            # Win probability for selected fight
             if st.session_state.selected_fight_row is not None:
                 f1_row = st.session_state.selected_fight_row
                 lr_feats = st.session_state.lr_feature_names
@@ -531,7 +519,7 @@ if len(three_d_features) >= 3:
                         st.subheader(f"LR Win Probability for {f1_row['Fighter']}: {prob:.1%} (shrunken: {shrunk:.1%})")
                     except: pass
 
-    # LR combo builder (unchanged)
+    # LR combo builder
     st.subheader("LR 3‑Variable Combinations (Cross‑Validated Brier)")
     candidates = [c for c in combo_candidates if c in data.columns and c != 'FighterOddsNum']
     if len(candidates) >= 3:
@@ -546,7 +534,7 @@ if len(three_d_features) >= 3:
                 return pd.DataFrame({'Feature': features, 'MI': mi}).sort_values('MI', ascending=False).head(20)
             return pd.DataFrame()
         mi_df = numerical_importance(data, candidates)
-        top_feats = mi_df['Feature'].tolist() if not mi_df.empty else candidates
+        top_feats = mi_df['Feature'].tolist() if not mi_df.empty else candidates[:10]
         num_top = st.slider("Top features to test", 5, min(30, len(top_feats)), 10, key="lr_combo_top")
         candidates = top_feats[:num_top]
 
@@ -573,7 +561,7 @@ else:
     st.warning("Need at least 3 numeric features for 3D LR plot.")
 
 # -----------------------------------------------
-# 3D KNN SCATTER (plus win probability for selected fight)
+# 3D KNN SCATTER + WIN PROBABILITY (FAST COMBO BUILDER)
 # -----------------------------------------------
 st.header("3D Weighted KNN Win/Loss Prediction & Best KNN Combinations")
 if len(three_d_features) >= 3:
@@ -613,17 +601,24 @@ if len(three_d_features) >= 3:
                 st.subheader(f"KNN Win Probability for {f1_row['Fighter']}: {prob:.1%} (shrunken: {shrunk:.1%})")
             except: pass
 
-    # KNN combo builder (unchanged)
+    # KNN combo builder (fast: reuse MI preselect)
     st.subheader("KNN 3‑Variable Combinations (Cross‑Validated Brier)")
     candidates_knn = [c for c in combo_candidates if c in data.columns and c != 'FighterOddsNum']
     if len(candidates_knn) >= 3:
+        # Use mutual information to pick top features to reduce search space
+        mi_df_knn = numerical_importance(data, candidates_knn) if 'numerical_importance' in globals() else None
+        if mi_df_knn is not None and not mi_df_knn.empty:
+            top_feats_knn = mi_df_knn['Feature'].tolist()[:15]  # top 15
+        else:
+            top_feats_knn = candidates_knn[:15]
         k_combo = st.slider("KNN neighbors (combo)", 1, 20, 5, key="knn_combo_k")
         if st.button("Compute KNN Combos (Cross‑Validated)", key="knn_combo_btn"):
-            with st.spinner("Computing..."):
+            with st.spinner("Computing KNN combinations (this may take a moment)..."):
                 hist_combo = data[data['Win?'].isin(['Yes','No'])].copy()
                 hist_combo['WinNum'] = (hist_combo['Win?'] == 'Yes').astype(int)
                 results = []
-                for combo in itertools.combinations(candidates_knn, 3):
+                combos = list(itertools.combinations(top_feats_knn, 3))
+                for combo in combos:
                     c1 = get_first_col(hist_combo, combo[0]); c2 = get_first_col(hist_combo, combo[1]); c3 = get_first_col(hist_combo, combo[2])
                     y = hist_combo['WinNum'].values
                     mask_combo = ~(np.isnan(c1) | np.isnan(c2) | np.isnan(c3))
@@ -639,6 +634,8 @@ if len(three_d_features) >= 3:
                 else: st.warning("No combinations evaluated.")
         if st.session_state.knn_combo_results is not None:
             st.dataframe(st.session_state.knn_combo_results, use_container_width=True)
+    else:
+        st.warning("Not enough features for KNN combo.")
 else:
     st.warning("Need at least 3 numeric features for KNN plot.")
 
@@ -671,14 +668,13 @@ if len(hist_imp) >= 10:
 else: st.warning("Too few historical fights for importance.")
 
 # -----------------------------------------------
-# FIGHT SIMILARITY (INDEPENDENT FILTERS – MATCHING MAIN)
+# FIGHT SIMILARITY (INDEPENDENT FILTERS – GROUPED)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 st.write("These filters are separate from the main sidebar and do not affect the dashboard above.")
 with st.expander("Similarity Filters", expanded=True):
-    # Replicate all main filters with spider_ keys
-    col_sp1, col_sp2 = st.columns(2)
-    with col_sp1:
+    # Group into sub-expanders
+    with st.expander("General", expanded=True):
         spider_wc = st.multiselect("Weight Class", sorted(original_data['WC'].dropna().unique()), key="spider_wc") if 'WC' in original_data.columns else []
         spider_stance = st.multiselect("Stance", sorted(original_data['Stance'].dropna().unique()), key="spider_stance") if 'Stance' in original_data.columns else []
         spider_country = st.multiselect("Country", sorted(original_data['Country'].dropna().unique()), key="spider_country") if 'Country' in original_data.columns else []
@@ -687,7 +683,8 @@ with st.expander("Similarity Filters", expanded=True):
         spider_hometown_fighter = st.multiselect("Hometown (Fighter)", sorted(original_data['HometownFighter'].dropna().unique()), key="spider_hometown_fighter") if 'HometownFighter' in original_data.columns else []
         spider_opp_hometown = st.multiselect("Opponent Hometown", sorted(original_data['Opponent_Hometown'].dropna().unique()), key="spider_opp_hometown") if 'Opponent_Hometown' in original_data.columns else []
         spider_event_country = st.multiselect("Event Country", sorted(original_data['EventCountry'].dropna().unique()), key="spider_eventc") if 'EventCountry' in original_data.columns else []
-    with col_sp2:
+
+    with st.expander("Physical Attributes & Fight Numbers", expanded=False):
         spider_fn_min = st.number_input("Min Fight #", value=1, min_value=1, max_value=int(original_data['FightNumber'].max()), key="spider_fn_min") if 'FightNumber' in original_data.columns else 1
         spider_fn_max = st.number_input("Max Fight #", value=int(original_data['FightNumber'].max()), key="spider_fn_max") if 'FightNumber' in original_data.columns else 1000
         spider_ofn_min = st.number_input("Opp Min Fight #", value=1, key="spider_ofn_min") if 'Opponent_FightNumber' in original_data.columns else 1
@@ -700,42 +697,46 @@ with st.expander("Similarity Filters", expanded=True):
         spider_days_min, spider_days_max = st.slider("Days Since Prev", int(original_data['DaysSincePrev'].min()), int(original_data['DaysSincePrev'].max()), (int(original_data['DaysSincePrev'].min()), int(original_data['DaysSincePrev'].max())), key="spider_days") if 'DaysSincePrev' in original_data.columns else (0,1000)
         spider_ddiff_min, spider_ddiff_max = st.slider("Days Since Prev Diff", int(original_data['DaysSincePrev_diff'].min()), int(original_data['DaysSincePrev_diff'].max()), (int(original_data['DaysSincePrev_diff'].min()), int(original_data['DaysSincePrev_diff'].max())), key="spider_days_diff") if 'DaysSincePrev_diff' in original_data.columns else (-1000,1000)
         spider_avg3_min, spider_avg3_max = st.slider("Avg3DaysGap Diff", int(original_data['Avg3DaysGap_diff'].min()), int(original_data['Avg3DaysGap_diff'].max()), (int(original_data['Avg3DaysGap_diff'].min()), int(original_data['Avg3DaysGap_diff'].max())), key="spider_avg3_diff") if 'Avg3DaysGap_diff' in original_data.columns else (-1000,1000)
+
+    with st.expander("Odds", expanded=False):
         spider_odds_min, spider_odds_max = st.slider("Fighter Odds", int(original_data['FighterOddsNum'].min()), int(original_data['FighterOddsNum'].max()), (int(original_data['FighterOddsNum'].min()), int(original_data['FighterOddsNum'].max())), step=10, key="spider_cur_odds") if 'FighterOddsNum' in original_data.columns else (-1000,1000)
         spider_podds_min, spider_podds_max = st.slider("Prev Fighter Odds", int(original_data['PrevFighterOddsNum'].min()), int(original_data['PrevFighterOddsNum'].max()), (int(original_data['PrevFighterOddsNum'].min()), int(original_data['PrevFighterOddsNum'].max())), step=10, key="spider_prev_odds") if 'PrevFighterOddsNum' in original_data.columns else (-1000,1000)
 
-    spider_skip_nc = st.checkbox("Skip NC outcomes", key="spider_skip_nc")
-    if spider_skip_nc:
-        spider_prev1_col = 'Prev1_Outcome_skipNC'; spider_prev2_col = 'Prev2_Outcome_skipNC'; spider_prev3_col = 'Prev3_Outcome_skipNC'
-        spider_career1_col = 'Career1_Outcome_skipNC'; spider_career2_col = 'Career2_Outcome_skipNC'; spider_career3_col = 'Career3_Outcome_skipNC'
-    else:
-        spider_prev1_col = 'Prev1_Outcome_raw'; spider_prev2_col = 'Prev2_Outcome_raw'; spider_prev3_col = 'Prev3_Outcome_raw'
-        spider_career1_col = 'Career1_Outcome_raw'; spider_career2_col = 'Career2_Outcome_raw'; spider_career3_col = 'Career3_Outcome_raw'
+    with st.expander("Previous Outcomes", expanded=False):
+        spider_skip_nc = st.checkbox("Skip NC outcomes", key="spider_skip_nc")
+        if spider_skip_nc:
+            spider_prev1_col = 'Prev1_Outcome_skipNC'; spider_prev2_col = 'Prev2_Outcome_skipNC'; spider_prev3_col = 'Prev3_Outcome_skipNC'
+            spider_career1_col = 'Career1_Outcome_skipNC'; spider_career2_col = 'Career2_Outcome_skipNC'; spider_career3_col = 'Career3_Outcome_skipNC'
+        else:
+            spider_prev1_col = 'Prev1_Outcome_raw'; spider_prev2_col = 'Prev2_Outcome_raw'; spider_prev3_col = 'Prev3_Outcome_raw'
+            spider_career1_col = 'Career1_Outcome_raw'; spider_career2_col = 'Career2_Outcome_raw'; spider_career3_col = 'Career3_Outcome_raw'
 
-    spider_prev1 = st.multiselect("Prev Fight 1", all_outcomes_raw, key="spider_prev1")
-    spider_prev2 = st.multiselect("Prev Fight 2", all_outcomes_raw, key="spider_prev2")
-    spider_prev3 = st.multiselect("Prev Fight 3", all_outcomes_raw, key="spider_prev3")
-    spider_career1 = st.multiselect("Career F1", all_outcomes_career, key="spider_career1")
-    spider_career2 = st.multiselect("Career F2", all_outcomes_career, key="spider_career2")
-    spider_career3 = st.multiselect("Career F3", all_outcomes_career, key="spider_career3")
+        spider_prev1 = st.multiselect("Prev Fight 1", all_outcomes_raw, key="spider_prev1")
+        spider_prev2 = st.multiselect("Prev Fight 2", all_outcomes_raw, key="spider_prev2")
+        spider_prev3 = st.multiselect("Prev Fight 3", all_outcomes_raw, key="spider_prev3")
+        spider_career1 = st.multiselect("Career F1", all_outcomes_career, key="spider_career1")
+        spider_career2 = st.multiselect("Career F2", all_outcomes_career, key="spider_career2")
+        spider_career3 = st.multiselect("Career F3", all_outcomes_career, key="spider_career3")
 
-    spider_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
-    spider_new_wc = st.checkbox("New Weight Class", key="spider_new_wc") if 'IsNewWeightClass' in original_data.columns else False
+    with st.expander("Other", expanded=False):
+        spider_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
+        spider_new_wc = st.checkbox("New Weight Class", key="spider_new_wc") if 'IsNewWeightClass' in original_data.columns else False
 
-    # Ratings (spider)
-    spider_use_colley = st.checkbox("Filter ColleyDecayDiff", value=False, key="spider_use_colley")
-    if spider_use_colley:
-        min_cd, max_cd = get_diff_range(original_data, 'ColleyDecayDiff')
-        spider_colley_range = st.slider("ColleyDecayDiff range", min_cd, max_cd, (min_cd, max_cd), step=0.01, key="spider_colley")
-    spider_use_massey = st.checkbox("Filter MasseyDecayDiff", value=False, key="spider_use_massey")
-    if spider_use_massey:
-        min_md, max_md = get_diff_range(original_data, 'MasseyDecayDiff')
-        spider_massey_range = st.slider("MasseyDecayDiff range", min_md, max_md, (min_md, max_md), step=0.01, key="spider_massey")
-    spider_use_wmd = st.checkbox("Filter WeightedMasseyDecayDiff", value=False, key="spider_use_wmd")
-    if spider_use_wmd:
-        min_wmd, max_wmd = get_diff_range(original_data, 'WeightedMasseyDecayDiff')
-        spider_wmd_range = st.slider("WeightedMasseyDecayDiff range", min_wmd, max_wmd, (min_wmd, max_wmd), step=0.01, key="spider_wmd")
+    with st.expander("Ratings", expanded=False):
+        spider_use_colley = st.checkbox("Filter ColleyDecayDiff", value=False, key="spider_use_colley")
+        if spider_use_colley:
+            min_cd, max_cd = get_diff_range(original_data, 'ColleyDecayDiff')
+            spider_colley_range = st.slider("ColleyDecayDiff range", min_cd, max_cd, (min_cd, max_cd), step=0.01, key="spider_colley")
+        spider_use_massey = st.checkbox("Filter MasseyDecayDiff", value=False, key="spider_use_massey")
+        if spider_use_massey:
+            min_md, max_md = get_diff_range(original_data, 'MasseyDecayDiff')
+            spider_massey_range = st.slider("MasseyDecayDiff range", min_md, max_md, (min_md, max_md), step=0.01, key="spider_massey")
+        spider_use_wmd = st.checkbox("Filter WeightedMasseyDecayDiff", value=False, key="spider_use_wmd")
+        if spider_use_wmd:
+            min_wmd, max_wmd = get_diff_range(original_data, 'WeightedMasseyDecayDiff')
+            spider_wmd_range = st.slider("WeightedMasseyDecayDiff range", min_wmd, max_wmd, (min_wmd, max_wmd), step=0.01, key="spider_wmd")
 
-# Build spider mask (duplicating logic from main)
+# Build spider mask (same as main but with spider_ prefixes)
 spider_mask = pd.Series(True, index=original_data.index)
 if spider_wc: spider_mask &= original_data['WC'].isin(spider_wc)
 if spider_stance: spider_mask &= original_data['Stance'].isin(spider_stance)
@@ -798,7 +799,6 @@ spider_data = original_data[original_data['FightID'].isin(spider_fight_ids)]
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
 spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
 
-# (Remaining similarity code unchanged)
 if spider_upcoming.empty:
     st.write("No upcoming fights for similarity.")
 else:
