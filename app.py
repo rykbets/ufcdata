@@ -735,94 +735,23 @@ cols = [c for c in cols if c in last20.columns]
 st.dataframe(last20[cols], use_container_width=True)
 
 # -----------------------------------------------
-# FEATURE IMPORTANCE (MI, Lasso, Random Forest)
+# FEATURE IMPORTANCE
 # -----------------------------------------------
-st.header("Top 20 Feature Importance & Global Model Ranking")
-
+st.header("Top 20 Feature Importance")
 hist_imp = filtered[filtered['Win?'].isin(['Yes','No'])].copy()
-if len(hist_imp) < 10:
-    st.warning("Too few historical fights after filtering to compute importance.")
-else:
+if len(hist_imp) >= 10:
     hist_imp['Target'] = (hist_imp['Win?'] == 'Yes').astype(int)
     feats = [c for c in three_d_features if c in hist_imp.columns]
-    if not feats:
-        st.warning("No numeric features available.")
-        st.stop()
-
-    # ---------- Mutual Information (always runs) ----------
-    st.subheader("Mutual Information (Model‑Free)")
-    X_mi = hist_imp[feats].dropna()
-    if len(X_mi) >= 10:
-        imputer = SimpleImputer(strategy='median')
-        X_imp = imputer.fit_transform(X_mi)
-        y_mi = hist_imp.loc[X_mi.index, 'Target']
-        mi = mutual_info_classif(X_imp, y_mi, discrete_features=False, random_state=42)
-        mi_df = pd.DataFrame({'Feature': feats, 'MI': mi}).sort_values('MI', ascending=False).head(20)
-        fig_mi = px.bar(mi_df, x='MI', y='Feature', orientation='h',
-                        title="Top 20 Mutual Information")
-        st.plotly_chart(fig_mi, use_container_width=True)
-    else:
-        st.warning("Not enough complete rows for MI.")
-
-    # ---------- Lasso Model (on demand) ----------
-    if st.button("Compute Lasso Importance (all features)"):
-        with st.spinner("Fitting LassoCV..."):
-            X_lasso = hist_imp[feats].copy()
-            y_lasso = hist_imp['Target']
-            # Impute missing values
-            imp = SimpleImputer(strategy='median')
-            X_lasso_imp = imp.fit_transform(X_lasso)
-            scaler_lasso = StandardScaler()
-            X_lasso_scaled = scaler_lasso.fit_transform(X_lasso_imp)
-
-            # LassoCV with automatic alpha selection
-            lasso = LogisticRegressionCV(
-                penalty='l1', solver='saga', cv=5,
-                scoring='neg_brier_score', max_iter=2000,
-                Cs=10, n_jobs=-1, random_state=42
-            )
-            lasso.fit(X_lasso_scaled, y_lasso)
-
-            # Get coefficients
-            coef = lasso.coef_.flatten()
-            coef_df = pd.DataFrame({
-                'Feature': feats,
-                'Coefficient': coef
-            })
-            # Only show non-zero coefficients (important ones)
-            coef_df = coef_df[coef_df['Coefficient'] != 0].sort_values('Coefficient', key=abs, ascending=False)
-
-            st.subheader("Lasso Non‑Zero Coefficients (most predictive features)")
-            if len(coef_df) > 0:
-                fig_lasso = px.bar(coef_df.head(30), x='Coefficient', y='Feature', orientation='h',
-                                   title="Lasso Coefficients (absolute value = importance)")
-                st.plotly_chart(fig_lasso, use_container_width=True)
-            else:
-                st.write("Lasso eliminated all features – try different regularization strength.")
-
-    # ---------- Random Forest Importance (on demand) ----------
-    if st.button("Compute Random Forest Importance (all features)"):
-        with st.spinner("Training Random Forest..."):
-            X_rf = hist_imp[feats].copy()
-            y_rf = hist_imp['Target']
-            imp = SimpleImputer(strategy='median')
-            X_rf_imp = imp.fit_transform(X_rf)
-
-            rf = RandomForestClassifier(
-                n_estimators=200, max_depth=10,
-                random_state=42, n_jobs=-1
-            )
-            rf.fit(X_rf_imp, y_rf)
-
-            rf_imp = pd.DataFrame({
-                'Feature': feats,
-                'Importance': rf.feature_importances_
-            }).sort_values('Importance', ascending=False).head(30)
-
-            st.subheader("Random Forest Feature Importance (Gini)")
-            fig_rf = px.bar(rf_imp, x='Importance', y='Feature', orientation='h',
-                            title="Random Forest Feature Importance")
-            st.plotly_chart(fig_rf, use_container_width=True)
+    if feats:
+        X = hist_imp[feats].dropna()
+        if len(X) >= 10:
+            imp = mutual_info_classif(X, hist_imp.loc[X.index, 'Target'], discrete_features=False, random_state=42)
+            df_imp = pd.DataFrame({'Feature': feats, 'Mutual Information': imp}).sort_values('Mutual Information', ascending=False).head(20)
+            fig = px.bar(df_imp, x='Mutual Information', y='Feature', orientation='h', title="Top 20 Mutual Information")
+            st.plotly_chart(fig, use_container_width=True)
+        else: st.warning("Not enough complete rows for importance.")
+    else: st.warning("No numeric features.")
+else: st.warning("Too few historical fights for importance.")
 # -----------------------------------------------
 # FIGHT SIMILARITY (INDEPENDENT FILTERS – GROUPED DROPDOWNS)
 # -----------------------------------------------
