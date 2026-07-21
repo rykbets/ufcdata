@@ -416,20 +416,23 @@ if not upcoming_display.empty:
                        'Opponent_Hometown','Opponent_DaysSincePrev','Opponent_Avg3DaysGap',
                        'Opponent_CareerWinPct','is_win','is_loss','cum_wins','cum_fights']
             opp_prefixes = ['Opponent_', 'Def_']
+            # For the table, we want ALL columns except opponent-internal ones.
+            # That includes _opp_diff columns because they don't start with Opponent_ or Def_
             stat_cols = [c for c in f1.index if c not in exclude and not any(c.startswith(p) for p in opp_prefixes)]
 
+            # Define sections explicitly using the known column names
             sections = {
-                "Identity": [c for c in stat_cols if c in ['WC','Title','ScheduledRounds','Stance','Country','HometownFighter','EventCountry']],
-                "Physical": [c for c in stat_cols if c in ['Age','Height','Reach','AgeDiff','HeightDiff','ReachDiff']],
-                "Fight History": [c for c in stat_cols if c in ['FightNumber','DaysSincePrev','Avg3DaysGap','Prev7WinPct','CareerWinPct',
-                                       'DaysSincePrev_diff','Avg3DaysGap_diff','CareerWinPct_diff','FightNumber_diff']],
+                "Identity": [c for c in ['WC','Title','ScheduledRounds','Stance','Country','HometownFighter','EventCountry'] if c in f1.index],
+                "Physical": [c for c in ['Age','Height','Reach','AgeDiff','HeightDiff','ReachDiff'] if c in f1.index],
+                "Fight History": [c for c in ['FightNumber','DaysSincePrev','Avg3DaysGap','Prev7WinPct','CareerWinPct',
+                                              'DaysSincePrev_diff','Avg3DaysGap_diff','CareerWinPct_diff','FightNumber_diff'] if c in f1.index],
                 "Normalized Simple Stats (diff)": [c for c in stat_cols if c.startswith('adj_') and c.endswith('_diff')],
-                "Odds": [c for c in stat_cols if c in ['FighterOddsNum','PrevFighterOddsNum']],
-                "Ratings (Raw)": [c for c in stat_cols if 'Colley' in c or 'Massey' in c and 'avg7' not in c],
+                "Odds": [c for c in ['FighterOddsNum','PrevFighterOddsNum'] if c in f1.index],
+                "Ratings (Raw)": [c for c in stat_cols if ('Colley' in c or 'Massey' in c) and 'avg7' not in c],
                 "Ratings (7‑Fight Avg)": [c for c in stat_cols if 'avg7' in c],
                 "Striking & Grappling Final Differentials": [c for c in stat_cols if c.endswith('_opp_diff')],
                 "Outcomes": [c for c in stat_cols if 'Outcome' in c],
-                "Other": [c for c in stat_cols if c in ['Prev1_Title','IsNewWeightClass','PrevFighterOddsNum']]
+                "Other": [c for c in ['Prev1_Title','IsNewWeightClass','PrevFighterOddsNum'] if c in f1.index]
             }
 
             rows = []
@@ -439,9 +442,16 @@ if not upcoming_display.empty:
                 rows.append({"Stat": f"--- {sec_name} ---", f1['Fighter']: "", f2['Fighter']: ""})
                 for c in present:
                     val1 = f1[c]; val2 = f2[c]
-                    if isinstance(val1, float): val1 = f"{val1:.2f}" if pd.notna(val1) else ""
-                    if isinstance(val2, float): val2 = f"{val2:.2f}" if pd.notna(val2) else ""
-                    rows.append({"Stat": c, f1['Fighter']: val1, f2['Fighter']: val2})
+                    # Format numbers nicely
+                    if isinstance(val1, float):
+                        val1_str = f"{val1:.2f}" if pd.notna(val1) else ""
+                    else:
+                        val1_str = str(val1) if not pd.isna(val1) else ""
+                    if isinstance(val2, float):
+                        val2_str = f"{val2:.2f}" if pd.notna(val2) else ""
+                    else:
+                        val2_str = str(val2) if not pd.isna(val2) else ""
+                    rows.append({"Stat": c, f1['Fighter']: val1_str, f2['Fighter']: val2_str})
 
             df_stats = pd.DataFrame(rows)
             st.dataframe(df_stats, use_container_width=True, hide_index=True)
@@ -469,7 +479,7 @@ if not upcoming_display.empty:
                 except Exception as e: st.error(f"KNN prediction error: {e}")
             else: st.info("KNN model not trained.")
 
-            # Top 5 Differentials – signed, best advantages first
+            # Top 5 Differentials (signed, biggest positive first)
             st.subheader("Top 5 Differentials")
             for fighter, row in [(f1['Fighter'], f1), (f2['Fighter'], f2)]:
                 diffs = {}
@@ -477,8 +487,7 @@ if not upcoming_display.empty:
                     if (c.endswith('_opp_diff') or (c.startswith('adj_') and c.endswith('_diff'))):
                         val = row[c]
                         if pd.notna(val):
-                            diffs[c] = val        # store signed value
-                # Sort descending by signed value (biggest positive first)
+                            diffs[c] = val
                 top5 = sorted(diffs.items(), key=lambda x: x[1], reverse=True)[:5]
                 if top5:
                     st.write(f"**{fighter}**")
