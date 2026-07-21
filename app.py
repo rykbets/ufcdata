@@ -16,16 +16,27 @@ from scipy.spatial.distance import cdist
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
 # -----------------------------------------------
-# LOAD DATA
+# LOAD DATA (with integrity check)
 # -----------------------------------------------
-PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"   # <-- update with your new file ID
+PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"   # <-- update with your file ID
 
 @st.cache_data
 def load_data():
     gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
-    return pd.read_parquet("data.parquet")
+    df = pd.read_parquet("data.parquet")
+    # Basic integrity check
+    required_cols = ['FightID', 'Fighter', 'Opponent', 'FightDate', 'Win?', 'Age', 'Height', 'Reach', 'WC']
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Parquet is missing required columns: {missing}")
+    return df
 
-data = load_data()
+try:
+    data = load_data()
+except Exception as e:
+    st.error(f"Failed to load data: {e}")
+    st.stop()
+
 if 'FightDate' in data.columns:
     data = data[data['FightDate'] >= '2015-01-01'].copy()
 original_data = data.copy()
@@ -382,7 +393,7 @@ col1, col2, col3 = st.columns(3)
 col1.metric("Total Fights", total); col2.metric("Wins", wins); col3.metric("Win Rate", f"{win_rate:.1f}%")
 
 # -----------------------------------------------
-# UPCOMING FIGHT MATCHUP (FIXED TABLE + TOP 5)
+# UPCOMING FIGHT MATCHUP (FULL TABLE + TOP 5 DIFFS)
 # -----------------------------------------------
 st.header("Upcoming Fight Matchup")
 lr_status = st.session_state.lr_train_status
@@ -409,46 +420,35 @@ if not upcoming_display.empty:
             st.session_state.selected_fight_row = f1
             st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
 
-            # Build table sections directly, ensuring we don't miss anything
+            # ---- BUILD TABLE SECTIONS ----
             sections = {}
 
-            # Identity
             identity_cols = ['WC','Title','ScheduledRounds','Stance','Country','HometownFighter','EventCountry']
             sections["Identity"] = [c for c in identity_cols if c in f1.index]
 
-            # Physical
             physical_cols = ['Age','Height','Reach','AgeDiff','HeightDiff','ReachDiff']
             sections["Physical"] = [c for c in physical_cols if c in f1.index]
 
-            # Fight History
             fight_hist_cols = ['FightNumber','DaysSincePrev','Avg3DaysGap','Prev7WinPct','CareerWinPct',
                                'DaysSincePrev_diff','Avg3DaysGap_diff','CareerWinPct_diff','FightNumber_diff']
             sections["Fight History"] = [c for c in fight_hist_cols if c in f1.index]
 
-            # Normalized Simple Stats (diff)
             sections["Normalized Simple Stats (diff)"] = [
                 c for c in f1.index if c.startswith('adj_') and c.endswith('_diff')
             ]
 
-            # Odds
             odds_cols = ['FighterOddsNum','PrevFighterOddsNum']
             sections["Odds"] = [c for c in odds_cols if c in f1.index]
 
-            # Ratings raw
             sections["Ratings (Raw)"] = [c for c in f1.index if ('Colley' in c or 'Massey' in c) and 'avg7' not in c]
-
-            # Ratings avg7
             sections["Ratings (7‑Fight Avg)"] = [c for c in f1.index if 'avg7' in c]
 
-            # Final opp_diff columns
             sections["Striking & Grappling Final Differentials"] = [
                 c for c in f1.index if c.endswith('_opp_diff')
             ]
 
-            # Outcomes
             sections["Outcomes"] = [c for c in f1.index if 'Outcome' in c]
 
-            # Other
             other_cols = ['Prev1_Title','IsNewWeightClass','PrevFighterOddsNum']
             sections["Other"] = [c for c in other_cols if c in f1.index]
 
@@ -460,7 +460,6 @@ if not upcoming_display.empty:
                 for c in cols:
                     val1 = f1[c]
                     val2 = f2[c]
-                    # Format to string
                     def fmt(v):
                         if isinstance(v, (int, float)) and pd.notna(v):
                             return f"{v:.2f}"
