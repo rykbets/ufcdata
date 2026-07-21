@@ -5,7 +5,7 @@ import plotly.express as px
 import re
 import itertools
 import gdown
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.preprocessing import StandardScaler
@@ -14,9 +14,9 @@ from sklearn.pipeline import Pipeline
 from sklearn.metrics import log_loss, brier_score_loss
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.model_selection import cross_val_predict
-from scipy.spatial.distance import cdist
-from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
+from sklearn.inspection import permutation_importance
 from sklearn.ensemble import RandomForestClassifier
+from scipy.spatial.distance import cdist
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
@@ -63,7 +63,7 @@ def get_first_col(df, col_name):
     return pd.to_numeric(sub, errors='coerce').to_numpy(dtype=np.float64)
 
 # -----------------------------------------------
-# FEATURE LISTS (updated with new rating columns)
+# FEATURE LISTS
 # -----------------------------------------------
 adjperf_diff_cols = [c for c in data.columns if c.endswith('_diff') and c.startswith('adjperf_')]
 base_cols = [
@@ -153,22 +153,17 @@ with st.sidebar.expander("General", expanded=True):
     opp_hometown = st.multiselect("Opponent Hometown", sorted(data['Opponent_Hometown'].dropna().unique()), key="filter_opp_hometown") if 'Opponent_Hometown' in data.columns else []
     event_country = st.multiselect("Event Country", sorted(data['EventCountry'].dropna().unique()), key="filter_event") if 'EventCountry' in data.columns else []
 
-with st.sidebar.expander("Fight Numbers", expanded=True):   # always open
-    # Fighter Fight #
-    if 'FightNumber' in data.columns:
-        fn_min = st.number_input("Min Fight #", value=1, min_value=1, max_value=int(data['FightNumber'].max()), key="filter_fn_min")
-        fn_max = st.number_input("Max Fight #", value=int(data['FightNumber'].max()), key="filter_fn_max")
-    else:
-        fn_min = 1; fn_max = 1000
-        st.info("'FightNumber' column missing – filter disabled.")
-    
-    # Opponent Fight #
+with st.sidebar.expander("Fight Numbers", expanded=False):
+    fn_min = st.number_input("Min Fight #", value=1, min_value=1, max_value=int(data['FightNumber'].max()), key="filter_fn_min") if 'FightNumber' in data.columns else 1
+    fn_max = st.number_input("Max Fight #", value=int(data['FightNumber'].max()), key="filter_fn_max") if 'FightNumber' in data.columns else 1000
+    # Opponent Fight # – always show, but warn if column missing
     if 'Opponent_FightNumber' in data.columns:
         ofn_min = st.number_input("Opp Min Fight #", value=1, key="filter_ofn_min")
         ofn_max = st.number_input("Opp Max Fight #", value=int(data['Opponent_FightNumber'].max()), key="filter_ofn_max")
     else:
-        ofn_min = 1; ofn_max = 1000
-        st.warning("'Opponent_FightNumber' column missing – filter disabled. Re‑run the data‑processing script to generate it.")
+        ofn_min = st.number_input("Opp Min Fight #", value=1, disabled=True, key="filter_ofn_min_disabled")
+        ofn_max = st.number_input("Opp Max Fight #", value=1000, disabled=True, key="filter_ofn_max_disabled")
+        st.warning("'Opponent_FightNumber' column missing. Re‑run data processing script.")
 
 with st.sidebar.expander("Career Win % Diff", expanded=False):
     if 'CareerWinPct_diff' in data.columns:
@@ -483,7 +478,7 @@ if not upcoming_display.empty:
             st.session_state.selected_fight_row = f1
             st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
 
-            # Exclude internal columns we don't want to display
+            # Full stats table (same as before, sections included)
             exclude = ['FightID','Fighter','Opponent','FightDate','Win?','Method','Round',
                        'DetailedResult','Fight','FightDurationMinutes',
                        'Opponent_FightNumber','Age_opp','Height_opp','Reach_opp',
@@ -498,7 +493,6 @@ if not upcoming_display.empty:
                     continue
                 stat_cols.append(c)
 
-            # Sections for better readability
             identity_cols = ['WC','Title','ScheduledRounds','Stance','Country','HometownFighter','EventCountry']
             physical_cols = ['Age','Height','Reach','AgeDiff','HeightDiff','ReachDiff']
             fight_history_cols = ['FightNumber','DaysSincePrev','Avg3DaysGap','Prev7WinPct','CareerWinPct',
@@ -534,7 +528,6 @@ if not upcoming_display.empty:
                 ("Other", other_cols)
             ]
 
-            # Build a single DataFrame with Fighter1 and Fighter2 side by side
             rows = []
             for section_name, cols in sections:
                 present = [c for c in cols if c in f1.index]
@@ -746,25 +739,74 @@ cols = [c for c in cols if c in last20.columns]
 st.dataframe(last20[cols], use_container_width=True)
 
 # -----------------------------------------------
-# FEATURE IMPORTANCE
+# FEATURE IMPORTANCE (MI + Lasso + Random Forest)
 # -----------------------------------------------
-st.header("Top 20 Feature Importance")
+st.header("Top 20 Feature Importance & Global Model Ranking")
 hist_imp = filtered[filtered['Win?'].isin(['Yes','No'])].copy()
-if len(hist_imp) >= 10:
+if len(hist_imp) < 10:
+    st.warning("Too few historical fights after filtering to compute importance.")
+else:
     hist_imp['Target'] = (hist_imp['Win?'] == 'Yes').astype(int)
     feats = [c for c in three_d_features if c in hist_imp.columns]
     if feats:
-        X = hist_imp[feats].dropna()
-        if len(X) >= 10:
-            imp = mutual_info_classif(X, hist_imp.loc[X.index, 'Target'], discrete_features=False, random_state=42)
-            df_imp = pd.DataFrame({'Feature': feats, 'Mutual Information': imp}).sort_values('Mutual Information', ascending=False).head(20)
-            fig = px.bar(df_imp, x='Mutual Information', y='Feature', orientation='h', title="Top 20 Mutual Information")
-            st.plotly_chart(fig, use_container_width=True)
-        else: st.warning("Not enough complete rows for importance.")
-    else: st.warning("No numeric features.")
-else: st.warning("Too few historical fights for importance.")
+        X_mi = hist_imp[feats].dropna()
+        if len(X_mi) >= 10:
+            imputer = SimpleImputer(strategy='median')
+            X_imp = imputer.fit_transform(X_mi)
+            y_mi = hist_imp.loc[X_mi.index, 'Target']
+            mi = mutual_info_classif(X_imp, y_mi, discrete_features=False, random_state=42)
+            mi_df = pd.DataFrame({'Feature': feats, 'MI': mi}).sort_values('MI', ascending=False).head(20)
+            fig_mi = px.bar(mi_df, x='MI', y='Feature', orientation='h',
+                            title="Top 20 Mutual Information")
+            st.plotly_chart(fig_mi, use_container_width=True)
+        else:
+            st.warning("Not enough complete rows for MI.")
+
+        # ---------- Lasso (on demand) ----------
+        if st.button("Compute Lasso Importance (all features)"):
+            with st.spinner("Fitting LassoCV..."):
+                X_lasso = hist_imp[feats].copy()
+                y_lasso = hist_imp['Target']
+                imp = SimpleImputer(strategy='median')
+                X_lasso_imp = imp.fit_transform(X_lasso)
+                scaler_lasso = StandardScaler()
+                X_lasso_scaled = scaler_lasso.fit_transform(X_lasso_imp)
+                lasso = LogisticRegressionCV(
+                    penalty='l1', solver='saga', cv=5,
+                    scoring='neg_brier_score', max_iter=2000,
+                    Cs=10, n_jobs=-1, random_state=42
+                )
+                lasso.fit(X_lasso_scaled, y_lasso)
+                coef = lasso.coef_.flatten()
+                coef_df = pd.DataFrame({'Feature': feats, 'Coefficient': coef})
+                coef_df = coef_df[coef_df['Coefficient'] != 0].sort_values('Coefficient', key=abs, ascending=False)
+                st.subheader("Lasso Non‑Zero Coefficients")
+                if len(coef_df) > 0:
+                    fig_lasso = px.bar(coef_df.head(30), x='Coefficient', y='Feature', orientation='h',
+                                       title="Lasso Coefficients")
+                    st.plotly_chart(fig_lasso, use_container_width=True)
+                else:
+                    st.write("Lasso eliminated all features.")
+
+        # ---------- Random Forest (on demand) ----------
+        if st.button("Compute Random Forest Importance (all features)"):
+            with st.spinner("Training Random Forest..."):
+                X_rf = hist_imp[feats].copy()
+                y_rf = hist_imp['Target']
+                imp = SimpleImputer(strategy='median')
+                X_rf_imp = imp.fit_transform(X_rf)
+                rf = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
+                rf.fit(X_rf_imp, y_rf)
+                rf_imp = pd.DataFrame({'Feature': feats, 'Importance': rf.feature_importances_}).sort_values('Importance', ascending=False).head(30)
+                st.subheader("Random Forest Feature Importance (Gini)")
+                fig_rf = px.bar(rf_imp, x='Importance', y='Feature', orientation='h',
+                                title="Random Forest Feature Importance")
+                st.plotly_chart(fig_rf, use_container_width=True)
+    else:
+        st.warning("No numeric features.")
+
 # -----------------------------------------------
-# FIGHT SIMILARITY (INDEPENDENT FILTERS – GROUPED DROPDOWNS)
+# FIGHT SIMILARITY (INDEPENDENT FILTERS – GROUPED DROPDOWNS + COMBO BUILDER)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 st.write("These filters are separate from the main sidebar and do not affect the dashboard above.")
@@ -964,6 +1006,79 @@ else:
                         else:
                             st.write("No historical fights with similarity ≥ 90%.")
 
+                        fig_hist = px.histogram(sim_df, x='Similarity', nbins=20, title="Similarity Distribution (All)")
+                        st.plotly_chart(fig_hist, use_container_width=True)
+
+                        st.subheader(f"Top {n_top} Most Similar Historical Fights")
+                        st.dataframe(top_n, use_container_width=True)
+
+                        # ---------- COMBINATION BUILDER (inserted here) ----------
+                        st.subheader("🔧 Variable‑Combination Builder (automatic ranking)")
+                        # Quick mutual info on spider data
+                        from sklearn.feature_selection import mutual_info_classif
+                        tmp_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
+                        if len(tmp_hist) > 10:
+                            tmp_hist['Target'] = (tmp_hist['Win?'] == 'Yes').astype(int)
+                            feats_mi = [c for c in sim_features if c in tmp_hist.columns]
+                            X_mi_comb = tmp_hist[feats_mi].dropna()
+                            if len(X_mi_comb) > 10:
+                                imputer = SimpleImputer(strategy='median')
+                                X_imp_comb = imputer.fit_transform(X_mi_comb)
+                                y_comb = tmp_hist.loc[X_mi_comb.index, 'Target']
+                                mi_vals = mutual_info_classif(X_imp_comb, y_comb, discrete_features=False, random_state=42)
+                                mi_df_comb = pd.DataFrame({'Feature': feats_mi, 'MI': mi_vals}).sort_values('MI', ascending=False)
+                            else:
+                                mi_df_comb = pd.DataFrame({'Feature': sim_features})
+                        else:
+                            mi_df_comb = pd.DataFrame({'Feature': sim_features})
+
+                        top_pool = mi_df_comb.head(10)['Feature'].tolist()
+
+                        if st.button("Find best variable combinations for this fight"):
+                            from itertools import combinations
+                            results = []
+                            for r in [2, 3]:
+                                for combo in combinations(top_pool, r):
+                                    hist_sub_comb = spider_hist[list(combo)].dropna()
+                                    if len(hist_sub_comb) < 2:
+                                        continue
+                                    scaler_comb = StandardScaler()
+                                    scaler_comb.fit(hist_sub_comb)
+                                    up_vals_comb = []
+                                    for var in combo:
+                                        raw = f1[var]
+                                        try:
+                                            v = float(raw) if pd.notna(raw) else 0.0
+                                        except:
+                                            v = 0.0
+                                        up_vals_comb.append(v)
+                                    up_vec_comb = np.array([up_vals_comb], dtype=np.float64)
+                                    up_scaled_comb = scaler_comb.transform(up_vec_comb)
+                                    hist_scaled_comb = scaler_comb.transform(hist_sub_comb)
+                                    dists_comb = cdist(up_scaled_comb, hist_scaled_comb, 'euclidean').flatten()
+                                    max_d = dists_comb.max() if dists_comb.max() > 0 else 1.0
+                                    sim_scores_comb = 100 * (1 - dists_comb / max_d)
+                                    sim_df_comb = spider_hist.loc[hist_sub_comb.index, ['FightDate','Fighter','Opponent','Win?']].copy()
+                                    sim_df_comb['Similarity'] = sim_scores_comb.round(1)
+                                    top50 = sim_df_comb.sort_values('Similarity', ascending=False).head(50)
+                                    count_comb = len(top50)
+                                    avg_sim_comb = top50['Similarity'].mean()
+                                    composite_comb = avg_sim_comb * (count_comb ** 0.5) / 100
+                                    wins_comb = (top50['Win?'] == 'Yes').sum()
+                                    wr_comb = wins_comb / count_comb * 100 if count_comb > 0 else 0.0
+                                    results.append({
+                                        'Variables': ', '.join(combo),
+                                        'Count (top50)': count_comb,
+                                        'Avg Sim': round(avg_sim_comb, 1),
+                                        'Composite': round(composite_comb, 1),
+                                        'Win Rate': round(wr_comb, 1)
+                                    })
+                            if results:
+                                combo_df = pd.DataFrame(results).sort_values('Composite', ascending=False).head(20)
+                                st.dataframe(combo_df, use_container_width=True)
+                                st.caption("Composite = Avg Similarity × √Count / 100. Higher means many highly similar historical fights.")
+                            else:
+                                st.warning("Could not evaluate any combinations. Try adjusting filters.")
                         fig_hist = px.histogram(sim_df, x='Similarity', nbins=20, title="Similarity Distribution (All)")
                         st.plotly_chart(fig_hist, use_container_width=True)
                         st.subheader(f"Top {n_top} Most Similar Historical Fights")
