@@ -1012,9 +1012,10 @@ else:
                         st.subheader(f"Top {n_top} Most Similar Historical Fights")
                         st.dataframe(top_n, use_container_width=True)
 
-                        # ---------- COMBINATION BUILDER (inserted here) ----------
+                        # ---------- COMBINATION BUILDER (with controls) ----------
                         st.subheader("🔧 Variable‑Combination Builder (automatic ranking)")
-                        # Quick mutual info on spider data
+                        
+                        # --- 1. Compute quick mutual information on spider data ---
                         from sklearn.feature_selection import mutual_info_classif
                         tmp_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
                         if len(tmp_hist) > 10:
@@ -1031,13 +1032,27 @@ else:
                                 mi_df_comb = pd.DataFrame({'Feature': sim_features})
                         else:
                             mi_df_comb = pd.DataFrame({'Feature': sim_features})
-
-                        top_pool = mi_df_comb.head(10)['Feature'].tolist()
-
+                        
+                        # --- 2. Controls for pool size and combination sizes ---
+                        n_top_feats = st.slider(
+                            "Number of top features to consider",
+                            min_value=5, max_value=min(30, len(mi_df_comb)), value=10, step=1,
+                            key="combo_n_features"
+                        )
+                        
+                        combo_sizes = st.multiselect(
+                            "Combination sizes to test",
+                            options=[2, 3, 4],
+                            default=[2, 3],
+                            key="combo_sizes"
+                        )
+                        
+                        top_pool = mi_df_comb.head(n_top_feats)['Feature'].tolist()
+                        
                         if st.button("Find best variable combinations for this fight"):
                             from itertools import combinations
                             results = []
-                            for r in [2, 3]:
+                            for r in combo_sizes:
                                 for combo in combinations(top_pool, r):
                                     hist_sub_comb = spider_hist[list(combo)].dropna()
                                     if len(hist_sub_comb) < 2:
@@ -1068,6 +1083,7 @@ else:
                                     wr_comb = wins_comb / count_comb * 100 if count_comb > 0 else 0.0
                                     results.append({
                                         'Variables': ', '.join(combo),
+                                        'Size': r,
                                         'Count (top50)': count_comb,
                                         'Avg Sim': round(avg_sim_comb, 1),
                                         'Composite': round(composite_comb, 1),
