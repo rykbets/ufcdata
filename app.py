@@ -8,10 +8,8 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
-from sklearn.pipeline import Pipeline
 from sklearn.metrics import log_loss, brier_score_loss
 from sklearn.feature_selection import mutual_info_classif
-from sklearn.inspection import permutation_importance
 from sklearn.ensemble import RandomForestClassifier
 from scipy.spatial.distance import cdist
 
@@ -20,7 +18,7 @@ st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 # -----------------------------------------------
 # LOAD DATA
 # -----------------------------------------------
-PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"   # replace if needed
+PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"   # replace with your new file ID
 
 @st.cache_data
 def load_data():
@@ -28,76 +26,35 @@ def load_data():
     return pd.read_parquet("data.parquet")
 
 data = load_data()
-
-# Apply 2015+ filter
 if 'FightDate' in data.columns:
     data = data[data['FightDate'] >= '2015-01-01'].copy()
-
 original_data = data.copy()
 
-# -----------------------------------------------
-# HELPER FUNCTIONS
-# -----------------------------------------------
+# Helper functions
 def normalize_title_col(series):
-    if series is None:
-        return pd.Series('', index=series.index)
+    if series is None: return pd.Series('', index=series.index)
     return series.astype(str).str.strip().str.lower()
 
 def get_diff_range(df, col_name):
-    if col_name not in df.columns:
-        return -1.0, 1.0
+    if col_name not in df.columns: return -1.0, 1.0
     vals = df[col_name].dropna()
-    if len(vals) == 0:
-        return -1.0, 1.0
+    if len(vals) == 0: return -1.0, 1.0
     return float(vals.min()), float(vals.max())
 
 def get_first_col(df, col_name):
-    if col_name not in df.columns:
-        return np.full(len(df), np.nan)
+    if col_name not in df.columns: return np.full(len(df), np.nan)
     sub = df[col_name]
     if isinstance(sub, pd.DataFrame):
         return sub.iloc[:, 0].to_numpy(dtype=np.float64, na_value=np.nan)
     return pd.to_numeric(sub, errors='coerce').to_numpy(dtype=np.float64)
 
-# -----------------------------------------------
-# FEATURE LISTS
-# -----------------------------------------------
-adjperf_diff_cols = [c for c in data.columns if c.endswith('_diff') and c.startswith('adjperf_')]
-base_cols = [
-    'Age', 'AgeDiff', 'HeightDiff', 'ReachDiff',
-    'DaysSincePrev', 'DaysSincePrev_diff', 'Avg3DaysGap_diff',
-    'FightNumber', 'FightNumber_diff',
-    'FighterOddsNum', 'PrevFighterOddsNum',
-    'CareerWinPct_diff', 'Prev7WinPct',
-    # Raw ratings
-    'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecayDiff',
-    'FighterMasseyFinishDecay', 'OpponentMasseyFinishDecay', 'MasseyFinishDecayDiff',
-    'FighterMasseyStrikeDecay', 'OpponentMasseyStrikeDecay', 'MasseyStrikeDecayDiff',
-    'FighterMasseyCtrlDecay', 'OpponentMasseyCtrlDecay', 'MasseyCtrlDecayDiff',
-    'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecayDiff',
-    # Rolling 7‑fight averages
-    'FighterColleyDecay_avg7', 'Opponent_FighterColleyDecay_avg7', 'FighterColleyDecay_avg7_diff',
-    'FighterMasseyFinishDecay_avg7', 'Opponent_FighterMasseyFinishDecay_avg7', 'FighterMasseyFinishDecay_avg7_diff',
-    'FighterMasseyStrikeDecay_avg7', 'Opponent_FighterMasseyStrikeDecay_avg7', 'FighterMasseyStrikeDecay_avg7_diff',
-    'FighterMasseyCtrlDecay_avg7', 'Opponent_FighterMasseyCtrlDecay_avg7', 'FighterMasseyCtrlDecay_avg7_diff',
-    'FighterWeightedMasseyDecay_avg7', 'Opponent_FighterWeightedMasseyDecay_avg7', 'FighterWeightedMasseyDecay_avg7_diff'
-]
-
-new_features = []
-for col in base_cols:
-    if col in data.columns:
-        new_features.append(col)
-for col in adjperf_diff_cols:
-    if col in data.columns:
-        new_features.append(col)
-new_features = list(dict.fromkeys(new_features))
-
-# All numeric features (for model selection)
+# Build feature lists dynamically
+base_cols = [c for c in data.columns if c not in ['FightID','Fighter','Opponent','FightDate','Win?','Method','Round',
+                                                    'DetailedResult','Fight','FightDurationMinutes']]
+new_features = list(dict.fromkeys(base_cols))
 numeric_features = [c for c in new_features if np.issubdtype(data[c].dtype, np.number)]
 
-# -----------------------------------------------
-# SESSION STATE INIT
-# -----------------------------------------------
+# Session state init
 for key, default in [
     ('lr_model', None), ('calibrated_knn', None), ('scaler', None),
     ('X_train', None), ('y_train_knn', None),
@@ -110,7 +67,6 @@ for key, default in [
     if key not in st.session_state:
         st.session_state[key] = default
 
-# Default feature selections: first 3 numeric features
 if len(numeric_features) >= 3:
     if not st.session_state.lr_feature_names:
         st.session_state.lr_feature_names = numeric_features[:3]
@@ -118,7 +74,7 @@ if len(numeric_features) >= 3:
         st.session_state.knn_feature_names = numeric_features[:3]
 
 # -----------------------------------------------
-# SIDEBAR FILTERS (MAIN)
+# SIDEBAR FILTERS
 # -----------------------------------------------
 st.sidebar.title("Filters")
 
@@ -212,7 +168,7 @@ new_wc = st.sidebar.checkbox("New Weight Class", key="filter_new_wc") if 'IsNewW
 prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight_global")
 recent_window = st.sidebar.slider("Recent fights window", 1, 100, 50, key="recent_win_global")
 
-# ---- Model configuration ----
+# Model feature selections
 st.sidebar.header("Model Features")
 lr_features = st.sidebar.multiselect(
     "LR features (up to 8)", numeric_features,
@@ -359,7 +315,6 @@ def train_models_cached(df, lr_feats, knn_feats, k_knn):
         'X_train': None, 'y_train_knn': None,
         'y_train_lr': None, 'X_train_lr': None
     }
-
     # LR
     if lr_feats and all(c in df.columns for c in lr_feats):
         hist = df[df['Win?'].isin(['Yes','No'])].copy()
@@ -409,13 +364,7 @@ def train_models_cached(df, lr_feats, knn_feats, k_knn):
 
     return result
 
-train_result = train_models_cached(
-    filtered,
-    st.session_state.lr_feature_names,
-    st.session_state.knn_feature_names,
-    st.session_state.knn_model_k
-)
-
+train_result = train_models_cached(filtered, st.session_state.lr_feature_names, st.session_state.knn_feature_names, st.session_state.knn_model_k)
 st.session_state.lr_model = train_result['lr_model']
 st.session_state.lr_train_status = train_result['lr_train_status']
 st.session_state.y_train_lr = train_result.get('y_train_lr')
@@ -450,7 +399,7 @@ col2.metric("Wins", wins)
 col3.metric("Win Rate", f"{win_rate:.1f}%")
 
 # -----------------------------------------------
-# UPCOMING FIGHT MATCHUP (FULL STATS TABLE)
+# UPCOMING FIGHT MATCHUP (with full table & top‑5 diffs)
 # -----------------------------------------------
 st.header("Upcoming Fight Matchup")
 lr_status = st.session_state.lr_train_status
@@ -477,69 +426,43 @@ if not upcoming_display.empty:
             st.session_state.selected_fight_row = f1
             st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
 
-            # Full stats table (same as before)
+            # Full stats table
             exclude = ['FightID','Fighter','Opponent','FightDate','Win?','Method','Round',
                        'DetailedResult','Fight','FightDurationMinutes',
                        'Opponent_FightNumber','Age_opp','Height_opp','Reach_opp',
                        'Opponent_Hometown','Opponent_DaysSincePrev','Opponent_Avg3DaysGap',
                        'Opponent_CareerWinPct','is_win','is_loss','cum_wins','cum_fights']
             opp_prefixes = ['Opponent_', 'Def_']
-            stat_cols = []
-            for c in f1.index:
-                if c in exclude:
-                    continue
-                if any(c.startswith(p) for p in opp_prefixes):
-                    continue
-                stat_cols.append(c)
+            stat_cols = [c for c in f1.index if c not in exclude and not any(c.startswith(p) for p in opp_prefixes)]
 
-            identity_cols = ['WC','Title','ScheduledRounds','Stance','Country','HometownFighter','EventCountry']
-            physical_cols = ['Age','Height','Reach','AgeDiff','HeightDiff','ReachDiff']
-            fight_history_cols = ['FightNumber','DaysSincePrev','Avg3DaysGap','Prev7WinPct','CareerWinPct',
-                                  'DaysSincePrev_diff','Avg3DaysGap_diff','CareerWinPct_diff','FightNumber_diff']
-            odds_cols = ['FighterOddsNum','PrevFighterOddsNum']
-            rating_cols_raw = ['FighterColleyDecay','FighterMasseyFinishDecay','FighterMasseyStrikeDecay',
-                               'FighterMasseyCtrlDecay','FighterWeightedMasseyDecay']
-            rating_diff_cols = ['ColleyDecayDiff','MasseyFinishDecayDiff','MasseyStrikeDecayDiff',
-                                'MasseyCtrlDecayDiff','WeightedMasseyDecayDiff']
-            rating_avg7_cols = ['FighterColleyDecay_avg7','FighterMasseyFinishDecay_avg7','FighterMasseyStrikeDecay_avg7',
-                                'FighterMasseyCtrlDecay_avg7','FighterWeightedMasseyDecay_avg7']
-            rating_avg7_diff_cols = ['FighterColleyDecay_avg7_diff','FighterMasseyFinishDecay_avg7_diff',
-                                     'FighterMasseyStrikeDecay_avg7_diff','FighterMasseyCtrlDecay_avg7_diff',
-                                     'FighterWeightedMasseyDecay_avg7_diff']
-            outcome_cols = ['Prev1_Outcome_raw','Prev2_Outcome_raw','Prev3_Outcome_raw',
-                            'Career1_Outcome_raw','Career2_Outcome_raw','Career3_Outcome_raw',
-                            'Prev1_Outcome_skipNC','Prev2_Outcome_skipNC','Prev3_Outcome_skipNC',
-                            'Career1_Outcome_skipNC','Career2_Outcome_skipNC','Career3_Outcome_skipNC']
-            adjperf_cols_all = [c for c in stat_cols if c.startswith('adjperf_') and not c.endswith('_diff')]
-            adjperf_diff_cols_all = [c for c in stat_cols if c.startswith('adjperf_') and c.endswith('_diff')]
-            other_cols = ['Prev1_Title','IsNewWeightClass','PrevFighterOddsNum']
-
-            sections = [
-                ("Identity", identity_cols),
-                ("Physical", physical_cols),
-                ("Fight History", fight_history_cols),
-                ("Odds", odds_cols),
-                ("Ratings (Raw)", rating_cols_raw + rating_diff_cols),
-                ("Ratings (7‑Fight Avg)", rating_avg7_cols + rating_avg7_diff_cols),
-                ("Previous Outcomes (raw)", outcome_cols),
-                ("Adjusted Performance (per min)", adjperf_cols_all),
-                ("Adjusted Performance Diffs", adjperf_diff_cols_all),
-                ("Other", other_cols)
-            ]
+            # Organize into sections
+            sections = {
+                "Identity": [c for c in stat_cols if c in ['WC','Title','ScheduledRounds','Stance','Country','HometownFighter','EventCountry']],
+                "Physical": [c for c in stat_cols if c in ['Age','Height','Reach','AgeDiff','HeightDiff','ReachDiff']],
+                "Fight History": [c for c in stat_cols if c in ['FightNumber','DaysSincePrev','Avg3DaysGap','Prev7WinPct','CareerWinPct',
+                                       'DaysSincePrev_diff','Avg3DaysGap_diff','CareerWinPct_diff','FightNumber_diff']],
+                "Normalized Simple Stats": [c for c in stat_cols if c.startswith('adj_') and not c.endswith('_diff') and 'adjperf' not in c],
+                "Odds": [c for c in stat_cols if c in ['FighterOddsNum','PrevFighterOddsNum']],
+                "Ratings (Raw)": [c for c in stat_cols if 'Colley' in c or 'Massey' in c and 'avg7' not in c],
+                "Ratings (7‑Fight Avg)": [c for c in stat_cols if 'avg7' in c],
+                "Offensive Adjperf": [c for c in stat_cols if c.startswith('adjperf_') and not c.startswith('Def_')],
+                "Defensive Adjperf": [c for c in stat_cols if c.startswith('Def_adjperf_')],
+                "Accuracy Adjperf": [c for c in stat_cols if 'Acc' in c and ('adjperf' in c or 'Def_adjperf' in c)],
+                "Ratio Adjperf": [c for c in stat_cols if '%' in c and ('adjperf' in c or 'Def_adjperf' in c)],
+                "Other Adjperf": [c for c in stat_cols if c.startswith('adjperf_') and 'Ctrl' in c or 'KD' in c],
+                "Outcomes": [c for c in stat_cols if 'Outcome' in c],
+                "Other": [c for c in stat_cols if c in ['Prev1_Title','IsNewWeightClass','PrevFighterOddsNum']]
+            }
 
             rows = []
-            for section_name, cols in sections:
+            for sec_name, cols in sections.items():
                 present = [c for c in cols if c in f1.index]
-                if not present:
-                    continue
-                rows.append({"Stat": f"--- {section_name} ---", f1['Fighter']: "", f2['Fighter']: ""})
+                if not present: continue
+                rows.append({"Stat": f"--- {sec_name} ---", f1['Fighter']: "", f2['Fighter']: ""})
                 for c in present:
-                    val1 = f1[c]
-                    val2 = f2[c]
-                    if isinstance(val1, float):
-                        val1 = f"{val1:.2f}" if pd.notna(val1) else ""
-                    if isinstance(val2, float):
-                        val2 = f"{val2:.2f}" if pd.notna(val2) else ""
+                    val1 = f1[c]; val2 = f2[c]
+                    if isinstance(val1, float): val1 = f"{val1:.2f}" if pd.notna(val1) else ""
+                    if isinstance(val2, float): val2 = f"{val2:.2f}" if pd.notna(val2) else ""
                     rows.append({"Stat": c, f1['Fighter']: val1, f2['Fighter']: val2})
 
             df_stats = pd.DataFrame(rows)
@@ -567,14 +490,27 @@ if not upcoming_display.empty:
                     st.write(f"**KNN:** {prob:.1%} | Shrunken: {shrunk:.1%}")
                 except Exception as e: st.error(f"KNN prediction error: {e}")
             else: st.info("KNN model not trained.")
+
+            # Top 5 Differentials
+            st.subheader("Top 5 Differentials")
+            for fighter, row in [(f1['Fighter'], f1), (f2['Fighter'], f2)]:
+                diffs = {}
+                for c in row.index:
+                    if c.endswith('_diff') and pd.notna(row[c]):
+                        diffs[c] = abs(row[c])
+                top5 = sorted(diffs.items(), key=lambda x: x[1], reverse=True)[:5]
+                if top5:
+                    st.write(f"**{fighter}**")
+                    for col, _ in top5:
+                        st.write(f"{col}: {row[col]:+.2f}" if isinstance(row[col], float) else f"{col}: {row[col]}")
+                else:
+                    st.write(f"**{fighter}**: No differentials available.")
         else:
             st.warning("Fight data incomplete (expected 2 rows).")
 else:
     st.info("No upcoming fights with current filters.")
 
-# -----------------------------------------------
-# KNN neighbors slider (still needed)
-# -----------------------------------------------
+# KNN neighbors slider
 st.sidebar.subheader("KNN Settings")
 k_knn = st.sidebar.slider("KNN neighbors", 1, 20, st.session_state.knn_model_k, key="knn_slider")
 if k_knn != st.session_state.knn_model_k:
@@ -610,15 +546,13 @@ else:
             mi_df = pd.DataFrame({'Feature': feats, 'MI': mi}).sort_values('MI', ascending=False).head(20)
             fig_mi = px.bar(mi_df, x='MI', y='Feature', orientation='h',
                             title="Top 20 Mutual Information")
-            st.plotly_chart(fig_mi, use_container_width=True)
+            st.plotly_chart(fig_mi, use_container_width=True, key="mi_plot")
         else:
             st.warning("Not enough complete rows for MI.")
 
-        # ---------- Lasso (on demand) ----------
         if st.button("Compute Lasso Importance (all features)"):
             with st.spinner("Fitting LassoCV..."):
-                X_lasso = hist_imp[feats].copy()
-                y_lasso = hist_imp['Target']
+                X_lasso = hist_imp[feats].copy(); y_lasso = hist_imp['Target']
                 imp = SimpleImputer(strategy='median')
                 X_lasso_imp = imp.fit_transform(X_lasso)
                 scaler_lasso = StandardScaler()
@@ -635,16 +569,14 @@ else:
                 st.subheader("Lasso Non‑Zero Coefficients")
                 if len(coef_df) > 0:
                     fig_lasso = px.bar(coef_df.head(30), x='Coefficient', y='Feature', orientation='h',
-                                       title="Lasso Coefficients", key="lasso_plot")
-                    st.plotly_chart(fig_lasso, use_container_width=True)
+                                       title="Lasso Coefficients")
+                    st.plotly_chart(fig_lasso, use_container_width=True, key="lasso_plot")
                 else:
                     st.write("Lasso eliminated all features.")
 
-        # ---------- Random Forest (on demand) ----------
         if st.button("Compute Random Forest Importance (all features)"):
             with st.spinner("Training Random Forest..."):
-                X_rf = hist_imp[feats].copy()
-                y_rf = hist_imp['Target']
+                X_rf = hist_imp[feats].copy(); y_rf = hist_imp['Target']
                 imp = SimpleImputer(strategy='median')
                 X_rf_imp = imp.fit_transform(X_rf)
                 rf = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
@@ -652,13 +584,13 @@ else:
                 rf_imp = pd.DataFrame({'Feature': feats, 'Importance': rf.feature_importances_}).sort_values('Importance', ascending=False).head(30)
                 st.subheader("Random Forest Feature Importance (Gini)")
                 fig_rf = px.bar(rf_imp, x='Importance', y='Feature', orientation='h',
-                                title="Random Forest Feature Importance", key="rf_plot")
-                st.plotly_chart(fig_rf, use_container_width=True)
+                                title="Random Forest Feature Importance")
+                st.plotly_chart(fig_rf, use_container_width=True, key="rf_plot")
     else:
         st.warning("No numeric features.")
 
 # -----------------------------------------------
-# FIGHT SIMILARITY (INDEPENDENT FILTERS – NO COMBO BUILDER)
+# FIGHT SIMILARITY (INDEPENDENT FILTERS – GROUPED)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 st.write("These filters are separate from the main sidebar and do not affect the dashboard above.")
@@ -733,7 +665,7 @@ with st.expander("Similarity Filters", expanded=True):
             min_wmd, max_wmd = get_diff_range(original_data, 'WeightedMasseyDecayDiff')
             spider_wmd_range = st.slider("WeightedMasseyDecayDiff range", min_wmd, max_wmd, (min_wmd, max_wmd), step=0.01, key="spider_wmd")
 
-# Build spider mask (same as before, but without combo builder)
+# Build spider mask
 spider_mask = pd.Series(True, index=original_data.index)
 if spider_wc: spider_mask &= original_data['WC'].isin(spider_wc)
 if spider_stance: spider_mask &= original_data['Stance'].isin(spider_stance)
@@ -749,6 +681,7 @@ if spider_prev_title != "All" and 'Prev1_Title' in original_data.columns:
 if spider_opp_prev_title != "All" and 'Opponent_Prev1_Title' in original_data.columns:
     spider_mask &= normalize_title_col(original_data['Opponent_Prev1_Title']) == spider_opp_prev_title.lower()
 
+# Numeric filters with NaN keep
 def spider_add_filter(condition, col_name):
     if condition is None: return None
     if col_name in original_data.columns:
