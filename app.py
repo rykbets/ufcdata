@@ -955,8 +955,11 @@ else:
     if spider_upcoming.empty:
         st.warning("No upcoming fight has both fighters after similarity filters.")
     else:
-        sim_features = [c for c in new_features if c in spider_data.columns and c not in ['FightNumber', 'FightNumber_diff']]
-        sim_features = [c for c in sim_features if c not in ['Win?', 'Method', 'Round', 'Title']]
+        sim_features = [c for c in new_features if c in spider_data.columns and c not in ['Win?', 'Method', 'Round', 'Title']]
+        if 'Opponent_FightNumber' in spider_data.columns:
+            sim_features.append('Opponent_FightNumber')
+        # Remove duplicates, keep order
+        sim_features = list(dict.fromkeys(sim_features))
         if not sim_features:
             st.warning("No numeric features for similarity.")
         else:
