@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import re
 import itertools
 import gdown
+import hashlib
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.calibration import CalibratedClassifierCV
@@ -31,7 +32,7 @@ def load_data():
 
 data = load_data()
 
-# Apply 2015+ filter (as originally present in the data)
+# Apply 2015+ filter
 if 'FightDate' in data.columns:
     data = data[data['FightDate'] >= '2015-01-01'].copy()
 
@@ -132,8 +133,8 @@ with st.sidebar.expander("General", expanded=True):
     country = st.multiselect("Country", sorted(data['Country'].dropna().unique()), key="filter_country") if 'Country' in data.columns else []
     sched_rounds = st.multiselect("Scheduled Rounds", sorted(data['ScheduledRounds'].dropna().unique()), key="filter_sched") if 'ScheduledRounds' in data.columns else []
     title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"], key="filter_titlefight") if 'Title' in data.columns else "All"
-    hometown = st.selectbox("Hometown vs Event Country",
-                            ["All", "Yes (home country)", "No (away)"], key="filter_hometown") if 'HometownFighter' in data.columns and 'EventCountry' in data.columns else "All"
+    hometown_fighter = st.multiselect("Hometown (Fighter)", sorted(data['HometownFighter'].dropna().unique()), key="filter_hometown_fighter") if 'HometownFighter' in data.columns else []
+    opp_hometown = st.multiselect("Opponent Hometown", sorted(data['Opponent_Hometown'].dropna().unique()), key="filter_opp_hometown") if 'Opponent_Hometown' in data.columns else []
     event_country = st.multiselect("Event Country", sorted(data['EventCountry'].dropna().unique()), key="filter_event") if 'EventCountry' in data.columns else []
 
 with st.sidebar.expander("Fight Numbers", expanded=False):
@@ -218,34 +219,27 @@ recent_window = st.sidebar.slider("Recent fights window", 1, 100, 50, key="recen
 mask = pd.Series(True, index=data.index)
 
 def add_filter(condition, keep_nan=False, col_name=None):
-    """Apply condition if not None. Optionally keep rows where column is NaN."""
     if condition is None:
         return None
     if keep_nan and col_name and col_name in data.columns:
         return condition | data[col_name].isna()
     return condition
 
-# Categorical filters (only if selections are made)
 if wc: mask &= data['WC'].isin(wc)
 if stance: mask &= data['Stance'].isin(stance)
 if country: mask &= data['Country'].isin(country)
 if sched_rounds: mask &= data['ScheduledRounds'].isin(sched_rounds)
 if title_fight != "All": mask &= data['Title'] == title_fight
-if hometown != "All":
-    if hometown == "Yes (home country)":
-        mask &= data['HometownFighter'] == data['EventCountry']
-    else:
-        mask &= data['HometownFighter'] != data['EventCountry']
+if hometown_fighter: mask &= data['HometownFighter'].isin(hometown_fighter)
+if opp_hometown: mask &= data['Opponent_Hometown'].isin(opp_hometown)
 if event_country: mask &= data['EventCountry'].isin(event_country)
 if new_wc and 'IsNewWeightClass' in data.columns: mask &= data['IsNewWeightClass'] == True
 
-# Title filters
 if prev_title != "All" and 'Prev1_Title' in data.columns:
     mask &= normalize_title_col(data['Prev1_Title']) == prev_title.lower()
 if opp_prev_title != "All" and 'Opponent_Prev1_Title' in data.columns:
     mask &= normalize_title_col(data['Opponent_Prev1_Title']) == opp_prev_title.lower()
 
-# Numeric filters – keep rows with NaN values
 if 'FightNumber' in data.columns:
     mask &= add_filter((data['FightNumber'] >= fn_min) & (data['FightNumber'] <= fn_max), keep_nan=True, col_name='FightNumber')
 if 'Opponent_FightNumber' in data.columns:
@@ -268,13 +262,11 @@ for col, (cmin, cmax) in [
     if col in data.columns:
         mask &= add_filter((data[col] >= cmin) & (data[col] <= cmax), keep_nan=True, col_name=col)
 
-# Previous outcomes (exact matches)
 for col, val in [(prev1_col, prev1), (prev2_col, prev2), (prev3_col, prev3),
                  (career1_col, career1), (career2_col, career2), (career3_col, career3)]:
     if val and col in data.columns:
         mask &= data[col].isin(val)
 
-# Opponent previous outcomes (shifted)
 for shift, wlist in [(1, opp_prev1), (2, opp_prev2), (3, opp_prev3)]:
     col = f'Opponent_Prev{shift}_Outcome_raw'
     if wlist and col in data.columns:
@@ -285,12 +277,10 @@ for shift, wlist in [(1, opp_prev1), (2, opp_prev2), (3, opp_prev3)]:
         else:
             mask &= data[col].isin(wlist)
 
-# Opponent career outcomes
 for col, val in [(opp_career1_col, opp_career1), (opp_career2_col, opp_career2), (opp_career3_col, opp_career3)]:
     if val and col in data.columns:
         mask &= data[col].isin(val)
 
-# Ratings (checkbox + slider)
 if use_colley and 'ColleyDecayDiff' in data.columns:
     mask &= add_filter((data['ColleyDecayDiff'] >= colley_range[0]) & (data['ColleyDecayDiff'] <= colley_range[1]), keep_nan=True, col_name='ColleyDecayDiff')
 if use_massey and 'MasseyDecayDiff' in data.columns:
@@ -340,63 +330,89 @@ color_map = {
 }
 
 # -----------------------------------------------
-# MODEL TRAINING
+# CACHED MODEL TRAINING
 # -----------------------------------------------
-def train_models():
-    x_lr = st.session_state.x_lr; y_lr = st.session_state.y_lr; z_lr = st.session_state.z_lr
-    x_knn = st.session_state.x_knn; y_knn = st.session_state.y_knn; z_knn = st.session_state.z_knn
-    k_knn = st.session_state.knn_model_k
+@st.cache_data(show_spinner="Training models...")
+def train_models_cached(df, x_lr, y_lr, z_lr, x_knn, y_knn, z_knn, k_knn):
+    """Train LR and KNN models and return a dict with results."""
+    result = {
+        'lr_model': None, 'lr_train_status': 'LR features not set.',
+        'lr_feature_names': [],
+        'calibrated_knn': None, 'scaler': None,
+        'knn_train_status': 'KNN features not set.',
+        'knn_feature_names': [],
+        'X_train': None, 'y_train_knn': None,
+        'y_train_lr': None, 'X_train_lr': None
+    }
 
     # LR
-    if x_lr and y_lr and z_lr and all(c in filtered.columns for c in [x_lr, y_lr, z_lr]):
-        hist = filtered[filtered['Win?'].isin(['Yes','No'])].copy()
+    if x_lr and y_lr and z_lr and all(c in df.columns for c in [x_lr, y_lr, z_lr]):
+        hist = df[df['Win?'].isin(['Yes','No'])].copy()
         sub = hist[[x_lr, y_lr, z_lr, 'Win?']].dropna()
         if len(sub) >= 10 and sub['Win?'].nunique() == 2:
             try:
                 sub['target'] = (sub['Win?'] == 'Yes').astype(int)
-                X = sub[[x_lr, y_lr, z_lr]].values; y = sub['target'].values
+                X = sub[[x_lr, y_lr, z_lr]].values
+                y = sub['target'].values
                 lr = LogisticRegression(max_iter=1000).fit(X, y)
-                st.session_state.lr_model = lr
-                st.session_state.lr_train_status = f"LR trained on {len(sub)} fights."
-                st.session_state.y_train_lr = y; st.session_state.X_train_lr = X
-                st.session_state.lr_feature_names = [x_lr, y_lr, z_lr]
+                result['lr_model'] = lr
+                result['lr_train_status'] = f"LR trained on {len(sub)} fights."
+                result['y_train_lr'] = y
+                result['X_train_lr'] = X
+                result['lr_feature_names'] = [x_lr, y_lr, z_lr]
             except Exception as e:
-                st.session_state.lr_model = None
-                st.session_state.lr_train_status = f"LR error: {e}"
+                result['lr_train_status'] = f"LR error: {e}"
         else:
-            st.session_state.lr_model = None
-            st.session_state.lr_train_status = "LR needs ≥10 rows with both Win/Loss."
-    else:
-        st.session_state.lr_model = None
-        st.session_state.lr_train_status = "LR features not set."
+            result['lr_train_status'] = "LR needs ≥10 rows with both Win/Loss."
 
     # KNN
-    if x_knn and y_knn and z_knn and all(c in filtered.columns for c in [x_knn, y_knn, z_knn]):
-        hist = filtered[filtered['Win?'].isin(['Yes','No'])].copy()
+    if x_knn and y_knn and z_knn and all(c in df.columns for c in [x_knn, y_knn, z_knn]):
+        hist = df[df['Win?'].isin(['Yes','No'])].copy()
         c1 = get_first_col(hist, x_knn); c2 = get_first_col(hist, y_knn); c3 = get_first_col(hist, z_knn)
         win_vals = (hist['Win?'] == 'Yes').values
         train_df = pd.DataFrame({'f1': c1, 'f2': c2, 'f3': c3, 'Win?': win_vals}).dropna()
         if len(train_df) >= 10 and train_df['Win?'].nunique() == 2:
             try:
-                X = train_df[['f1','f2','f3']].values.astype(np.float64); y = train_df['Win?'].astype(int).values
-                scaler = StandardScaler(); X_scaled = scaler.fit_transform(X)
+                X = train_df[['f1','f2','f3']].values.astype(np.float64)
+                y = train_df['Win?'].astype(int).values
+                scaler = StandardScaler()
+                X_scaled = scaler.fit_transform(X)
                 base_knn = KNeighborsClassifier(n_neighbors=k_knn, weights='distance')
                 calibrated = CalibratedClassifierCV(base_knn, method='sigmoid', cv=5).fit(X_scaled, y)
-                st.session_state.calibrated_knn = calibrated; st.session_state.scaler = scaler
-                st.session_state.X_train = X; st.session_state.y_train_knn = y
-                st.session_state.knn_train_status = f"KNN trained on {len(train_df)} fights."
-                st.session_state.knn_feature_names = [x_knn, y_knn, z_knn]
+                result['calibrated_knn'] = calibrated
+                result['scaler'] = scaler
+                result['X_train'] = X
+                result['y_train_knn'] = y
+                result['knn_train_status'] = f"KNN trained on {len(train_df)} fights."
+                result['knn_feature_names'] = [x_knn, y_knn, z_knn]
             except Exception as e:
-                st.session_state.calibrated_knn = None
-                st.session_state.knn_train_status = f"KNN error: {e}"
+                result['knn_train_status'] = f"KNN error: {e}"
         else:
-            st.session_state.calibrated_knn = None
-            st.session_state.knn_train_status = "KNN needs ≥10 rows with both Win/Loss."
-    else:
-        st.session_state.calibrated_knn = None
-        st.session_state.knn_train_status = "KNN features not set."
+            result['knn_train_status'] = "KNN needs ≥10 rows with both Win/Loss."
 
-train_models()
+    return result
+
+# Get current feature selections
+x_lr = st.session_state.x_lr; y_lr = st.session_state.y_lr; z_lr = st.session_state.z_lr
+x_knn = st.session_state.x_knn; y_knn = st.session_state.y_knn; z_knn = st.session_state.z_knn
+k_knn = st.session_state.knn_model_k
+
+# Train models (cached)
+train_result = train_models_cached(filtered, x_lr, y_lr, z_lr, x_knn, y_knn, z_knn, k_knn)
+
+# Update session state
+st.session_state.lr_model = train_result['lr_model']
+st.session_state.lr_train_status = train_result['lr_train_status']
+st.session_state.lr_feature_names = train_result['lr_feature_names']
+st.session_state.y_train_lr = train_result.get('y_train_lr')
+st.session_state.X_train_lr = train_result.get('X_train_lr')
+
+st.session_state.calibrated_knn = train_result['calibrated_knn']
+st.session_state.scaler = train_result['scaler']
+st.session_state.knn_train_status = train_result['knn_train_status']
+st.session_state.knn_feature_names = train_result['knn_feature_names']
+st.session_state.X_train = train_result['X_train']
+st.session_state.y_train_knn = train_result['y_train_knn']
 
 # Compute overall/recent win rates
 hist_for_wr = filtered[filtered['Win?'].isin(['Yes','No'])].copy()
@@ -511,7 +527,8 @@ if len(three_d_features) >= 3:
         z_lr = st.selectbox("Z (LR)", three_d_features, index=three_d_features.index(st.session_state.z_lr) if st.session_state.z_lr in three_d_features else 2, key="lr_z")
     if (x_lr != st.session_state.x_lr or y_lr != st.session_state.y_lr or z_lr != st.session_state.z_lr):
         st.session_state.x_lr, st.session_state.y_lr, st.session_state.z_lr = x_lr, y_lr, z_lr
-        train_models(); st.rerun()
+        # Will retrain via cache automatically on next run
+        st.rerun()
 
     plot_data = filtered[[x_lr, y_lr, z_lr, 'DetailedResult', 'Fight']].dropna()
     if len(plot_data) >= 10:
@@ -521,7 +538,7 @@ if len(three_d_features) >= 3:
         st.warning("Not enough data for 3D LR plot.")
 
     # LR metrics
-    if st.session_state.lr_model and hasattr(st.session_state, 'y_train_lr'):
+    if st.session_state.lr_model and hasattr(st.session_state, 'y_train_lr') and st.session_state.y_train_lr is not None:
         X_lr = st.session_state.X_train_lr; y_true = st.session_state.y_train_lr
         if X_lr is not None and len(X_lr) > 0:
             y_prob = st.session_state.lr_model.predict_proba(X_lr)[:,1]
@@ -531,7 +548,7 @@ if len(three_d_features) >= 3:
             col_m2.metric("LR Brier", f"{bs:.3f}")
             col_m3.metric("Overall Win%", f"{st.session_state.overall_wr:.1f}%")
 
-    # LR combo builder (simplified, kept from original)
+    # LR combo builder
     st.subheader("LR 3‑Variable Combinations (Cross‑Validated Brier)")
     candidates = [c for c in combo_candidates if c in data.columns and c != 'FighterOddsNum']
     if len(candidates) >= 3:
@@ -586,7 +603,7 @@ if len(three_d_features) >= 3:
         z_knn = st.selectbox("Z (KNN)", three_d_features, index=three_d_features.index(st.session_state.z_knn) if st.session_state.z_knn in three_d_features else 2, key="knn_z")
     if (x_knn != st.session_state.x_knn or y_knn != st.session_state.y_knn or z_knn != st.session_state.z_knn):
         st.session_state.x_knn, st.session_state.y_knn, st.session_state.z_knn = x_knn, y_knn, z_knn
-        train_models(); st.rerun()
+        st.rerun()
 
     plot_data_knn = filtered[[x_knn, y_knn, z_knn, 'DetailedResult', 'Fight']].dropna()
     if len(plot_data_knn) >= 10:
@@ -598,9 +615,9 @@ if len(three_d_features) >= 3:
     k_knn = st.slider("KNN neighbors", 1, 20, st.session_state.knn_model_k, key="knn_slider")
     if k_knn != st.session_state.knn_model_k:
         st.session_state.knn_model_k = k_knn
-        train_models(); st.rerun()
+        st.rerun()
 
-    # KNN combo builder (simplified)
+    # KNN combo builder
     st.subheader("KNN 3‑Variable Combinations (Cross‑Validated Brier)")
     candidates_knn = [c for c in combo_candidates if c in data.columns and c != 'FighterOddsNum']
     if len(candidates_knn) >= 3:
@@ -672,7 +689,8 @@ with st.expander("Similarity Filters", expanded=True):
         spider_event_country = st.multiselect("Event Country", sorted(original_data['EventCountry'].dropna().unique()), key="spider_eventc") if 'EventCountry' in original_data.columns else []
     with col_sp2:
         spider_title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"], key="spider_title") if 'Title' in original_data.columns else "All"
-        spider_hometown = st.selectbox("Hometown vs Event Country", ["All", "Yes (home country)", "No (away)"], key="spider_home") if 'HometownFighter' in original_data.columns else "All"
+        spider_hometown_fighter = st.multiselect("Hometown (Fighter)", sorted(original_data['HometownFighter'].dropna().unique()), key="spider_hometown_fighter") if 'HometownFighter' in original_data.columns else []
+        spider_opp_hometown = st.multiselect("Hometown (Opponent)", sorted(original_data['Opponent_Hometown'].dropna().unique()), key="spider_opp_hometown") if 'Opponent_Hometown' in original_data.columns else []
         spider_new_wc = st.checkbox("New Weight Class", key="spider_new_wc") if 'IsNewWeightClass' in original_data.columns else False
         spider_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
 
@@ -689,11 +707,8 @@ if spider_stance: spider_mask &= original_data['Stance'].isin(spider_stance)
 if spider_country: spider_mask &= original_data['Country'].isin(spider_country)
 if spider_sched_rounds: spider_mask &= original_data['ScheduledRounds'].isin(spider_sched_rounds)
 if spider_title_fight != "All": spider_mask &= original_data['Title'] == spider_title_fight
-if spider_hometown != "All":
-    if spider_hometown == "Yes (home country)":
-        spider_mask &= original_data['HometownFighter'] == original_data['EventCountry']
-    else:
-        spider_mask &= original_data['HometownFighter'] != original_data['EventCountry']
+if spider_hometown_fighter: spider_mask &= original_data['HometownFighter'].isin(spider_hometown_fighter)
+if spider_opp_hometown: spider_mask &= original_data['Opponent_Hometown'].isin(spider_opp_hometown)
 if spider_event_country: spider_mask &= original_data['EventCountry'].isin(spider_event_country)
 if spider_new_wc and 'IsNewWeightClass' in original_data.columns: spider_mask &= original_data['IsNewWeightClass'] == True
 if spider_prev_title != "All" and 'Prev1_Title' in original_data.columns:
