@@ -153,11 +153,22 @@ with st.sidebar.expander("General", expanded=True):
     opp_hometown = st.multiselect("Opponent Hometown", sorted(data['Opponent_Hometown'].dropna().unique()), key="filter_opp_hometown") if 'Opponent_Hometown' in data.columns else []
     event_country = st.multiselect("Event Country", sorted(data['EventCountry'].dropna().unique()), key="filter_event") if 'EventCountry' in data.columns else []
 
-with st.sidebar.expander("Fight Numbers", expanded=False):
-    fn_min = st.number_input("Min Fight #", value=1, min_value=1, max_value=int(data['FightNumber'].max()), key="filter_fn_min") if 'FightNumber' in data.columns else 1
-    fn_max = st.number_input("Max Fight #", value=int(data['FightNumber'].max()), key="filter_fn_max") if 'FightNumber' in data.columns else 1000
-    ofn_min = st.number_input("Opp Min Fight #", value=1, key="filter_ofn_min") if 'Opponent_FightNumber' in data.columns else 1
-    ofn_max = st.number_input("Opp Max Fight #", value=int(data['Opponent_FightNumber'].max()), key="filter_ofn_max") if 'Opponent_FightNumber' in data.columns else 1000
+with st.sidebar.expander("Fight Numbers", expanded=True):   # always open
+    # Fighter Fight #
+    if 'FightNumber' in data.columns:
+        fn_min = st.number_input("Min Fight #", value=1, min_value=1, max_value=int(data['FightNumber'].max()), key="filter_fn_min")
+        fn_max = st.number_input("Max Fight #", value=int(data['FightNumber'].max()), key="filter_fn_max")
+    else:
+        fn_min = 1; fn_max = 1000
+        st.info("'FightNumber' column missing – filter disabled.")
+    
+    # Opponent Fight #
+    if 'Opponent_FightNumber' in data.columns:
+        ofn_min = st.number_input("Opp Min Fight #", value=1, key="filter_ofn_min")
+        ofn_max = st.number_input("Opp Max Fight #", value=int(data['Opponent_FightNumber'].max()), key="filter_ofn_max")
+    else:
+        ofn_min = 1; ofn_max = 1000
+        st.warning("'Opponent_FightNumber' column missing – filter disabled. Re‑run the data‑processing script to generate it.")
 
 with st.sidebar.expander("Career Win % Diff", expanded=False):
     if 'CareerWinPct_diff' in data.columns:
