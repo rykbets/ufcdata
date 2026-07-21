@@ -427,7 +427,7 @@ col2.metric("Wins", wins)
 col3.metric("Win Rate", f"{win_rate:.1f}%")
 
 # -----------------------------------------------
-# UPCOMING FIGHT MATCHUP
+# UPCOMING FIGHT MATCHUP (ALL STATS)
 # -----------------------------------------------
 st.header("Upcoming Fight Matchup")
 lr_status = st.session_state.lr_train_status
@@ -450,30 +450,105 @@ if not upcoming_display.empty:
     if selected_fight:
         fight_rows = upcoming_display[upcoming_display['FightID'] == selected_fight]
         if len(fight_rows) == 2:
-            f1 = fight_rows.iloc[0]; f2 = fight_rows.iloc[1]
+            f1 = fight_rows.iloc[0]
+            f2 = fight_rows.iloc[1]
             st.session_state.selected_fight_row = f1
             st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
-            colA, colB = st.columns(2)
-            with colA:
-                st.subheader(f1['Fighter'])
-                for c in ['Age','HeightDiff','ReachDiff','CareerWinPct_diff','Prev7WinPct','FighterOddsNum']:
-                    if c in f1: st.write(f"**{c}:** {f1[c]:.2f}" if isinstance(f1[c], (int,float)) else f"**{c}:** {f1[c]}")
-                adjperf_cols = [c for c in f1.index if c.startswith('adjperf_') and not c.endswith('_diff') and 'Opponent_' not in c]
-                if adjperf_cols:
-                    st.write("**Adjusted Performance**")
-                    opp_adj = {c: f1.get(f'Opponent_{c}', np.nan) for c in adjperf_cols if f'Opponent_{c}' in f1.index}
-                    df_adj = pd.DataFrame({'Fighter': [f1.get(c, np.nan) for c in adjperf_cols], 'Opponent': [opp_adj.get(c, np.nan) for c in adjperf_cols]}, index=adjperf_cols).T
-                    st.dataframe(df_adj)
-            with colB:
-                st.subheader(f2['Fighter'])
-                for c in ['Age','HeightDiff','ReachDiff','CareerWinPct_diff','Prev7WinPct','FighterOddsNum']:
-                    if c in f2: st.write(f"**{c}:** {f2[c]:.2f}" if isinstance(f2[c], (int,float)) else f"**{c}:** {f2[c]}")
-                adjperf_cols = [c for c in f2.index if c.startswith('adjperf_') and not c.endswith('_diff') and 'Opponent_' not in c]
-                if adjperf_cols:
-                    st.write("**Adjusted Performance**")
-                    opp_adj = {c: f2.get(f'Opponent_{c}', np.nan) for c in adjperf_cols if f'Opponent_{c}' in f2.index}
-                    df_adj = pd.DataFrame({'Fighter': [f2.get(c, np.nan) for c in adjperf_cols], 'Opponent': [opp_adj.get(c, np.nan) for c in adjperf_cols]}, index=adjperf_cols).T
-                    st.dataframe(df_adj)
+
+            # Define columns we want to show (exclude internal/opponent-duplicate columns)
+            exclude = ['FightID','Fighter','Opponent','FightDate','Win?','Method','Round',
+                       'DetailedResult','Fight','FightDurationMinutes',
+                       'Opponent_FightNumber','Age_opp','Height_opp','Reach_opp',
+                       'Opponent_Hometown','Opponent_DaysSincePrev','Opponent_Avg3DaysGap',
+                       'Opponent_CareerWinPct','is_win','is_loss','cum_wins','cum_fights',
+                       'Opponent_']
+            # Prefixes for opponent-specific columns (we'll filter them out)
+            opp_prefixes = ['Opponent_', 'Def_']
+            stat_cols = []
+            for c in f1.index:
+                if c in exclude:
+                    continue
+                if any(c.startswith(p) for p in opp_prefixes):
+                    continue
+                # Keep all others (numeric, categorical)
+                stat_cols.append(c)
+
+            # Separate into sections for better readability
+            identity_cols = ['WC','Title','ScheduledRounds','Stance','Country','HometownFighter','EventCountry']
+            physical_cols = ['Age','Height','Reach','AgeDiff','HeightDiff','ReachDiff']
+            fight_history_cols = ['FightNumber','DaysSincePrev','Avg3DaysGap','Prev7WinPct','CareerWinPct',
+                                  'DaysSincePrev_diff','Avg3DaysGap_diff','CareerWinPct_diff','FightNumber_diff']
+            odds_cols = ['FighterOddsNum','PrevFighterOddsNum']
+            rating_cols = ['FighterColleyDecay','FighterMasseyDecay','FighterWeightedMasseyDecay',
+                           'ColleyDecayDiff','MasseyDecayDiff','WeightedMasseyDecayDiff']
+            outcome_cols = ['Prev1_Outcome_raw','Prev2_Outcome_raw','Prev3_Outcome_raw',
+                            'Career1_Outcome_raw','Career2_Outcome_raw','Career3_Outcome_raw',
+                            'Prev1_Outcome_skipNC','Prev2_Outcome_skipNC','Prev3_Outcome_skipNC',
+                            'Career1_Outcome_skipNC','Career2_Outcome_skipNC','Career3_Outcome_skipNC']
+            adjperf_cols_all = [c for c in stat_cols if c.startswith('adjperf_') and not c.endswith('_diff')]
+            adjperf_diff_cols_all = [c for c in stat_cols if c.startswith('adjperf_') and c.endswith('_diff')]
+            other_cols = ['Prev1_Title','IsNewWeightClass','PrevFighterOddsNum']
+
+            # Combine all in a list of categories
+            sections = [
+                ("Identity", identity_cols),
+                ("Physical", physical_cols),
+                ("Fight History", fight_history_cols),
+                ("Odds", odds_cols),
+                ("Ratings", rating_cols),
+                ("Previous Outcomes (raw)", outcome_cols),
+                ("Adjusted Performance (per min)", adjperf_cols_all),
+                ("Adjusted Performance Diffs", adjperf_diff_cols_all),
+                ("Other", other_cols)
+            ]
+
+            # Build a DataFrame with Fighter1 and Fighter2 side by side
+            rows = []
+            for section_name, cols in sections:
+                present = [c for c in cols if c in f1.index]
+                if not present:
+                    continue
+                # Add section header
+                rows.append({"Stat": f"--- {section_name} ---", f1['Fighter']: "", f2['Fighter']: ""})
+                for c in present:
+                    val1 = f1[c]
+                    val2 = f2[c]
+                    # Format numbers
+                    if isinstance(val1, float):
+                        val1 = f"{val1:.2f}" if pd.notna(val1) else ""
+                    if isinstance(val2, float):
+                        val2 = f"{val2:.2f}" if pd.notna(val2) else ""
+                    rows.append({"Stat": c, f1['Fighter']: val1, f2['Fighter']: val2})
+
+            df_stats = pd.DataFrame(rows)
+            st.dataframe(df_stats, use_container_width=True, hide_index=True)
+
+            # Model probabilities (same as before)
+            st.subheader(f"Model Win Probabilities for {f1['Fighter']}")
+            lr_model = st.session_state.lr_model; lr_feats = st.session_state.lr_feature_names
+            if lr_model and len(lr_feats) == 3:
+                vals = [f1[c] if c in f1 and pd.notna(f1[c]) else 0.0 for c in lr_feats]
+                try:
+                    prob = lr_model.predict_proba(np.array([vals]))[0,1]
+                    shrunk = (prior_weight * st.session_state.overall_wr/100 + prob) / (prior_weight + 1)
+                    st.write(f"**LR:** {prob:.1%} | Shrunken: {shrunk:.1%}")
+                except Exception as e: st.error(f"LR prediction error: {e}")
+            else: st.info("LR model not trained.")
+
+            knn_model = st.session_state.calibrated_knn; scaler = st.session_state.scaler; knn_feats = st.session_state.knn_feature_names
+            if knn_model and scaler and len(knn_feats) == 3:
+                vals = [f1[c] if c in f1 and pd.notna(f1[c]) else 0.0 for c in knn_feats]
+                try:
+                    up_scaled = scaler.transform(np.array([vals]))
+                    prob = np.clip(knn_model.predict_proba(up_scaled)[0,1], 0.1, 0.9)
+                    shrunk = (prior_weight * st.session_state.overall_wr/100 + prob) / (prior_weight + 1)
+                    st.write(f"**KNN:** {prob:.1%} | Shrunken: {shrunk:.1%}")
+                except Exception as e: st.error(f"KNN prediction error: {e}")
+            else: st.info("KNN model not trained.")
+        else:
+            st.warning("Fight data incomplete (expected 2 rows).")
+else:
+    st.info("No upcoming fights with current filters.")
 
 # -----------------------------------------------
 # 3D LR SCATTER + WIN PROBABILITY
