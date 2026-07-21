@@ -491,20 +491,21 @@ if not upcoming_display.empty:
                 except Exception as e: st.error(f"KNN prediction error: {e}")
             else: st.info("KNN model not trained.")
 
-            # Top 5 Differentials
-            st.subheader("Top 5 Differentials")
-            for fighter, row in [(f1['Fighter'], f1), (f2['Fighter'], f2)]:
-                diffs = {}
-                for c in row.index:
-                    if c.endswith('_diff') and pd.notna(row[c]):
-                        diffs[c] = abs(row[c])
-                top5 = sorted(diffs.items(), key=lambda x: x[1], reverse=True)[:5]
-                if top5:
-                    st.write(f"**{fighter}**")
-                    for col, _ in top5:
-                        st.write(f"{col}: {row[col]:+.2f}" if isinstance(row[col], float) else f"{col}: {row[col]}")
-                else:
-                    st.write(f"**{fighter}**: No differentials available.")
+            # Sections for display: only show final opp_diff for striking/grappling,
+            # and normalized simple stat diffs.
+            sections = {
+                "Identity": [c for c in stat_cols if c in ['WC','Title','ScheduledRounds','Stance','Country','HometownFighter','EventCountry']],
+                "Physical": [c for c in stat_cols if c in ['Age','Height','Reach','AgeDiff','HeightDiff','ReachDiff']],
+                "Fight History": [c for c in stat_cols if c in ['FightNumber','DaysSincePrev','Avg3DaysGap','Prev7WinPct','CareerWinPct',
+                                       'DaysSincePrev_diff','Avg3DaysGap_diff','CareerWinPct_diff','FightNumber_diff']],
+                "Normalized Simple Stats (diff)": [c for c in stat_cols if c.startswith('adj_') and c.endswith('_diff')],
+                "Odds": [c for c in stat_cols if c in ['FighterOddsNum','PrevFighterOddsNum']],
+                "Ratings (Raw)": [c for c in stat_cols if 'Colley' in c or 'Massey' in c and 'avg7' not in c],
+                "Ratings (7‑Fight Avg)": [c for c in stat_cols if 'avg7' in c],
+                "Striking & Grappling Final Differentials": [c for c in stat_cols if c.endswith('_opp_diff')],
+                "Outcomes": [c for c in stat_cols if 'Outcome' in c],
+                "Other": [c for c in stat_cols if c in ['Prev1_Title','IsNewWeightClass','PrevFighterOddsNum']]
+            }
         else:
             st.warning("Fight data incomplete (expected 2 rows).")
 else:
