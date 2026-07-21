@@ -71,7 +71,9 @@ base_cols = [
     'FighterOddsNum', 'PrevFighterOddsNum',
     'CareerWinPct_diff', 'Prev7WinPct',
     'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecayDiff',
-    'FighterMasseyDecay', 'OpponentMasseyDecay', 'MasseyDecayDiff',
+    'FighterMasseyFinishDecay', 'OpponentMasseyFinishDecay', 'MasseyFinishDecayDiff',   # was MasseyDecay
+    'FighterMasseyStrikeDecay', 'OpponentMasseyStrikeDecay', 'MasseyStrikeDecayDiff',   # new
+    'FighterMasseyCtrlDecay', 'OpponentMasseyCtrlDecay', 'MasseyCtrlDecayDiff',         # new
     'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecayDiff'
 ]
 
@@ -89,7 +91,9 @@ three_d_features = [c for c in new_features if data[c].nunique(dropna=True) >= 2
 exclude_combo = [
     'CareerWinPct_diff', 'Prev7WinPct',
     'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecayDiff',
-    'FighterMasseyDecay', 'OpponentMasseyDecay', 'MasseyDecayDiff',
+    'FighterMasseyFinishDecay', 'OpponentMasseyFinishDecay', 'MasseyFinishDecayDiff',
+    'FighterMasseyStrikeDecay', 'OpponentMasseyStrikeDecay', 'MasseyStrikeDecayDiff',
+    'FighterMasseyCtrlDecay', 'OpponentMasseyCtrlDecay', 'MasseyCtrlDecayDiff',
     'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecayDiff'
 ]
 combo_candidates = [c for c in new_features if c not in exclude_combo]
