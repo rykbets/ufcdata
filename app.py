@@ -733,24 +733,73 @@ cols = [c for c in cols if c in last20.columns]
 st.dataframe(last20[cols], use_container_width=True)
 
 # -----------------------------------------------
-# FEATURE IMPORTANCE
+# FEATURE IMPORTANCE (MI + Permutation + LR Coeffs)
 # -----------------------------------------------
-st.header("Top 20 Feature Importance")
+st.header("Top 20 Feature Importance & Model‑Specific Explanations")
 hist_imp = filtered[filtered['Win?'].isin(['Yes','No'])].copy()
-if len(hist_imp) >= 10:
+
+if len(hist_imp) < 10:
+    st.warning("Too few historical fights after filtering to compute importance.")
+else:
+    # ---------- 1. Mutual Information (all features) ----------
+    st.subheader("Mutual Information (all numeric features)")
     hist_imp['Target'] = (hist_imp['Win?'] == 'Yes').astype(int)
     feats = [c for c in three_d_features if c in hist_imp.columns]
     if feats:
-        X = hist_imp[feats].dropna()
-        if len(X) >= 10:
-            imp = mutual_info_classif(X, hist_imp.loc[X.index, 'Target'], discrete_features=False, random_state=42)
-            df_imp = pd.DataFrame({'Feature': feats, 'Mutual Information': imp}).sort_values('Mutual Information', ascending=False).head(20)
-            fig = px.bar(df_imp, x='Mutual Information', y='Feature', orientation='h', title="Top 20 Mutual Information")
-            st.plotly_chart(fig, use_container_width=True)
-        else: st.warning("Not enough complete rows for importance.")
-    else: st.warning("No numeric features.")
-else: st.warning("Too few historical fights for importance.")
+        X_mi = hist_imp[feats].dropna()
+        if len(X_mi) >= 10:
+            imputer = SimpleImputer(strategy='median')
+            X_imp = imputer.fit_transform(X_mi)
+            y_mi = hist_imp.loc[X_mi.index, 'Target']
+            mi = mutual_info_classif(X_imp, y_mi, discrete_features=False, random_state=42)
+            mi_df = pd.DataFrame({'Feature': feats, 'MI': mi}).sort_values('MI', ascending=False).head(20)
+            fig_mi = px.bar(mi_df, x='MI', y='Feature', orientation='h',
+                            title="Top 20 Mutual Information")
+            st.plotly_chart(fig_mi, use_container_width=True)
+        else:
+            st.warning("Not enough complete rows for MI.")
+    else:
+        st.warning("No numeric features for MI.")
 
+    # ---------- 2. Logistic Regression Coefficients ----------
+    if st.session_state.lr_model is not None and len(st.session_state.lr_feature_names) == 3:
+        st.subheader("Logistic Regression Coefficients (current 3‑feature model)")
+        lr_coefs = st.session_state.lr_model.coef_[0]
+        coef_df = pd.DataFrame({
+            'Feature': st.session_state.lr_feature_names,
+            'Coefficient': lr_coefs
+        }).sort_values('Coefficient', key=abs, ascending=False)
+        fig_coef = px.bar(coef_df, x='Coefficient', y='Feature', orientation='h',
+                          title="LR Coefficients (absolute value = importance, sign = direction)")
+        st.plotly_chart(fig_coef, use_container_width=True)
+    else:
+        st.info("Train an LR model (select 3 features in the LR section) to see coefficients.")
+
+    # ---------- 3. Permutation Importance (LR model) ----------
+    if (st.session_state.lr_model is not None and
+        st.session_state.X_train_lr is not None and
+        len(st.session_state.X_train_lr) > 10):
+        st.subheader("Permutation Importance (LR model, on training data)")
+        from sklearn.inspection import permutation_importance
+        X_lr = st.session_state.X_train_lr
+        y_lr = st.session_state.y_train_lr
+        # Brier score as scoring metric (lower is better)
+        result = permutation_importance(
+            st.session_state.lr_model, X_lr, y_lr,
+            n_repeats=5, random_state=42, scoring='neg_brier_score'
+        )
+        perm_df = pd.DataFrame({
+            'Feature': st.session_state.lr_feature_names,
+            'Importance (mean)': result.importances_mean,
+            'Std': result.importances_std
+        }).sort_values('Importance (mean)', ascending=False)
+        fig_perm = px.bar(perm_df, x='Importance (mean)', y='Feature',
+                          orientation='h', error_x='Std',
+                          title="Permutation Importance (LR, ↓Brier score)")
+        st.plotly_chart(fig_perm, use_container_width=True)
+        st.caption("Higher value = feature is more important for model performance. Error bars show variability across shuffles.")
+    else:
+        st.info("Train an LR model with enough data to see permutation importance.")
 # -----------------------------------------------
 # FIGHT SIMILARITY (INDEPENDENT FILTERS – GROUPED DROPDOWNS)
 # -----------------------------------------------
