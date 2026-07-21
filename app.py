@@ -483,8 +483,13 @@ if not upcoming_display.empty:
             fight_history_cols = ['FightNumber','DaysSincePrev','Avg3DaysGap','Prev7WinPct','CareerWinPct',
                                   'DaysSincePrev_diff','Avg3DaysGap_diff','CareerWinPct_diff','FightNumber_diff']
             odds_cols = ['FighterOddsNum','PrevFighterOddsNum']
-            rating_cols = ['FighterColleyDecay','FighterMasseyDecay','FighterWeightedMasseyDecay',
-                           'ColleyDecayDiff','MasseyDecayDiff','WeightedMasseyDecayDiff']
+            rating_cols = [
+                'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecayDiff',
+                'FighterMasseyFinishDecay', 'OpponentMasseyFinishDecay', 'MasseyFinishDecayDiff',
+                'FighterMasseyStrikeDecay', 'OpponentMasseyStrikeDecay', 'MasseyStrikeDecayDiff',
+                'FighterMasseyCtrlDecay', 'OpponentMasseyCtrlDecay', 'MasseyCtrlDecayDiff',
+                'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecayDiff'
+            ]
             outcome_cols = ['Prev1_Outcome_raw','Prev2_Outcome_raw','Prev3_Outcome_raw',
                             'Career1_Outcome_raw','Career2_Outcome_raw','Career3_Outcome_raw',
                             'Prev1_Outcome_skipNC','Prev2_Outcome_skipNC','Prev3_Outcome_skipNC',
