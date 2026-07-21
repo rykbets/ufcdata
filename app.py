@@ -52,7 +52,7 @@ def get_first_col(df, col_name):
 base_cols = [c for c in data.columns if c not in ['FightID','Fighter','Opponent','FightDate','Win?','Method','Round',
                                                     'DetailedResult','Fight','FightDurationMinutes']]
 new_features = list(dict.fromkeys(base_cols))
-numeric_features = [c for c in new_features if np.issubdtype(data[c].dtype, np.number)]
+numeric_features = [c for c in new_features if pd.api.types.is_numeric_dtype(data[c])]
 
 # Session state init
 for key, default in [
