@@ -605,7 +605,6 @@ if len(three_d_features) >= 3:
     st.subheader("KNN 3‑Variable Combinations (Cross‑Validated Brier)")
     candidates_knn = [c for c in combo_candidates if c in data.columns and c != 'FighterOddsNum']
     if len(candidates_knn) >= 3:
-        # Use mutual information to pick top features to reduce search space
         mi_df_knn = numerical_importance(data, candidates_knn) if 'numerical_importance' in globals() else None
         if mi_df_knn is not None and not mi_df_knn.empty:
             top_feats_knn = mi_df_knn['Feature'].tolist()[:15]  # top 15
@@ -673,7 +672,7 @@ else: st.warning("Too few historical fights for importance.")
 st.header("Fight Similarity (Independent Filters)")
 st.write("These filters are separate from the main sidebar and do not affect the dashboard above.")
 with st.expander("Similarity Filters", expanded=True):
-    # Group into sub-expanders
+    # General
     with st.expander("General", expanded=True):
         spider_wc = st.multiselect("Weight Class", sorted(original_data['WC'].dropna().unique()), key="spider_wc") if 'WC' in original_data.columns else []
         spider_stance = st.multiselect("Stance", sorted(original_data['Stance'].dropna().unique()), key="spider_stance") if 'Stance' in original_data.columns else []
@@ -684,6 +683,7 @@ with st.expander("Similarity Filters", expanded=True):
         spider_opp_hometown = st.multiselect("Opponent Hometown", sorted(original_data['Opponent_Hometown'].dropna().unique()), key="spider_opp_hometown") if 'Opponent_Hometown' in original_data.columns else []
         spider_event_country = st.multiselect("Event Country", sorted(original_data['EventCountry'].dropna().unique()), key="spider_eventc") if 'EventCountry' in original_data.columns else []
 
+    # Physical & Numbers
     with st.expander("Physical Attributes & Fight Numbers", expanded=False):
         spider_fn_min = st.number_input("Min Fight #", value=1, min_value=1, max_value=int(original_data['FightNumber'].max()), key="spider_fn_min") if 'FightNumber' in original_data.columns else 1
         spider_fn_max = st.number_input("Max Fight #", value=int(original_data['FightNumber'].max()), key="spider_fn_max") if 'FightNumber' in original_data.columns else 1000
@@ -698,10 +698,12 @@ with st.expander("Similarity Filters", expanded=True):
         spider_ddiff_min, spider_ddiff_max = st.slider("Days Since Prev Diff", int(original_data['DaysSincePrev_diff'].min()), int(original_data['DaysSincePrev_diff'].max()), (int(original_data['DaysSincePrev_diff'].min()), int(original_data['DaysSincePrev_diff'].max())), key="spider_days_diff") if 'DaysSincePrev_diff' in original_data.columns else (-1000,1000)
         spider_avg3_min, spider_avg3_max = st.slider("Avg3DaysGap Diff", int(original_data['Avg3DaysGap_diff'].min()), int(original_data['Avg3DaysGap_diff'].max()), (int(original_data['Avg3DaysGap_diff'].min()), int(original_data['Avg3DaysGap_diff'].max())), key="spider_avg3_diff") if 'Avg3DaysGap_diff' in original_data.columns else (-1000,1000)
 
+    # Odds
     with st.expander("Odds", expanded=False):
         spider_odds_min, spider_odds_max = st.slider("Fighter Odds", int(original_data['FighterOddsNum'].min()), int(original_data['FighterOddsNum'].max()), (int(original_data['FighterOddsNum'].min()), int(original_data['FighterOddsNum'].max())), step=10, key="spider_cur_odds") if 'FighterOddsNum' in original_data.columns else (-1000,1000)
         spider_podds_min, spider_podds_max = st.slider("Prev Fighter Odds", int(original_data['PrevFighterOddsNum'].min()), int(original_data['PrevFighterOddsNum'].max()), (int(original_data['PrevFighterOddsNum'].min()), int(original_data['PrevFighterOddsNum'].max())), step=10, key="spider_prev_odds") if 'PrevFighterOddsNum' in original_data.columns else (-1000,1000)
 
+    # Previous Outcomes
     with st.expander("Previous Outcomes", expanded=False):
         spider_skip_nc = st.checkbox("Skip NC outcomes", key="spider_skip_nc")
         if spider_skip_nc:
@@ -718,10 +720,13 @@ with st.expander("Similarity Filters", expanded=True):
         spider_career2 = st.multiselect("Career F2", all_outcomes_career, key="spider_career2")
         spider_career3 = st.multiselect("Career F3", all_outcomes_career, key="spider_career3")
 
+    # Other
     with st.expander("Other", expanded=False):
         spider_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
+        spider_opp_prev_title = st.selectbox("Opp Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_opp_prev_title")
         spider_new_wc = st.checkbox("New Weight Class", key="spider_new_wc") if 'IsNewWeightClass' in original_data.columns else False
 
+    # Ratings
     with st.expander("Ratings", expanded=False):
         spider_use_colley = st.checkbox("Filter ColleyDecayDiff", value=False, key="spider_use_colley")
         if spider_use_colley:
@@ -736,7 +741,7 @@ with st.expander("Similarity Filters", expanded=True):
             min_wmd, max_wmd = get_diff_range(original_data, 'WeightedMasseyDecayDiff')
             spider_wmd_range = st.slider("WeightedMasseyDecayDiff range", min_wmd, max_wmd, (min_wmd, max_wmd), step=0.01, key="spider_wmd")
 
-# Build spider mask (same as main but with spider_ prefixes)
+# Build spider mask
 spider_mask = pd.Series(True, index=original_data.index)
 if spider_wc: spider_mask &= original_data['WC'].isin(spider_wc)
 if spider_stance: spider_mask &= original_data['Stance'].isin(spider_stance)
@@ -749,6 +754,8 @@ if spider_event_country: spider_mask &= original_data['EventCountry'].isin(spide
 if spider_new_wc and 'IsNewWeightClass' in original_data.columns: spider_mask &= original_data['IsNewWeightClass'] == True
 if spider_prev_title != "All" and 'Prev1_Title' in original_data.columns:
     spider_mask &= normalize_title_col(original_data['Prev1_Title']) == spider_prev_title.lower()
+if spider_opp_prev_title != "All" and 'Opponent_Prev1_Title' in original_data.columns:
+    spider_mask &= normalize_title_col(original_data['Opponent_Prev1_Title']) == spider_opp_prev_title.lower()
 
 # Numeric filters with NaN keep
 def spider_add_filter(condition, col_name):
@@ -778,13 +785,11 @@ for col, (cmin, cmax) in [
     if col in original_data.columns:
         spider_mask &= spider_add_filter((original_data[col] >= cmin) & (original_data[col] <= cmax), col)
 
-# Outcome filters
 for col, val in [(spider_prev1_col, spider_prev1), (spider_prev2_col, spider_prev2), (spider_prev3_col, spider_prev3),
                  (spider_career1_col, spider_career1), (spider_career2_col, spider_career2), (spider_career3_col, spider_career3)]:
     if val and col in original_data.columns:
         spider_mask &= original_data[col].isin(val)
 
-# Ratings
 if spider_use_colley and 'ColleyDecayDiff' in original_data.columns:
     spider_mask &= spider_add_filter((original_data['ColleyDecayDiff'] >= spider_colley_range[0]) & (original_data['ColleyDecayDiff'] <= spider_colley_range[1]), 'ColleyDecayDiff')
 if spider_use_massey and 'MasseyDecayDiff' in original_data.columns:
@@ -840,13 +845,17 @@ else:
                         sim_df['Similarity'] = sim_scores.round(1)
                         sim_df = sim_df.sort_values('Similarity', ascending=False)
 
-                        st.subheader("Similarity Metrics")
+                        # Show total count matching filters
+                        total_hist_count = len(sim_df)
+                        st.metric("Total historical fights matching filters", total_hist_count)
+
+                        st.subheader("Similarity Metrics (Top N)")
                         n_top = st.slider("Number of top similar fights", 5, 100, 50, step=5, key="spider_top_n")
                         top_n = sim_df.head(n_top)
                         count = len(top_n); avg_sim = top_n['Similarity'].mean(); total_sim = top_n['Similarity'].sum()
                         composite = avg_sim * (count ** 0.5) / 100
                         col1, col2, col3, col4 = st.columns(4)
-                        col1.metric("Count", count); col2.metric("Avg Similarity", f"{avg_sim:.1f}%")
+                        col1.metric("Count (Top N)", count); col2.metric("Avg Similarity", f"{avg_sim:.1f}%")
                         col3.metric("Total Similarity", f"{total_sim:.1f}"); col4.metric("Composite Score", f"{composite:.1f}")
 
                         high_sim = top_n[top_n['Similarity'] >= 90]
@@ -856,7 +865,7 @@ else:
                         else:
                             st.write("No historical fights with similarity ≥ 90%.")
 
-                        fig_hist = px.histogram(sim_df, x='Similarity', nbins=20, title="Similarity Distribution")
+                        fig_hist = px.histogram(sim_df, x='Similarity', nbins=20, title="Similarity Distribution (All)")
                         st.plotly_chart(fig_hist, use_container_width=True)
                         st.subheader(f"Top {n_top} Most Similar Historical Fights")
                         st.dataframe(top_n, use_container_width=True)
