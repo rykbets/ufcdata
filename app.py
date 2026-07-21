@@ -1080,6 +1080,6 @@ else:
                             else:
                                 st.warning("Could not evaluate any combinations. Try adjusting filters.")
                         fig_hist = px.histogram(sim_df, x='Similarity', nbins=20, title="Similarity Distribution (All)")
-                        st.plotly_chart(fig_hist, use_container_width=True)
+                        st.plotly_chart(fig_hist, use_container_width=True, key="sim_hist_chart")
                         st.subheader(f"Top {n_top} Most Similar Historical Fights")
                         st.dataframe(top_n, use_container_width=True)
