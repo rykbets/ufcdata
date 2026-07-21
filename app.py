@@ -15,6 +15,8 @@ from sklearn.metrics import log_loss, brier_score_loss
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.model_selection import cross_val_predict
 from scipy.spatial.distance import cdist
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
+from sklearn.ensemble import RandomForestClassifier
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
@@ -733,73 +735,94 @@ cols = [c for c in cols if c in last20.columns]
 st.dataframe(last20[cols], use_container_width=True)
 
 # -----------------------------------------------
-# FEATURE IMPORTANCE (MI + Permutation + LR Coeffs)
+# FEATURE IMPORTANCE (MI, Lasso, Random Forest)
 # -----------------------------------------------
-st.header("Top 20 Feature Importance & Model‑Specific Explanations")
-hist_imp = filtered[filtered['Win?'].isin(['Yes','No'])].copy()
+st.header("Top 20 Feature Importance & Global Model Ranking")
 
+hist_imp = filtered[filtered['Win?'].isin(['Yes','No'])].copy()
 if len(hist_imp) < 10:
     st.warning("Too few historical fights after filtering to compute importance.")
 else:
-    # ---------- 1. Mutual Information (all features) ----------
-    st.subheader("Mutual Information (all numeric features)")
     hist_imp['Target'] = (hist_imp['Win?'] == 'Yes').astype(int)
     feats = [c for c in three_d_features if c in hist_imp.columns]
-    if feats:
-        X_mi = hist_imp[feats].dropna()
-        if len(X_mi) >= 10:
-            imputer = SimpleImputer(strategy='median')
-            X_imp = imputer.fit_transform(X_mi)
-            y_mi = hist_imp.loc[X_mi.index, 'Target']
-            mi = mutual_info_classif(X_imp, y_mi, discrete_features=False, random_state=42)
-            mi_df = pd.DataFrame({'Feature': feats, 'MI': mi}).sort_values('MI', ascending=False).head(20)
-            fig_mi = px.bar(mi_df, x='MI', y='Feature', orientation='h',
-                            title="Top 20 Mutual Information")
-            st.plotly_chart(fig_mi, use_container_width=True)
-        else:
-            st.warning("Not enough complete rows for MI.")
-    else:
-        st.warning("No numeric features for MI.")
+    if not feats:
+        st.warning("No numeric features available.")
+        st.stop()
 
-    # ---------- 2. Logistic Regression Coefficients ----------
-    if st.session_state.lr_model is not None and len(st.session_state.lr_feature_names) == 3:
-        st.subheader("Logistic Regression Coefficients (current 3‑feature model)")
-        lr_coefs = st.session_state.lr_model.coef_[0]
-        coef_df = pd.DataFrame({
-            'Feature': st.session_state.lr_feature_names,
-            'Coefficient': lr_coefs
-        }).sort_values('Coefficient', key=abs, ascending=False)
-        fig_coef = px.bar(coef_df, x='Coefficient', y='Feature', orientation='h',
-                          title="LR Coefficients (absolute value = importance, sign = direction)")
-        st.plotly_chart(fig_coef, use_container_width=True)
+    # ---------- Mutual Information (always runs) ----------
+    st.subheader("Mutual Information (Model‑Free)")
+    X_mi = hist_imp[feats].dropna()
+    if len(X_mi) >= 10:
+        imputer = SimpleImputer(strategy='median')
+        X_imp = imputer.fit_transform(X_mi)
+        y_mi = hist_imp.loc[X_mi.index, 'Target']
+        mi = mutual_info_classif(X_imp, y_mi, discrete_features=False, random_state=42)
+        mi_df = pd.DataFrame({'Feature': feats, 'MI': mi}).sort_values('MI', ascending=False).head(20)
+        fig_mi = px.bar(mi_df, x='MI', y='Feature', orientation='h',
+                        title="Top 20 Mutual Information")
+        st.plotly_chart(fig_mi, use_container_width=True)
     else:
-        st.info("Train an LR model (select 3 features in the LR section) to see coefficients.")
+        st.warning("Not enough complete rows for MI.")
 
-    # ---------- 3. Permutation Importance (LR model) ----------
-    if (st.session_state.lr_model is not None and
-        st.session_state.X_train_lr is not None and
-        len(st.session_state.X_train_lr) > 10):
-        st.subheader("Permutation Importance (LR model, on training data)")
-        from sklearn.inspection import permutation_importance
-        X_lr = st.session_state.X_train_lr
-        y_lr = st.session_state.y_train_lr
-        # Brier score as scoring metric (lower is better)
-        result = permutation_importance(
-            st.session_state.lr_model, X_lr, y_lr,
-            n_repeats=5, random_state=42, scoring='neg_brier_score'
-        )
-        perm_df = pd.DataFrame({
-            'Feature': st.session_state.lr_feature_names,
-            'Importance (mean)': result.importances_mean,
-            'Std': result.importances_std
-        }).sort_values('Importance (mean)', ascending=False)
-        fig_perm = px.bar(perm_df, x='Importance (mean)', y='Feature',
-                          orientation='h', error_x='Std',
-                          title="Permutation Importance (LR, ↓Brier score)")
-        st.plotly_chart(fig_perm, use_container_width=True)
-        st.caption("Higher value = feature is more important for model performance. Error bars show variability across shuffles.")
-    else:
-        st.info("Train an LR model with enough data to see permutation importance.")
+    # ---------- Lasso Model (on demand) ----------
+    if st.button("Compute Lasso Importance (all features)"):
+        with st.spinner("Fitting LassoCV..."):
+            X_lasso = hist_imp[feats].copy()
+            y_lasso = hist_imp['Target']
+            # Impute missing values
+            imp = SimpleImputer(strategy='median')
+            X_lasso_imp = imp.fit_transform(X_lasso)
+            scaler_lasso = StandardScaler()
+            X_lasso_scaled = scaler_lasso.fit_transform(X_lasso_imp)
+
+            # LassoCV with automatic alpha selection
+            lasso = LogisticRegressionCV(
+                penalty='l1', solver='saga', cv=5,
+                scoring='neg_brier_score', max_iter=2000,
+                Cs=10, n_jobs=-1, random_state=42
+            )
+            lasso.fit(X_lasso_scaled, y_lasso)
+
+            # Get coefficients
+            coef = lasso.coef_.flatten()
+            coef_df = pd.DataFrame({
+                'Feature': feats,
+                'Coefficient': coef
+            })
+            # Only show non-zero coefficients (important ones)
+            coef_df = coef_df[coef_df['Coefficient'] != 0].sort_values('Coefficient', key=abs, ascending=False)
+
+            st.subheader("Lasso Non‑Zero Coefficients (most predictive features)")
+            if len(coef_df) > 0:
+                fig_lasso = px.bar(coef_df.head(30), x='Coefficient', y='Feature', orientation='h',
+                                   title="Lasso Coefficients (absolute value = importance)")
+                st.plotly_chart(fig_lasso, use_container_width=True)
+            else:
+                st.write("Lasso eliminated all features – try different regularization strength.")
+
+    # ---------- Random Forest Importance (on demand) ----------
+    if st.button("Compute Random Forest Importance (all features)"):
+        with st.spinner("Training Random Forest..."):
+            X_rf = hist_imp[feats].copy()
+            y_rf = hist_imp['Target']
+            imp = SimpleImputer(strategy='median')
+            X_rf_imp = imp.fit_transform(X_rf)
+
+            rf = RandomForestClassifier(
+                n_estimators=200, max_depth=10,
+                random_state=42, n_jobs=-1
+            )
+            rf.fit(X_rf_imp, y_rf)
+
+            rf_imp = pd.DataFrame({
+                'Feature': feats,
+                'Importance': rf.feature_importances_
+            }).sort_values('Importance', ascending=False).head(30)
+
+            st.subheader("Random Forest Feature Importance (Gini)")
+            fig_rf = px.bar(rf_imp, x='Importance', y='Feature', orientation='h',
+                            title="Random Forest Feature Importance")
+            st.plotly_chart(fig_rf, use_container_width=True)
 # -----------------------------------------------
 # FIGHT SIMILARITY (INDEPENDENT FILTERS – GROUPED DROPDOWNS)
 # -----------------------------------------------
