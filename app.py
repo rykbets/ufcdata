@@ -469,7 +469,7 @@ if not upcoming_display.empty:
                 except Exception as e: st.error(f"KNN prediction error: {e}")
             else: st.info("KNN model not trained.")
 
-            # Top 5 Differentials (only from opp_diff and adj_*_diff)
+            # Top 5 Differentials – signed, best advantages first
             st.subheader("Top 5 Differentials")
             for fighter, row in [(f1['Fighter'], f1), (f2['Fighter'], f2)]:
                 diffs = {}
@@ -477,12 +477,13 @@ if not upcoming_display.empty:
                     if (c.endswith('_opp_diff') or (c.startswith('adj_') and c.endswith('_diff'))):
                         val = row[c]
                         if pd.notna(val):
-                            diffs[c] = abs(val)
+                            diffs[c] = val        # store signed value
+                # Sort descending by signed value (biggest positive first)
                 top5 = sorted(diffs.items(), key=lambda x: x[1], reverse=True)[:5]
                 if top5:
                     st.write(f"**{fighter}**")
-                    for col, _ in top5:
-                        st.write(f"{col}: {row[col]:+.2f}" if isinstance(row[col], float) else f"{col}: {row[col]}")
+                    for col, val in top5:
+                        st.write(f"{col}: {val:+.2f}" if isinstance(val, float) else f"{col}: {val}")
                 else:
                     st.write(f"**{fighter}**: No eligible differentials available.")
         else:
