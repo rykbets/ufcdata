@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 import gdown
 from sklearn.linear_model import LogisticRegressionCV
@@ -71,14 +70,6 @@ numeric_features = [c for c in data.columns
 abs_rating_cols = [c for c in rating_raw_cols if not c.endswith('Diff')] + \
                   [c for c in rating_avg7_cols if not c.endswith('_diff')]
 
-# Session state
-for key, default in [
-    ('overall_wr', 0.0), ('recent_wr', 0.0), ('recent_count', 0),
-    ('selected_fight_row', None),
-]:
-    if key not in st.session_state:
-        st.session_state[key] = default
-
 # -----------------------------------------------
 # PERFORMANCE SUMMARY
 # -----------------------------------------------
@@ -100,7 +91,7 @@ cols = [c for c in cols if c in last20.columns]
 st.dataframe(last20[cols], use_container_width=True)
 
 # -----------------------------------------------
-# UPCOMING FIGHT MATCHUP
+# UPCOMING FIGHT MATCHUP (unchanged)
 # -----------------------------------------------
 st.header("Upcoming Fight Matchup")
 upcoming_display = original_data[original_data['Win?'].isna() | (original_data['Win?'] == '')]
@@ -115,7 +106,6 @@ if not upcoming_display.empty:
             fight_rows = fight_rows.sort_values('Fighter')
             f1 = fight_rows.iloc[0]
             f2 = fight_rows.iloc[1]
-            st.session_state.selected_fight_row = f1
             st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
 
             sections = {}
@@ -406,7 +396,7 @@ def build_independent_filter(df, key_prefix):
     return df[final_mask].copy()
 
 # -----------------------------------------------
-# SPIDER CHART (Similarity) + NEW SPIDER DECISION TREE
+# SPIDER CHART (Similarity) + DECISION TREE
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
@@ -516,7 +506,7 @@ else:
                         col_order = ['FightDate','Fighter','Opponent','Win?'] + [f'Sim_{m}' for m in distance_metrics] + ['Similarity']
                         st.dataframe(top_n[col_order], use_container_width=True)
 
-                        # ========== NEW: SPIDER‑FILTERED DECISION TREE ==========
+                        # ========== DECISION TREE (SPIDER FILTERS) ==========
                         st.subheader("Decision Tree from Similarity Filters")
 
                         spider_tree_hist = spider_hist.copy()
@@ -545,6 +535,29 @@ else:
                                                                        criterion=criterion_sp, random_state=42)
                                         dt_sp.fit(X_sp, y_sp)
 
+                                        # ---- Prediction ABOVE the tree ----
+                                        st.subheader("Prediction for Selected Upcoming Fight")
+                                        fight_rows = spider_upcoming[spider_upcoming['FightID'] == selected_fight_spider]
+                                        fight_rows = fight_rows.sort_values('Fighter')
+                                        if len(fight_rows) == 2:
+                                            f1_row = fight_rows.iloc[0]
+                                            input_vals = []
+                                            for c in spider_features:
+                                                val = f1_row.get(c, np.nan)
+                                                if pd.isna(val):
+                                                    val = spider_tree_hist[c].median()
+                                                input_vals.append(val)
+                                            X_input = np.array([input_vals])
+                                            try:
+                                                prob = dt_sp.predict_proba(X_input)[0, 1]
+                                                leaf = dt_sp.apply(X_input)[0]
+                                                st.write(f"**{f1_row['Fighter']}** → leaf **{leaf}** with win probability **{prob:.1%}**")
+                                            except Exception as e:
+                                                st.error(f"Prediction error: {e}")
+                                        else:
+                                            st.warning("Fight data incomplete for prediction.")
+
+                                        # ---- Tree plot ----
                                         fig_w = max(16, max_depth_sp * 5)
                                         fig_h = max(8,  max_depth_sp * 3)
                                         fig, ax = plt.subplots(figsize=(fig_w, fig_h))
@@ -573,6 +586,7 @@ else:
                                             text_obj.set_text('\n'.join(new_lines))
                                         st.pyplot(fig)
 
+                                        # ---- Leaf table ----
                                         st.subheader("Leaf Win Percentages")
                                         leaf_ids = dt_sp.apply(X_sp)
                                         leaf_stats = []
@@ -585,141 +599,6 @@ else:
                                             })
                                         leaf_df = pd.DataFrame(leaf_stats)
                                         st.dataframe(leaf_df, use_container_width=True, hide_index=True)
-
-                                        st.subheader("Prediction for Selected Upcoming Fight")
-                                        fight_rows = spider_upcoming[spider_upcoming['FightID'] == selected_fight_spider]
-                                        fight_rows = fight_rows.sort_values('Fighter')
-                                        if len(fight_rows) == 2:
-                                            f1_row = fight_rows.iloc[0]
-                                            input_vals = []
-                                            for c in spider_features:
-                                                val = f1_row.get(c, np.nan)
-                                                if pd.isna(val):
-                                                    val = spider_tree_hist[c].median()
-                                                input_vals.append(val)
-                                            X_input = np.array([input_vals])
-                                            try:
-                                                prob = dt_sp.predict_proba(X_input)[0, 1]
-                                                leaf = dt_sp.apply(X_input)[0]
-                                                st.write(f"**{f1_row['Fighter']}** → leaf **{leaf}** with win probability **{prob:.1%}**")
-                                            except Exception as e:
-                                                st.error(f"Prediction error: {e}")
-                                        else:
-                                            st.warning("Fight data incomplete for prediction.")
-# ========== END SPIDER DECISION TREE ==========
-
-# -----------------------------------------------
-# DECISION TREE (ORIGINAL, INDEPENDENT FILTERS)
-# -----------------------------------------------
-st.header("Decision Tree Model (with adjustable depth/leaf)")
-tree_data = build_independent_filter(original_data.copy(), "tree")
-
-tree_upcoming = tree_data[tree_data['Win?'].isna() | (tree_data['Win?'] == '')]
-if not tree_upcoming.empty:
-    tree_upcoming_ids = sorted(tree_upcoming['FightID'].unique())
-    tree_selected_fight = st.selectbox("Select fight for tree prediction", tree_upcoming_ids, key="tree_fight_selector")
-    if tree_selected_fight:
-        tree_fight_rows = tree_upcoming[tree_upcoming['FightID'] == tree_selected_fight]
-        tree_fight_rows = tree_fight_rows.sort_values('Fighter')
-        if len(tree_fight_rows) == 2:
-            st.write(f"Selected: **{tree_fight_rows.iloc[0]['Fighter']}** vs **{tree_fight_rows.iloc[1]['Fighter']}**")
-        elif len(tree_fight_rows) == 1:
-            st.warning("Only one fighter row found for this fight; opponent data is missing.")
-        else:
-            st.warning("Unexpected number of rows for this fight.")
-else:
-    st.info("No upcoming fights in filtered tree data.")
-    tree_selected_fight = None
-
-tree_hist = tree_data[tree_data['Win?'].isin(['Yes','No'])].copy()
-if len(tree_hist) < 10:
-    st.warning("Not enough historical fights for decision tree.")
-else:
-    tree_hist['Target'] = (tree_hist['Win?'] == 'Yes').astype(int)
-    tree_features = [c for c in numeric_features if c in tree_hist.columns and c not in abs_rating_cols]
-    if not tree_features:
-        st.warning("No features available for decision tree.")
-    else:
-        X = tree_hist[tree_features].fillna(tree_hist[tree_features].median())
-        y = tree_hist['Target']
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            max_depth = st.slider("Max Depth", 1, 10, 3, key="tree_depth")
-        with col2:
-            min_samples_leaf = st.slider("Min Samples Leaf", 1, 100, 5, key="tree_leaf")
-        with col3:
-            criterion = st.selectbox("Splitting Criterion", ["gini", "entropy", "log_loss"], index=0, key="tree_criterion")
-
-        if st.button("Train Decision Tree", key="train_tree"):
-            with st.spinner("Training..."):
-                dt = DecisionTreeClassifier(max_depth=max_depth, min_samples_leaf=min_samples_leaf,
-                                            criterion=criterion, random_state=42)
-                dt.fit(X, y)
-
-                fig_w = max(16, max_depth * 5)
-                fig_h = max(8,  max_depth * 3)
-                fig, ax = plt.subplots(figsize=(fig_w, fig_h))
-                plot_tree(dt, feature_names=tree_features, class_names=['Loss', 'Win'],
-                          filled=True, rounded=True, proportion=False,
-                          impurity=False, fontsize=8, ax=ax)
-
-                for text_obj, node_id in zip(ax.texts, range(dt.tree_.node_count)):
-                    old_text = text_obj.get_text()
-                    if 'value' not in old_text:
-                        continue
-                    lines = old_text.split('\n')
-                    new_lines = []
-                    for line in lines:
-                        if line.strip().startswith('value'):
-                            values = dt.tree_.value[node_id][0]
-                            total = values.sum()
-                            if total > 0:
-                                win_pct  = values[1] / total * 100
-                                loss_pct = values[0] / total * 100
-                                new_lines.append(f"Loss {loss_pct:.0f}%  Win {win_pct:.0f}%")
-                            else:
-                                new_lines.append(line)
-                        else:
-                            new_lines.append(line)
-                    text_obj.set_text('\n'.join(new_lines))
-                st.pyplot(fig)
-
-                st.subheader("Leaf Win Percentages")
-                leaf_ids = dt.apply(X)
-                leaf_stats = []
-                for leaf_id in np.unique(leaf_ids):
-                    mask_leaf = leaf_ids == leaf_id
-                    leaf_stats.append({
-                        "Leaf": leaf_id,
-                        "Samples": mask_leaf.sum(),
-                        "Win Rate": f"{y[mask_leaf].mean() * 100:.1f}%"
-                    })
-                leaf_df = pd.DataFrame(leaf_stats)
-                st.dataframe(leaf_df, use_container_width=True, hide_index=True)
-
-                st.subheader("Prediction for Selected Upcoming Fight")
-                if tree_selected_fight is not None:
-                    fight_rows = tree_upcoming[tree_upcoming['FightID'] == tree_selected_fight].sort_values('Fighter')
-                    if len(fight_rows) == 2:
-                        f1_row = fight_rows.iloc[0]
-                        input_vals = []
-                        for c in tree_features:
-                            val = f1_row.get(c, np.nan)
-                            if pd.isna(val):
-                                val = tree_hist[c].median()
-                            input_vals.append(val)
-                        X_input = np.array([input_vals])
-                        try:
-                            prob = dt.predict_proba(X_input)[0, 1]
-                            leaf = dt.apply(X_input)[0]
-                            st.write(f"**{f1_row['Fighter']}** → leaf **{leaf}** with win probability **{prob:.1%}**")
-                        except Exception as e:
-                            st.error(f"Prediction error: {e}")
-                    else:
-                        st.warning("Fight data incomplete for prediction.")
-                else:
-                    st.info("No fight selected for the tree. Choose a fight above.")
 
 # -----------------------------------------------
 # FEATURE IMPORTANCE
