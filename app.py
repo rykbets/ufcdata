@@ -173,7 +173,7 @@ else:
     st.info("No upcoming fights available.")
 
 # -----------------------------------------------
-# INDEPENDENT FILTER HELPER
+# INDEPENDENT FILTER HELPER (FIXED – always keeps NaN for outcomes)
 # -----------------------------------------------
 def build_independent_filter(df, key_prefix):
     with st.expander(f"{key_prefix} Filters", expanded=True):
@@ -223,9 +223,11 @@ def build_independent_filter(df, key_prefix):
             if skip_nc:
                 prev1_col = 'Prev1_Outcome_skipNC'; prev2_col = 'Prev2_Outcome_skipNC'; prev3_col = 'Prev3_Outcome_skipNC'
                 career1_col = 'Career1_Outcome_skipNC'; career2_col = 'Career2_Outcome_skipNC'; career3_col = 'Career3_Outcome_skipNC'
+                opp_career1_col = 'Opponent_Career1_Outcome_skipNC'; opp_career2_col = 'Opponent_Career2_Outcome_skipNC'; opp_career3_col = 'Opponent_Career3_Outcome_skipNC'
             else:
                 prev1_col = 'Prev1_Outcome_raw'; prev2_col = 'Prev2_Outcome_raw'; prev3_col = 'Prev3_Outcome_raw'
                 career1_col = 'Career1_Outcome_raw'; career2_col = 'Career2_Outcome_raw'; career3_col = 'Career3_Outcome_raw'
+                opp_career1_col = 'Opponent_Career1_Outcome_raw'; opp_career2_col = 'Opponent_Career2_Outcome_raw'; opp_career3_col = 'Opponent_Career3_Outcome_raw'
 
             all_outcomes_raw = sorted(df[prev1_col].dropna().unique()) if prev1_col in df.columns else []
             all_outcomes_career = sorted(df[career1_col].dropna().unique()) if career1_col in df.columns else []
@@ -291,7 +293,7 @@ def build_independent_filter(df, key_prefix):
     if opp_prev_title != "All" and 'Opponent_Prev1_Title' in df.columns:
         mask &= add_filter(df['Opponent_Prev1_Title'].str.strip().str.lower() == opp_prev_title.lower(), 'Opponent_Prev1_Title')
 
-    # Numeric
+    # Numeric filters (keep NaN)
     if 'FightNumber' in df.columns:
         mask &= add_filter((df['FightNumber'] >= fn_min) & (df['FightNumber'] <= fn_max), 'FightNumber')
     if 'Opponent_FightNumber' in df.columns:
@@ -311,7 +313,7 @@ def build_independent_filter(df, key_prefix):
         if col in df.columns:
             mask &= add_filter((df[col] >= cmin) & (df[col] <= cmax), col)
 
-    # Outcome filter helper
+    # Outcome filter – always keep rows where the column is NaN
     def apply_outcome_filter(col, selected):
         if not selected or col not in df.columns:
             return None
@@ -323,6 +325,7 @@ def build_independent_filter(df, key_prefix):
         exact = [s for s in selected if s not in ("Win (any)", "Loss (any)")]
         if exact:
             cond |= df[col].isin(exact)
+        # Keep rows where the outcome column is missing
         return cond | df[col].isna()
 
     for col, val in [(prev1_col, prev1), (prev2_col, prev2), (prev3_col, prev3),
@@ -332,21 +335,23 @@ def build_independent_filter(df, key_prefix):
             if c is not None:
                 mask &= c
 
+    # Opponent previous outcomes (with skip_nc handling)
     for shift, wlist in [(1, opp_prev1), (2, opp_prev2), (3, opp_prev3)]:
         col = f'Opponent_Prev{shift}_Outcome_raw'
-        if wlist and col in df.columns:
+        if wlist:
             if skip_nc:
                 col_use = f'Opponent_Prev{shift}_Outcome_skipNC'
                 if col_use in df.columns:
                     c = apply_outcome_filter(col_use, wlist)
                     if c is not None: mask &= c
             else:
-                c = apply_outcome_filter(col, wlist)
-                if c is not None: mask &= c
+                if col in df.columns:
+                    c = apply_outcome_filter(col, wlist)
+                    if c is not None: mask &= c
 
-    for col, val in [('Opponent_Career1_Outcome_raw', opp_career1),
-                     ('Opponent_Career2_Outcome_raw', opp_career2),
-                     ('Opponent_Career3_Outcome_raw', opp_career3)]:
+    # Opponent career outcomes (use the column matching skip_nc)
+    for label, val in [('opp_career1', opp_career1), ('opp_career2', opp_career2), ('opp_career3', opp_career3)]:
+        col = opp_career1_col if label == 'opp_career1' else (opp_career2_col if label == 'opp_career2' else opp_career3_col)
         if val and col in df.columns:
             c = apply_outcome_filter(col, val)
             if c is not None: mask &= c
@@ -483,13 +488,11 @@ else:
                 dt = DecisionTreeClassifier(max_depth=max_depth, min_samples_leaf=min_samples_leaf, random_state=42)
                 dt.fit(X, y)
 
-                # Graphical tree with proportions
                 fig, ax = plt.subplots(figsize=(24, 12))
                 plot_tree(dt, feature_names=tree_features, class_names=['Loss', 'Win'],
                           filled=True, rounded=True, fontsize=10, ax=ax, proportion=True)
                 st.pyplot(fig)
 
-                # Leaf win percentages
                 st.subheader("Leaf Win Percentages")
                 leaf_ids = dt.apply(X)
                 for leaf_id in np.unique(leaf_ids):
@@ -497,13 +500,11 @@ else:
                     win_rate_leaf = y[mask_leaf].mean() * 100
                     st.write(f"Leaf {leaf_id}: {mask_leaf.sum()} samples, Win rate = {win_rate_leaf:.1f}%")
 
-                # --- Prediction for the selected upcoming fight ---
+                # Prediction for selected upcoming fight
                 st.subheader("Prediction for Selected Upcoming Fight")
                 if st.session_state.get("selected_fight_row") is not None:
                     f1_row = st.session_state.selected_fight_row
-                    # Check if the fight is in the filtered data
                     if f1_row['FightID'] in tree_data['FightID'].values:
-                        # Build the input vector (same imputation as training)
                         input_vals = []
                         for c in tree_features:
                             val = f1_row.get(c, np.nan)
