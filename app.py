@@ -48,7 +48,7 @@ def get_diff_range(df, col_name):
     if len(vals) == 0: return -1.0, 1.0
     return float(vals.min()), float(vals.max())
 
-# Feature lists for filters and similarity
+# Feature lists for filters
 base_cols = [c for c in data.columns if c not in ['FightID','Fighter','Opponent','FightDate','Win?','Method','Round',
                                                     'DetailedResult','Fight','FightDurationMinutes']]
 new_features = list(dict.fromkeys(base_cols))
@@ -369,7 +369,7 @@ else:
     st.info("No upcoming fights with current filters.")
 
 # -----------------------------------------------
-# FIGHT SIMILARITY (INDEPENDENT FILTERS – ALL FEATURES EXCEPT RAW/AVG7 RATINGS)
+# FIGHT SIMILARITY (INDEPENDENT FILTERS – FULL SET, MINUS RATING ABSOLUTES)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 st.write("These filters are separate from the main sidebar and do not affect the dashboard above.")
@@ -533,21 +533,20 @@ else:
     if spider_upcoming.empty:
         st.warning("No upcoming fight has both fighters after similarity filters.")
     else:
-        # Similarity features: all numeric EXCEPT absolute rating columns (Fighter/Opponent non‑diff)
-        rating_abs_patterns = ['FighterColleyDecay', 'OpponentColleyDecay',
-                               'FighterMasseyFinishDecay', 'OpponentMasseyFinishDecay',
-                               'FighterMasseyStrikeDecay', 'OpponentMasseyStrikeDecay',
-                               'FighterMasseyCtrlDecay', 'OpponentMasseyCtrlDecay',
-                               'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay',
-                               'FighterColleyDecay_avg7', 'Opponent_FighterColleyDecay_avg7',
-                               'FighterMasseyFinishDecay_avg7', 'Opponent_FighterMasseyFinishDecay_avg7',
-                               'FighterMasseyStrikeDecay_avg7', 'Opponent_FighterMasseyStrikeDecay_avg7',
-                               'FighterMasseyCtrlDecay_avg7', 'Opponent_FighterMasseyCtrlDecay_avg7',
-                               'FighterWeightedMasseyDecay_avg7', 'Opponent_FighterWeightedMasseyDecay_avg7']
-        sim_features = [c for c in new_features if c in spider_data.columns and c not in rating_abs_patterns]
-        # Also remove any column that is purely a rating absolute (Fighter... or Opponent... without Diff and not _avg7_diff etc.)
-        sim_features = [c for c in sim_features if not (c.startswith('Fighter') and ('Colley' in c or 'Massey' in c) and not c.endswith('_diff') and not c.endswith('Diff'))
-                        and not (c.startswith('Opponent') and ('Colley' in c or 'Massey' in c) and not c.endswith('_diff') and not c.endswith('Diff'))]
+        # All numeric features EXCEPT absolute rating columns (FighterXXX, OpponentXXX without Diff)
+        rating_abs_cols = [
+            'FighterColleyDecay', 'OpponentColleyDecay',
+            'FighterMasseyFinishDecay', 'OpponentMasseyFinishDecay',
+            'FighterMasseyStrikeDecay', 'OpponentMasseyStrikeDecay',
+            'FighterMasseyCtrlDecay', 'OpponentMasseyCtrlDecay',
+            'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay',
+            'FighterColleyDecay_avg7', 'Opponent_FighterColleyDecay_avg7',
+            'FighterMasseyFinishDecay_avg7', 'Opponent_FighterMasseyFinishDecay_avg7',
+            'FighterMasseyStrikeDecay_avg7', 'Opponent_FighterMasseyStrikeDecay_avg7',
+            'FighterMasseyCtrlDecay_avg7', 'Opponent_FighterMasseyCtrlDecay_avg7',
+            'FighterWeightedMasseyDecay_avg7', 'Opponent_FighterWeightedMasseyDecay_avg7'
+        ]
+        sim_features = [c for c in new_features if c in spider_data.columns and c not in rating_abs_cols]
         if not sim_features:
             st.warning("No numeric features for similarity.")
         else:
@@ -590,7 +589,7 @@ else:
                         col1.metric("Count (Top N)", count); col2.metric("Avg Similarity", f"{avg_sim:.1f}%")
                         col3.metric("Total Similarity", f"{total_sim:.1f}"); col4.metric("Composite Score", f"{composite:.1f}")
 
-                        # 90% similarity metrics
+                        # 90% similarity
                         high_sim_90 = top_n[top_n['Similarity'] >= 90]
                         if len(high_sim_90) > 0:
                             wins_90 = (high_sim_90['Win?'] == 'Yes').sum()
@@ -603,7 +602,7 @@ else:
                         else:
                             st.write("No historical fights with similarity ≥ 90% in the top selection.")
 
-                        # 80% similarity metrics
+                        # 80% similarity
                         high_sim_80 = top_n[top_n['Similarity'] >= 80]
                         if len(high_sim_80) > 0:
                             wins_80 = (high_sim_80['Win?'] == 'Yes').sum()
