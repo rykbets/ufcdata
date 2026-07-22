@@ -674,6 +674,15 @@ with st.expander("Similarity Filters", expanded=True):
         spider_career1 = st.multiselect("Career F1", all_outcomes_career, key="spider_career1")
         spider_career2 = st.multiselect("Career F2", all_outcomes_career, key="spider_career2")
         spider_career3 = st.multiselect("Career F3", all_outcomes_career, key="spider_career3")
+                # Opponent previous outcomes
+        spider_opp_prev1 = st.multiselect("Opp Prev 1", all_outcomes_raw, key="spider_opp_prev1")
+        spider_opp_prev2 = st.multiselect("Opp Prev 2", all_outcomes_raw, key="spider_opp_prev2")
+        spider_opp_prev3 = st.multiselect("Opp Prev 3", all_outcomes_raw, key="spider_opp_prev3")
+
+        # Opponent career outcomes
+        spider_opp_career1 = st.multiselect("Opp Career F1", all_outcomes_career, key="spider_opp_career1")
+        spider_opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career, key="spider_opp_career2")
+        spider_opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career, key="spider_opp_career3")
 
     with st.expander("Other", expanded=False):
         spider_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
