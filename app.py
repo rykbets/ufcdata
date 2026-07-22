@@ -566,30 +566,50 @@ else:
                                             criterion=criterion, random_state=42)
                 dt.fit(X, y)
 
-                # Plot with proportion=True – gives fractions instead of counts
-                fig, ax = plt.subplots(figsize=(20, 10))
-                plot_tree(dt, feature_names=tree_features, class_names=['Loss', 'Win'],
-                          filled=True, rounded=True, proportion=True,
-                          impurity=False, fontsize=6, ax=ax)
+                # Dynamic figure size – deeper tree → wider canvas
+                fig_w = max(16, max_depth * 5)
+                fig_h = max(8,  max_depth * 3)
+                fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
-                # --- Replace node texts with clean percentages ---
+                plot_tree(dt,
+                          feature_names=tree_features,
+                          class_names=['Loss', 'Win'],
+                          filled=True,
+                          rounded=True,
+                          proportion=True,
+                          impurity=False,
+                          fontsize=8,
+                          ax=ax)
+
+                # ---- Replace only the "value = ..." line with percentages ----
                 for text_obj, node_id in zip(ax.texts, range(dt.tree_.node_count)):
-                    # Only modify texts that show 'value = [...]'
-                    if 'value' in text_obj.get_text():
-                        # Get the class distribution for this node
-                        values = dt.tree_.value[node_id][0]          # shape (n_classes,)
-                        total = values.sum()
-                        if total > 0:
-                            win_pct  = values[1] / total * 100      # 'Win' is class index 1
-                            loss_pct = values[0] / total * 100
-                            # Re‑format the text to show percentages
-                            new_text = f"Loss {loss_pct:.0f}%\nWin {win_pct:.0f}%"
-                            text_obj.set_text(new_text)
-                    # else leave feature/split text as is
-                # -------------------------------------------------
+                    old_text = text_obj.get_text()
+                    # Process only if there is a value line
+                    if 'value' not in old_text:
+                        continue
+
+                    # Split into lines
+                    lines = old_text.split('\n')
+                    new_lines = []
+                    for line in lines:
+                        if line.strip().startswith('value'):
+                            # Extract the actual values from the tree
+                            values = dt.tree_.value[node_id][0]     # shape (n_classes,)
+                            total = values.sum()
+                            if total > 0:
+                                win_pct  = values[1] / total * 100
+                                loss_pct = values[0] / total * 100
+                                new_lines.append(f"Loss {loss_pct:.0f}%  Win {win_pct:.0f}%")
+                            else:
+                                new_lines.append(line)   # fallback (shouldn't happen)
+                        else:
+                            new_lines.append(line)
+                    text_obj.set_text('\n'.join(new_lines))
+                # ---------------------------------------------------------------
 
                 st.pyplot(fig)
 
+                # Rest of your existing leaf‑stats / prediction code remains
                 st.subheader("Leaf Win Percentages")
                 leaf_ids = dt.apply(X)
                 leaf_stats = []
