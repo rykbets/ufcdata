@@ -11,11 +11,17 @@ from sklearn.impute import SimpleImputer
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import brier_score_loss
-from sklearn.model_selection import cross_val_predict, permutation_importance
+from sklearn.model_selection import cross_val_predict
+from sklearn.inspection import permutation_importance
 from scipy.spatial.distance import cdist
-import lightgbm as lgb
 
-# dtreeviz is optional – if missing, a text tree will be shown instead
+# Optional imports – missing ones handled gracefully
+try:
+    import lightgbm as lgb
+    HAS_LIGHTGBM = True
+except ImportError:
+    HAS_LIGHTGBM = False
+
 try:
     import dtreeviz
     HAS_DTREEVIZ = True
@@ -25,7 +31,7 @@ except ImportError:
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
 # -----------------------------------------------
-# LOAD DATA (no main sidebar filters)
+# LOAD DATA
 # -----------------------------------------------
 PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"   # <-- update with your file ID
 
@@ -82,19 +88,20 @@ numeric_features = [c for c in data.columns
                     or c in rating_raw_cols
                     or c in rating_avg7_cols]
 
-# absolute rating columns to exclude later
+# Absolute rating columns to exclude from feature selectors
 abs_rating_cols = [c for c in rating_raw_cols if not c.endswith('Diff')] + \
                   [c for c in rating_avg7_cols if not c.endswith('_diff')]
 
 # Session state
 for key, default in [
     ('overall_wr', 0.0), ('recent_wr', 0.0), ('recent_count', 0),
+    ('selected_fight_row', None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
 
 # -----------------------------------------------
-# PERFORMANCE SUMMARY (full data)
+# PERFORMANCE SUMMARY
 # -----------------------------------------------
 st.title("UFC Pre‑Fight Performance Dashboard")
 st.header("Performance Summary")
@@ -105,7 +112,7 @@ col1, col2, col3 = st.columns(3)
 col1.metric("Total Fights", total); col2.metric("Wins", wins); col3.metric("Win Rate", f"{win_rate:.1f}%")
 
 # -----------------------------------------------
-# LAST 20 FIGHTS
+# LAST 20 FIGHTS (moved up)
 # -----------------------------------------------
 st.header("Last 20 Fights")
 last20 = data.sort_values('FightDate', ascending=False).head(20)
@@ -130,7 +137,7 @@ if not upcoming_display.empty:
             st.session_state.selected_fight_row = f1
             st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
 
-            # Build table sections (same as before)
+            # Build table sections
             sections = {}
             identity_cols = ['WC','Title','ScheduledRounds','Stance','Country','HometownFighter','EventCountry']
             sections["Identity"] = [c for c in identity_cols if c in f1.index]
@@ -163,7 +170,7 @@ if not upcoming_display.empty:
             df_stats = pd.DataFrame(rows)
             st.dataframe(df_stats, use_container_width=True, hide_index=True)
 
-            # Top 5 Differentials
+            # Top 5 Differentials (signed)
             st.subheader("Top 5 Differentials")
             for fighter, row in [(f1['Fighter'], f1), (f2['Fighter'], f2)]:
                 diffs = {}
@@ -187,8 +194,6 @@ else:
 # INDEPENDENT FILTER HELPER
 # -----------------------------------------------
 def build_independent_filter(df, key_prefix):
-    """Return filtered dataframe based on independent filter widgets."""
-    filters = {}
     with st.expander(f"{key_prefix} Filters", expanded=True):
         with st.container():
             col1, col2 = st.columns(2)
@@ -219,20 +224,28 @@ def build_independent_filter(df, key_prefix):
 
             # Previous outcomes
             skip_nc = st.checkbox("Skip NC outcomes", key=f"{key_prefix}_skip_nc")
-            prev_col_prefix = 'Prev1_Outcome_skipNC' if skip_nc else 'Prev1_Outcome_raw'
-            all_outcomes_raw = sorted(df[prev_col_prefix].dropna().unique()) if prev_col_prefix in df.columns else []
+            if skip_nc:
+                prev1_col = 'Prev1_Outcome_skipNC'; prev2_col = 'Prev2_Outcome_skipNC'; prev3_col = 'Prev3_Outcome_skipNC'
+                career1_col = 'Career1_Outcome_skipNC'; career2_col = 'Career2_Outcome_skipNC'; career3_col = 'Career3_Outcome_skipNC'
+            else:
+                prev1_col = 'Prev1_Outcome_raw'; prev2_col = 'Prev2_Outcome_raw'; prev3_col = 'Prev3_Outcome_raw'
+                career1_col = 'Career1_Outcome_raw'; career2_col = 'Career2_Outcome_raw'; career3_col = 'Career3_Outcome_raw'
+
+            all_outcomes_raw = sorted(df[prev1_col].dropna().unique()) if prev1_col in df.columns else []
+            all_outcomes_career = sorted(df[career1_col].dropna().unique()) if career1_col in df.columns else []
+
             prev1 = st.multiselect("Prev Fight 1", all_outcomes_raw, key=f"{key_prefix}_prev1")
             prev2 = st.multiselect("Prev Fight 2", all_outcomes_raw, key=f"{key_prefix}_prev2")
             prev3 = st.multiselect("Prev Fight 3", all_outcomes_raw, key=f"{key_prefix}_prev3")
             opp_prev1 = st.multiselect("Opp Prev 1", all_outcomes_raw, key=f"{key_prefix}_opp_prev1")
             opp_prev2 = st.multiselect("Opp Prev 2", all_outcomes_raw, key=f"{key_prefix}_opp_prev2")
             opp_prev3 = st.multiselect("Opp Prev 3", all_outcomes_raw, key=f"{key_prefix}_opp_prev3")
-            career1 = st.multiselect("Career F1", all_outcomes_raw, key=f"{key_prefix}_career1")
-            career2 = st.multiselect("Career F2", all_outcomes_raw, key=f"{key_prefix}_career2")
-            career3 = st.multiselect("Career F3", all_outcomes_raw, key=f"{key_prefix}_career3")
-            opp_career1 = st.multiselect("Opp Career F1", all_outcomes_raw, key=f"{key_prefix}_opp_career1")
-            opp_career2 = st.multiselect("Opp Career F2", all_outcomes_raw, key=f"{key_prefix}_opp_career2")
-            opp_career3 = st.multiselect("Opp Career F3", all_outcomes_raw, key=f"{key_prefix}_opp_career3")
+            career1 = st.multiselect("Career F1", all_outcomes_career, key=f"{key_prefix}_career1")
+            career2 = st.multiselect("Career F2", all_outcomes_career, key=f"{key_prefix}_career2")
+            career3 = st.multiselect("Career F3", all_outcomes_career, key=f"{key_prefix}_career3")
+            opp_career1 = st.multiselect("Opp Career F1", all_outcomes_career, key=f"{key_prefix}_opp_career1")
+            opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career, key=f"{key_prefix}_opp_career2")
+            opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career, key=f"{key_prefix}_opp_career3")
 
             # Ratings filters
             use_colley = st.checkbox("Filter ColleyDecayDiff", value=False, key=f"{key_prefix}_use_colley")
@@ -267,18 +280,20 @@ def build_independent_filter(df, key_prefix):
         mask &= normalize_title_col(df['Prev1_Title']) == prev_title.lower()
     if opp_prev_title != "All" and 'Opponent_Prev1_Title' in df.columns:
         mask &= normalize_title_col(df['Opponent_Prev1_Title']) == opp_prev_title.lower()
-    # Numeric filters
+
     def add_filter(condition, keep_nan=True, col_name=None):
         if condition is None: return None
         if keep_nan and col_name in df.columns:
             return condition | df[col_name].isna()
         return condition
+
     if 'FightNumber' in df.columns:
         mask &= add_filter((df['FightNumber'] >= fn_min) & (df['FightNumber'] <= fn_max), col_name='FightNumber')
     if 'Opponent_FightNumber' in df.columns:
         mask &= add_filter((df['Opponent_FightNumber'] >= ofn_min) & (df['Opponent_FightNumber'] <= ofn_max), col_name='Opponent_FightNumber')
     if 'CareerWinPct_diff' in df.columns:
         mask &= add_filter((df['CareerWinPct_diff'] >= cwp_min) & (df['CareerWinPct_diff'] <= cwp_max), col_name='CareerWinPct_diff')
+
     for col, (cmin, cmax) in [
         ('Age', (age_min, age_max)), ('AgeDiff', (ad_min, ad_max)), ('HeightDiff', (hd_min, hd_max)),
         ('ReachDiff', (rd_min, rd_max)), ('DaysSincePrev', (days_min, days_max)),
@@ -287,15 +302,12 @@ def build_independent_filter(df, key_prefix):
     ]:
         if col in df.columns:
             mask &= add_filter((df[col] >= cmin) & (df[col] <= cmax), col_name=col)
-    # Outcome filters
-    for col, val in [('Prev1_Outcome_raw' if not skip_nc else 'Prev1_Outcome_skipNC', prev1),
-                     ('Prev2_Outcome_raw' if not skip_nc else 'Prev2_Outcome_skipNC', prev2),
-                     ('Prev3_Outcome_raw' if not skip_nc else 'Prev3_Outcome_skipNC', prev3),
-                     ('Career1_Outcome_raw' if not skip_nc else 'Career1_Outcome_skipNC', career1),
-                     ('Career2_Outcome_raw' if not skip_nc else 'Career2_Outcome_skipNC', career2),
-                     ('Career3_Outcome_raw' if not skip_nc else 'Career3_Outcome_skipNC', career3)]:
+
+    for col, val in [(prev1_col, prev1), (prev2_col, prev2), (prev3_col, prev3),
+                     (career1_col, career1), (career2_col, career2), (career3_col, career3)]:
         if val and col in df.columns:
             mask &= df[col].isin(val)
+
     for shift, wlist in [(1, opp_prev1), (2, opp_prev2), (3, opp_prev3)]:
         col = f'Opponent_Prev{shift}_Outcome_raw'
         if wlist and col in df.columns:
@@ -305,11 +317,13 @@ def build_independent_filter(df, key_prefix):
                     mask &= df[col_use].isin(wlist)
             else:
                 mask &= df[col].isin(wlist)
+
     for col, val in [('Opponent_Career1_Outcome_raw' if not skip_nc else 'Opponent_Career1_Outcome_skipNC', opp_career1),
                      ('Opponent_Career2_Outcome_raw' if not skip_nc else 'Opponent_Career2_Outcome_skipNC', opp_career2),
                      ('Opponent_Career3_Outcome_raw' if not skip_nc else 'Opponent_Career3_Outcome_skipNC', opp_career3)]:
         if val and col in df.columns:
             mask &= df[col].isin(val)
+
     if use_colley and 'ColleyDecayDiff' in df.columns:
         mask &= add_filter((df['ColleyDecayDiff'] >= colley_range[0]) & (df['ColleyDecayDiff'] <= colley_range[1]), col_name='ColleyDecayDiff')
     if use_massey and 'MasseyFinishDecayDiff' in df.columns:
@@ -323,8 +337,6 @@ def build_independent_filter(df, key_prefix):
 # SPIDER CHART (independent filters)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
-st.write("These filters are separate and do not affect other sections.")
-
 spider_data_full = original_data.copy()
 spider_data = build_independent_filter(spider_data_full, "spider")
 
@@ -340,6 +352,7 @@ else:
     if spider_upcoming.empty:
         st.warning("No upcoming fight has both fighters after similarity filters.")
     else:
+        # Features: exclude absolute ratings
         sim_features = [c for c in numeric_features if c in spider_data.columns and c not in abs_rating_cols]
         if not sim_features:
             st.warning("No numeric features for similarity.")
@@ -383,7 +396,7 @@ else:
                         col1.metric("Count (Top N)", count); col2.metric("Avg Similarity", f"{avg_sim:.1f}%")
                         col3.metric("Total Similarity", f"{total_sim:.1f}"); col4.metric("Composite Score", f"{composite:.1f}")
 
-                        # 90% similarity
+                        # 90% similarity metrics
                         high_sim_90 = top_n[top_n['Similarity'] >= 90]
                         if len(high_sim_90) > 0:
                             wins_90 = (high_sim_90['Win?'] == 'Yes').sum()
@@ -396,7 +409,7 @@ else:
                         else:
                             st.write("No historical fights with similarity ≥ 90% in the top selection.")
 
-                        # 80% similarity
+                        # 80% similarity metrics
                         high_sim_80 = top_n[top_n['Similarity'] >= 80]
                         if len(high_sim_80) > 0:
                             wins_80 = (high_sim_80['Win?'] == 'Yes').sum()
@@ -436,14 +449,12 @@ else:
 st.header("Decision Tree Model (with adjustable depth/leaf)")
 tree_data = build_independent_filter(original_data.copy(), "tree")
 
-# Only historical fights
 tree_hist = tree_data[tree_data['Win?'].isin(['Yes','No'])].copy()
 if len(tree_hist) < 10:
     st.warning("Not enough historical fights for decision tree.")
 else:
     tree_hist['Target'] = (tree_hist['Win?'] == 'Yes').astype(int)
 
-    # Feature selection (same variables as spider, excluding absolute ratings)
     tree_features = [c for c in numeric_features if c in tree_hist.columns and c not in abs_rating_cols]
     if not tree_features:
         st.warning("No features available for decision tree.")
@@ -470,7 +481,6 @@ else:
                         feature_names=tree_features,
                         class_names=['Loss', 'Win']
                     )
-                    # Save to SVG and display
                     svg = viz.view().save("tree.svg")
                     st.image("tree.svg", use_column_width=True)
                 else:
@@ -479,7 +489,7 @@ else:
                     tree_text = export_text(dt, feature_names=tree_features)
                     st.text(tree_text)
 
-                # Win % for each leaf (simple text)
+                # Leaf win percentages
                 st.subheader("Leaf Win Percentages")
                 leaf_ids = dt.apply(X)
                 for leaf_id in np.unique(leaf_ids):
@@ -491,62 +501,65 @@ else:
 # LIGHTGBM (independent filters)
 # -----------------------------------------------
 st.header("LightGBM Model (with Brier score and probability)")
-lgbm_data = build_independent_filter(original_data.copy(), "lgbm")
-
-lgbm_hist = lgbm_data[lgbm_data['Win?'].isin(['Yes','No'])].copy()
-if len(lgbm_hist) < 10:
-    st.warning("Not enough historical fights for LightGBM.")
+if not HAS_LIGHTGBM:
+    st.warning("LightGBM is not installed. Run `pip install lightgbm` to use this section.")
 else:
-    lgbm_hist['Target'] = (lgbm_hist['Win?'] == 'Yes').astype(int)
+    lgbm_data = build_independent_filter(original_data.copy(), "lgbm")
 
-    lgbm_features = [c for c in numeric_features if c in lgbm_hist.columns and c not in abs_rating_cols]
-    if not lgbm_features:
-        st.warning("No features available for LightGBM.")
+    lgbm_hist = lgbm_data[lgbm_data['Win?'].isin(['Yes','No'])].copy()
+    if len(lgbm_hist) < 10:
+        st.warning("Not enough historical fights for LightGBM.")
     else:
-        X_lgbm = lgbm_hist[lgbm_features].fillna(lgbm_hist[lgbm_features].median())
-        y_lgbm = lgbm_hist['Target']
+        lgbm_hist['Target'] = (lgbm_hist['Win?'] == 'Yes').astype(int)
 
-        if st.button("Train LightGBM (CV Brier)", key="train_lgbm"):
-            with st.spinner("Training LightGBM with 5‑fold CV..."):
-                model = lgb.LGBMClassifier(random_state=42, verbose=-1)
-                y_prob = cross_val_predict(model, X_lgbm, y_lgbm, cv=5, method='predict_proba')[:, 1]
-                bs = brier_score_loss(y_lgbm, y_prob)
-                st.metric("Cross‑Validated Brier Score", f"{bs:.4f}")
+        lgbm_features = [c for c in numeric_features if c in lgbm_hist.columns and c not in abs_rating_cols]
+        if not lgbm_features:
+            st.warning("No features available for LightGBM.")
+        else:
+            X_lgbm = lgbm_hist[lgbm_features].fillna(lgbm_hist[lgbm_features].median())
+            y_lgbm = lgbm_hist['Target']
 
-                # Fit on full data for prediction
-                final_model = lgb.LGBMClassifier(random_state=42, verbose=-1)
-                final_model.fit(X_lgbm, y_lgbm)
+            if st.button("Train LightGBM (CV Brier)", key="train_lgbm"):
+                with st.spinner("Training LightGBM with 5‑fold CV..."):
+                    model = lgb.LGBMClassifier(random_state=42, verbose=-1)
+                    y_prob = cross_val_predict(model, X_lgbm, y_lgbm, cv=5, method='predict_proba')[:, 1]
+                    bs = brier_score_loss(y_lgbm, y_prob)
+                    st.metric("Cross‑Validated Brier Score", f"{bs:.4f}")
 
-                # Win probability for selected fight (if any)
-                if st.session_state.get("selected_fight_row") is not None:
-                    f1_row = st.session_state.selected_fight_row
-                    if f1_row['FightID'] in lgbm_data['FightID'].values:
-                        vals = []
-                        for c in lgbm_features:
-                            val = f1_row.get(c, np.nan)
-                            if pd.isna(val):
-                                val = lgbm_hist[c].median()
-                            vals.append(val)
-                        try:
-                            prob = final_model.predict_proba(np.array([vals]))[0, 1]
-                            st.write(f"LightGBM win probability for **{f1_row['Fighter']}**: {prob:.1%}")
-                        except Exception as e:
-                            st.error(f"Prediction error: {e}")
-                    else:
-                        st.info("Selected fight not in the filtered dataset.")
+                    # Fit on full data for prediction
+                    final_model = lgb.LGBMClassifier(random_state=42, verbose=-1)
+                    final_model.fit(X_lgbm, y_lgbm)
 
-                # Permutation importance
-                st.subheader("Permutation Importance (LightGBM)")
-                with st.spinner("Computing permutation importance..."):
-                    perm_imp = permutation_importance(final_model, X_lgbm, y_lgbm, n_repeats=5, random_state=42, scoring='neg_brier_score')
-                    perm_df = pd.DataFrame({
-                        'Feature': lgbm_features,
-                        'Importance': perm_imp.importances_mean,
-                        'Std': perm_imp.importances_std
-                    }).sort_values('Importance', ascending=False).head(20)
-                    fig_perm = px.bar(perm_df, x='Importance', y='Feature', orientation='h',
-                                      error_x='Std', title="LightGBM Permutation Importance")
-                    st.plotly_chart(fig_perm, use_container_width=True)
+                    # Win probability for selected fight
+                    if st.session_state.get("selected_fight_row") is not None:
+                        f1_row = st.session_state.selected_fight_row
+                        if f1_row['FightID'] in lgbm_data['FightID'].values:
+                            vals = []
+                            for c in lgbm_features:
+                                val = f1_row.get(c, np.nan)
+                                if pd.isna(val):
+                                    val = lgbm_hist[c].median()
+                                vals.append(val)
+                            try:
+                                prob = final_model.predict_proba(np.array([vals]))[0, 1]
+                                st.write(f"LightGBM win probability for **{f1_row['Fighter']}**: {prob:.1%}")
+                            except Exception as e:
+                                st.error(f"Prediction error: {e}")
+                        else:
+                            st.info("Selected fight not in the filtered dataset.")
+
+                    # Permutation importance
+                    st.subheader("Permutation Importance (LightGBM)")
+                    with st.spinner("Computing permutation importance..."):
+                        perm_imp = permutation_importance(final_model, X_lgbm, y_lgbm, n_repeats=5, random_state=42, scoring='neg_brier_score')
+                        perm_df = pd.DataFrame({
+                            'Feature': lgbm_features,
+                            'Importance': perm_imp.importances_mean,
+                            'Std': perm_imp.importances_std
+                        }).sort_values('Importance', ascending=False).head(20)
+                        fig_perm = px.bar(perm_df, x='Importance', y='Feature', orientation='h',
+                                          error_x='Std', title="LightGBM Permutation Importance")
+                        st.plotly_chart(fig_perm, use_container_width=True)
 
 # -----------------------------------------------
 # FEATURE IMPORTANCE (bottom, full data, no absolute ratings)
