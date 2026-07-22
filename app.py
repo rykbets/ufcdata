@@ -379,7 +379,7 @@ def build_independent_filter(df, key_prefix):
     return df[mask].copy()
 
 # -----------------------------------------------
-# SPIDER CHART (MULTI‑METRIC)
+# SPIDER CHART (MULTI‑METRIC – FIXED)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
@@ -426,27 +426,37 @@ else:
                         up_scaled = scaler_sim.transform(up_vec)
                         hist_scaled = scaler_sim.transform(hist_sub)
 
-                        # Compute similarity for each metric
+                        # Map display names to scipy metric names
+                        metric_map = {
+                            "Euclidean": "euclidean",
+                            "Manhattan": "cityblock",   # scipy uses cityblock for Manhattan
+                            "Chebyshev": "chebyshev",
+                            "Cosine": "cosine",
+                            "Correlation": "correlation"
+                        }
+
                         metric_similarities = {}
-                        for metric in distance_metrics:
-                            if metric in ("Cosine", "Correlation"):
-                                # Distance in [0,2]; convert to similarity in [0,100]
-                                dists = cdist(up_scaled, hist_scaled, metric=metric.lower()).flatten()
-                                sim = (1 - dists) * 100.0   # 0-100
+                        for metric_display in distance_metrics:
+                            metric = metric_map[metric_display]
+                            if metric in ("cosine", "correlation"):
+                                # distance in [0,2]; convert to similarity 0‑100
+                                dists = cdist(up_scaled, hist_scaled, metric=metric).flatten()
+                                # scale: 0 -> 100, 2 -> 0
+                                sim = 100 * (1 - dists / 2.0)
                             else:
-                                # Euclidean, Manhattan, Chebyshev
-                                dists = cdist(up_scaled, hist_scaled, metric=metric.lower()).flatten()
+                                # Euclidean, cityblock (Manhattan), chebyshev
+                                dists = cdist(up_scaled, hist_scaled, metric=metric).flatten()
                                 max_dist = dists.max() if dists.max() > 0 else 1.0
                                 sim = 100 * (1 - dists / max_dist)
-                            metric_similarities[metric] = sim
+                            metric_similarities[metric_display] = sim
 
                         # Combine metrics by averaging
                         combined_sim = sum(metric_similarities.values()) / len(metric_similarities)
 
                         # Build dataframe
                         sim_df = spider_hist.loc[hist_sub.index, ['FightDate', 'Fighter', 'Opponent', 'Win?']].copy()
-                        for metric in distance_metrics:
-                            sim_df[f'Sim_{metric}'] = metric_similarities[metric].round(1)
+                        for metric_display in distance_metrics:
+                            sim_df[f'Sim_{metric_display}'] = metric_similarities[metric_display].round(1)
                         sim_df['Similarity'] = combined_sim.round(1)
                         sim_df = sim_df.sort_values('Similarity', ascending=False)
 
@@ -493,12 +503,11 @@ else:
                         st.plotly_chart(fig_hist, use_container_width=True, key="sim_hist_chart")
 
                         st.subheader(f"Top {n_top} Most Similar Historical Fights")
-                        # Show columns: FightDate, Fighter, Opponent, Win?, then each metric similarity, then Similarity
                         col_order = ['FightDate','Fighter','Opponent','Win?'] + [f'Sim_{m}' for m in distance_metrics] + ['Similarity']
                         st.dataframe(top_n[col_order], use_container_width=True)
 
 # -----------------------------------------------
-# DECISION TREE (unchanged from previous)
+# DECISION TREE (unchanged)
 # -----------------------------------------------
 st.header("Decision Tree Model (with adjustable depth/leaf)")
 tree_data = build_independent_filter(original_data.copy(), "tree")
