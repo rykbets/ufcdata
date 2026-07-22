@@ -18,7 +18,7 @@ st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 # -----------------------------------------------
 # LOAD DATA
 # -----------------------------------------------
-PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"   # <-- update with your file ID
+PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"
 
 @st.cache_data
 def load_data():
@@ -40,18 +40,12 @@ if 'FightDate' in data.columns:
     data = data[data['FightDate'] >= '2015-01-01'].copy()
 original_data = data.copy()
 
-# Helper functions
-def normalize_title_col(series):
-    if series is None: return pd.Series('', index=series.index)
-    return series.astype(str).str.strip().str.lower()
-
 def get_diff_range(df, col_name):
     if col_name not in df.columns: return -1.0, 1.0
     vals = df[col_name].dropna()
     if len(vals) == 0: return -1.0, 1.0
     return float(vals.min()), float(vals.max())
 
-# ---------- VARIABLE DEFINITIONS ----------
 rating_raw_cols = [
     'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecayDiff',
     'FighterMasseyFinishDecay', 'OpponentMasseyFinishDecay', 'MasseyFinishDecayDiff',
@@ -155,7 +149,6 @@ if not upcoming_display.empty:
             df_stats = pd.DataFrame(rows)
             st.dataframe(df_stats, use_container_width=True, hide_index=True)
 
-            # Top 5 Differentials
             st.subheader("Top 5 Differentials")
             diffs_f1 = {}
             diffs_f2 = {}
@@ -189,14 +182,17 @@ else:
     st.info("No upcoming fights available.")
 
 # -----------------------------------------------
-# INDEPENDENT FILTER HELPER
+# INDEPENDENT FILTER HELPER (CORRECTED)
 # -----------------------------------------------
 def build_independent_filter(df, key_prefix):
     """
-    Returns a filtered copy of df.
-    - Outcome filters and title‑based filters are applied as a per‑fight OR:
-      a fight is kept if ANY row matches at least one of those conditions.
-    - All other filters remain strict AND per row (both rows must satisfy).
+    Returns filtered df.
+    - Strict AND filters (general, physical, odds, ratings, new WC) – both rows must pass.
+    - Permissive filters (title, outcomes) are split into fighter‑side and opponent‑side.
+      For a row to contribute to keeping a fight, it must satisfy:
+         (fighter‑side conditions) AND (opponent‑side conditions).
+      A fight is kept if ANY row satisfies that combined mask.
+      This prevents counts from increasing when adding opponent conditions.
     """
     with st.expander(f"{key_prefix} Filters", expanded=True):
         # --- General ---
@@ -293,8 +289,6 @@ def build_independent_filter(df, key_prefix):
 
     # ===== BUILD MASKS =====
     mask_strict = pd.Series(True, index=df.index)
-    mask_permissive_row = pd.Series(False, index=df.index)
-    any_permissive_active = False
 
     def add_strict(condition, col_name=None):
         if condition is None:
@@ -303,7 +297,7 @@ def build_independent_filter(df, key_prefix):
             return condition | df[col_name].isna()
         return condition
 
-    # ---- Strict AND filters ----
+    # --- Strict AND filters (both rows must satisfy) ---
     if wc: mask_strict &= df['WC'].isin(wc)
     if stance: mask_strict &= df['Stance'].isin(stance)
     if country: mask_strict &= df['Country'].isin(country)
@@ -333,7 +327,6 @@ def build_independent_filter(df, key_prefix):
         if col in df.columns:
             mask_strict &= add_strict((df[col] >= cmin) & (df[col] <= cmax), col)
 
-    # Ratings
     if use_colley and 'ColleyDecayDiff' in df.columns:
         mask_strict &= add_strict((df['ColleyDecayDiff'] >= colley_range[0]) & (df['ColleyDecayDiff'] <= colley_range[1]), 'ColleyDecayDiff')
     if use_massey and 'MasseyFinishDecayDiff' in df.columns:
@@ -341,23 +334,9 @@ def build_independent_filter(df, key_prefix):
     if use_wmd and 'WeightedMasseyDecayDiff' in df.columns:
         mask_strict &= add_strict((df['WeightedMasseyDecayDiff'] >= wmd_range[0]) & (df['WeightedMasseyDecayDiff'] <= wmd_range[1]), 'WeightedMasseyDecayDiff')
 
-    # ---- Permissive filters (OR across fight rows) ----
-    def add_permissive(col, condition):
-        nonlocal mask_permissive_row, any_permissive_active  # <<< FIX
-        if condition is not None:
-            mask_permissive_row |= condition
-            any_permissive_active = True
+    # --- Permissive filters (row‑level AND of fighter & opponent groups) ---
 
-    # Title filters (now permissive)
-    if prev_title != "All" and 'Prev1_Title' in df.columns:
-        cond = df['Prev1_Title'].str.strip().str.lower() == prev_title.lower()
-        add_permissive('Prev1_Title', cond)
-    if opp_prev_title != "All" and 'Opponent_Prev1_Title' in df.columns:
-        cond = df['Opponent_Prev1_Title'].str.strip().str.lower() == opp_prev_title.lower()
-        add_permissive('Opponent_Prev1_Title', cond)
-
-    # Outcome filters (also permissive)
-    def apply_outcome_condition(col, selected):
+    def outcome_cond(col, selected):
         if not selected or col not in df.columns:
             return None
         cond = pd.Series(False, index=df.index)
@@ -370,35 +349,58 @@ def build_independent_filter(df, key_prefix):
             cond |= df[col].isin(exact)
         return cond
 
+    # Fighter‑side conditions (OR across multiple selections)
+    fighter_conds = []
     for col, val in [(prev1_col, prev1), (prev2_col, prev2), (prev3_col, prev3),
                      (career1_col, career1), (career2_col, career2), (career3_col, career3)]:
-        if val:
-            cond = apply_outcome_condition(col, val)
-            add_permissive(col, cond)
+        c = outcome_cond(col, val)
+        if c is not None:
+            fighter_conds.append(c)
 
+    # Title conditions (fighter side)
+    if prev_title != "All" and 'Prev1_Title' in df.columns:
+        fighter_conds.append(df['Prev1_Title'].str.strip().str.lower() == prev_title.lower())
+
+    # Opponent‑side conditions (OR across multiple selections)
+    opponent_conds = []
     for shift, wlist in [(1, opp_prev1), (2, opp_prev2), (3, opp_prev3)]:
         col = f'Opponent_Prev{shift}_Outcome_raw'
         if wlist and col in df.columns:
             if skip_nc:
                 col_use = f'Opponent_Prev{shift}_Outcome_skipNC'
                 if col_use in df.columns:
-                    cond = apply_outcome_condition(col_use, wlist)
-                    add_permissive(col_use, cond)
+                    c = outcome_cond(col_use, wlist)
+                    if c is not None: opponent_conds.append(c)
             else:
-                cond = apply_outcome_condition(col, wlist)
-                add_permissive(col, cond)
+                c = outcome_cond(col, wlist)
+                if c is not None: opponent_conds.append(c)
 
     for col, val in [(opp_career1_col, opp_career1), (opp_career2_col, opp_career2), (opp_career3_col, opp_career3)]:
-        if val and col in df.columns:
-            cond = apply_outcome_condition(col, val)
-            add_permissive(col, cond)
+        c = outcome_cond(col, val)
+        if c is not None:
+            opponent_conds.append(c)
 
-    # ---- Combine ----
-    if any_permissive_active:
-        fight_ok = mask_permissive_row.groupby(df['FightID']).transform('any')
-        final_mask = mask_strict & fight_ok
-    else:
-        final_mask = mask_strict
+    if opp_prev_title != "All" and 'Opponent_Prev1_Title' in df.columns:
+        opponent_conds.append(df['Opponent_Prev1_Title'].str.strip().str.lower() == opp_prev_title.lower())
+
+    # Build row‑level permissive mask
+    fighter_mask = pd.Series(True, index=df.index)
+    if fighter_conds:
+        fighter_mask = fighter_conds[0].copy()
+        for c in fighter_conds[1:]:
+            fighter_mask |= c
+
+    opponent_mask = pd.Series(True, index=df.index)
+    if opponent_conds:
+        opponent_mask = opponent_conds[0].copy()
+        for c in opponent_conds[1:]:
+            opponent_mask |= c
+
+    row_permissive = fighter_mask & opponent_mask
+
+    # A fight is kept if any row satisfies the combined permissive conditions
+    fight_ok = row_permissive.groupby(df['FightID']).transform('any')
+    final_mask = mask_strict & fight_ok
 
     return df[final_mask].copy()
 
