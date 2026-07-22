@@ -573,7 +573,7 @@ else:
                           impurity=False, fontsize=6, ax=ax)
 
                 # --- Replace node texts with clean percentages ---
-                for text_obj, node_id in zip(ax.texts, dt.tree_.node_count):
+                for text_obj, node_id in zip(ax.texts, range(dt.tree_.node_count)):
                     # Only modify texts that show 'value = [...]'
                     if 'value' in text_obj.get_text():
                         # Get the class distribution for this node
