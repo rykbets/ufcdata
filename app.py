@@ -173,7 +173,7 @@ else:
     st.info("No upcoming fights available.")
 
 # -----------------------------------------------
-# INDEPENDENT FILTER HELPER (FIXED – always keeps NaN for outcomes)
+# INDEPENDENT FILTER HELPER (FULLY FIXED)
 # -----------------------------------------------
 def build_independent_filter(df, key_prefix):
     with st.expander(f"{key_prefix} Filters", expanded=True):
@@ -293,7 +293,7 @@ def build_independent_filter(df, key_prefix):
     if opp_prev_title != "All" and 'Opponent_Prev1_Title' in df.columns:
         mask &= add_filter(df['Opponent_Prev1_Title'].str.strip().str.lower() == opp_prev_title.lower(), 'Opponent_Prev1_Title')
 
-    # Numeric filters (keep NaN)
+    # Numeric filters
     if 'FightNumber' in df.columns:
         mask &= add_filter((df['FightNumber'] >= fn_min) & (df['FightNumber'] <= fn_max), 'FightNumber')
     if 'Opponent_FightNumber' in df.columns:
@@ -313,7 +313,7 @@ def build_independent_filter(df, key_prefix):
         if col in df.columns:
             mask &= add_filter((df[col] >= cmin) & (df[col] <= cmax), col)
 
-    # Outcome filter – always keep rows where the column is NaN
+    # Outcome filter helper – always keep NaN rows
     def apply_outcome_filter(col, selected):
         if not selected or col not in df.columns:
             return None
@@ -325,9 +325,9 @@ def build_independent_filter(df, key_prefix):
         exact = [s for s in selected if s not in ("Win (any)", "Loss (any)")]
         if exact:
             cond |= df[col].isin(exact)
-        # Keep rows where the outcome column is missing
         return cond | df[col].isna()
 
+    # Fighter outcomes
     for col, val in [(prev1_col, prev1), (prev2_col, prev2), (prev3_col, prev3),
                      (career1_col, career1), (career2_col, career2), (career3_col, career3)]:
         if val:
@@ -335,23 +335,21 @@ def build_independent_filter(df, key_prefix):
             if c is not None:
                 mask &= c
 
-    # Opponent previous outcomes (with skip_nc handling)
+    # Opponent previous outcomes
     for shift, wlist in [(1, opp_prev1), (2, opp_prev2), (3, opp_prev3)]:
         col = f'Opponent_Prev{shift}_Outcome_raw'
-        if wlist:
+        if wlist and col in df.columns:
             if skip_nc:
                 col_use = f'Opponent_Prev{shift}_Outcome_skipNC'
                 if col_use in df.columns:
                     c = apply_outcome_filter(col_use, wlist)
                     if c is not None: mask &= c
             else:
-                if col in df.columns:
-                    c = apply_outcome_filter(col, wlist)
-                    if c is not None: mask &= c
+                c = apply_outcome_filter(col, wlist)
+                if c is not None: mask &= c
 
-    # Opponent career outcomes (use the column matching skip_nc)
-    for label, val in [('opp_career1', opp_career1), ('opp_career2', opp_career2), ('opp_career3', opp_career3)]:
-        col = opp_career1_col if label == 'opp_career1' else (opp_career2_col if label == 'opp_career2' else opp_career3_col)
+    # Opponent career outcomes (using the col variables defined by skip_nc)
+    for col, val in [(opp_career1_col, opp_career1), (opp_career2_col, opp_career2), (opp_career3_col, opp_career3)]:
         if val and col in df.columns:
             c = apply_outcome_filter(col, val)
             if c is not None: mask &= c
@@ -367,7 +365,7 @@ def build_independent_filter(df, key_prefix):
     return df[mask].copy()
 
 # -----------------------------------------------
-# SPIDER CHART
+# SPIDER CHART (identical code, no changes)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
@@ -459,7 +457,7 @@ else:
                         st.dataframe(top_n, use_container_width=True)
 
 # -----------------------------------------------
-# DECISION TREE (graphical, with win% labels + prediction for selected fight)
+# DECISION TREE (graphical, with win% labels + prediction)
 # -----------------------------------------------
 st.header("Decision Tree Model (with adjustable depth/leaf)")
 tree_data = build_independent_filter(original_data.copy(), "tree")
