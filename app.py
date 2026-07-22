@@ -16,7 +16,7 @@ from scipy.spatial.distance import cdist
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
 # -----------------------------------------------
-# LOAD DATA (with integrity check)
+# LOAD DATA
 # -----------------------------------------------
 PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"   # <-- update with your file ID
 
@@ -59,11 +59,15 @@ def get_first_col(df, col_name):
         return sub.iloc[:, 0].to_numpy(dtype=np.float64, na_value=np.nan)
     return pd.to_numeric(sub, errors='coerce').to_numpy(dtype=np.float64)
 
-# Feature lists – everything that is not internal
+# Feature lists – only final differentials and normalized diffs for models
+numeric_features = [c for c in data.columns 
+                    if c.endswith('_opp_diff') 
+                    or (c.startswith('adj_') and c.endswith('_diff'))]
+
+# All other features for similarity / filters
 base_cols = [c for c in data.columns if c not in ['FightID','Fighter','Opponent','FightDate','Win?','Method','Round',
                                                     'DetailedResult','Fight','FightDurationMinutes']]
 new_features = list(dict.fromkeys(base_cols))
-numeric_features = [c for c in new_features if pd.api.types.is_numeric_dtype(data[c])]
 
 # Session state init
 for key, default in [
@@ -179,7 +183,7 @@ new_wc = st.sidebar.checkbox("New Weight Class", key="filter_new_wc") if 'IsNewW
 prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight_global")
 recent_window = st.sidebar.slider("Recent fights window", 1, 100, 50, key="recent_win_global")
 
-# Model features
+# Model features (now only the final differentials)
 st.sidebar.header("Model Features")
 lr_features = st.sidebar.multiselect("LR features (up to 8)", numeric_features,
                                     default=st.session_state.lr_feature_names[:8],
