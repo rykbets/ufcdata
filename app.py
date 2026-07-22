@@ -187,7 +187,7 @@ else:
     st.info("No upcoming fights available.")
 
 # -----------------------------------------------
-# INDEPENDENT FILTER HELPER (same as before)
+# INDEPENDENT FILTER HELPER (unchanged)
 # -----------------------------------------------
 def build_independent_filter(df, key_prefix):
     with st.expander(f"{key_prefix} Filters", expanded=True):
@@ -379,7 +379,7 @@ def build_independent_filter(df, key_prefix):
     return df[mask].copy()
 
 # -----------------------------------------------
-# SPIDER CHART (with one‑row win‑rate metrics)
+# SPIDER CHART (MULTI‑METRIC)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
@@ -402,7 +402,12 @@ else:
             st.warning("No numeric features for similarity.")
         else:
             selected_vars = st.multiselect("Select variables for similarity", sim_features, default=sim_features[:5], max_selections=8, key="spider_vars")
-            if selected_vars:
+            # --- Distance metric selector ---
+            available_metrics = ["Euclidean", "Manhattan", "Chebyshev", "Cosine", "Correlation"]
+            distance_metrics = st.multiselect("Distance metrics", available_metrics, default=["Euclidean"], key="spider_metrics")
+            if not distance_metrics:
+                st.warning("Please select at least one distance metric.")
+            elif selected_vars:
                 hist_sub = spider_hist[selected_vars].dropna()
                 if len(hist_sub) < 2:
                     st.warning("Not enough historical data.")
@@ -420,12 +425,29 @@ else:
                         up_vec = np.array([up_vals], dtype=np.float64)
                         up_scaled = scaler_sim.transform(up_vec)
                         hist_scaled = scaler_sim.transform(hist_sub)
-                        dists = cdist(up_scaled, hist_scaled, 'euclidean').flatten()
-                        max_dist = dists.max() if dists.max() > 0 else 1.0
-                        sim_scores = 100 * (1 - dists / max_dist)
 
+                        # Compute similarity for each metric
+                        metric_similarities = {}
+                        for metric in distance_metrics:
+                            if metric in ("Cosine", "Correlation"):
+                                # Distance in [0,2]; convert to similarity in [0,100]
+                                dists = cdist(up_scaled, hist_scaled, metric=metric.lower()).flatten()
+                                sim = (1 - dists) * 100.0   # 0-100
+                            else:
+                                # Euclidean, Manhattan, Chebyshev
+                                dists = cdist(up_scaled, hist_scaled, metric=metric.lower()).flatten()
+                                max_dist = dists.max() if dists.max() > 0 else 1.0
+                                sim = 100 * (1 - dists / max_dist)
+                            metric_similarities[metric] = sim
+
+                        # Combine metrics by averaging
+                        combined_sim = sum(metric_similarities.values()) / len(metric_similarities)
+
+                        # Build dataframe
                         sim_df = spider_hist.loc[hist_sub.index, ['FightDate', 'Fighter', 'Opponent', 'Win?']].copy()
-                        sim_df['Similarity'] = sim_scores.round(1)
+                        for metric in distance_metrics:
+                            sim_df[f'Sim_{metric}'] = metric_similarities[metric].round(1)
+                        sim_df['Similarity'] = combined_sim.round(1)
                         sim_df = sim_df.sort_values('Similarity', ascending=False)
 
                         total_hist_count = len(sim_df)
@@ -434,17 +456,18 @@ else:
                         st.subheader("Similarity Metrics (Top N)")
                         n_top = st.slider("Number of top similar fights", 5, 100, 50, step=5, key="spider_top_n")
                         top_n = sim_df.head(n_top)
-                        count = len(top_n); avg_sim = top_n['Similarity'].mean(); total_sim = top_n['Similarity'].sum()
+                        count = len(top_n)
+                        avg_sim = top_n['Similarity'].mean()
+                        total_sim = top_n['Similarity'].sum()
                         composite = avg_sim * (count ** 0.5) / 100
 
-                        # Row 1: Count, Avg Sim, Total Sim, Composite
                         col1, col2, col3, col4 = st.columns(4)
                         col1.metric("Count (Top N)", count)
                         col2.metric("Avg Similarity", f"{avg_sim:.1f}%")
                         col3.metric("Total Similarity", f"{total_sim:.1f}")
                         col4.metric("Composite Score", f"{composite:.1f}")
 
-                        # Row 2: Win rates
+                        # Win rates
                         high_sim_90 = top_n[top_n['Similarity'] >= 90]
                         high_sim_80 = top_n[top_n['Similarity'] >= 80]
 
@@ -466,19 +489,20 @@ else:
                         col7.metric("Win Rate (≥80%)", f"{win_rate_80:.1f}%", delta=f"{len(high_sim_80)} fights")
                         col8.metric("Weighted Win Rate (≥80%)", f"{weighted_wr_80:.1f}%")
 
-                        fig_hist = px.histogram(sim_df, x='Similarity', nbins=20, title="Similarity Distribution (All)")
+                        fig_hist = px.histogram(sim_df, x='Similarity', nbins=20, title="Similarity Distribution (Combined)")
                         st.plotly_chart(fig_hist, use_container_width=True, key="sim_hist_chart")
 
                         st.subheader(f"Top {n_top} Most Similar Historical Fights")
-                        st.dataframe(top_n, use_container_width=True)
+                        # Show columns: FightDate, Fighter, Opponent, Win?, then each metric similarity, then Similarity
+                        col_order = ['FightDate','Fighter','Opponent','Win?'] + [f'Sim_{m}' for m in distance_metrics] + ['Similarity']
+                        st.dataframe(top_n[col_order], use_container_width=True)
 
 # -----------------------------------------------
-# DECISION TREE (with own fight selector, criterion, numerical samples)
+# DECISION TREE (unchanged from previous)
 # -----------------------------------------------
 st.header("Decision Tree Model (with adjustable depth/leaf)")
 tree_data = build_independent_filter(original_data.copy(), "tree")
 
-# --- Own fight selector ---
 tree_upcoming = tree_data[tree_data['Win?'].isna() | (tree_data['Win?'] == '')]
 if not tree_upcoming.empty:
     tree_upcoming_ids = sorted(tree_upcoming['FightID'].unique())
@@ -496,7 +520,6 @@ if len(tree_hist) < 10:
     st.warning("Not enough historical fights for decision tree.")
 else:
     tree_hist['Target'] = (tree_hist['Win?'] == 'Yes').astype(int)
-
     tree_features = [c for c in numeric_features if c in tree_hist.columns and c not in abs_rating_cols]
     if not tree_features:
         st.warning("No features available for decision tree.")
@@ -518,13 +541,11 @@ else:
                                             criterion=criterion, random_state=42)
                 dt.fit(X, y)
 
-                # Graphical tree – numerical samples, not proportions
                 fig, ax = plt.subplots(figsize=(24, 12))
                 plot_tree(dt, feature_names=tree_features, class_names=['Loss', 'Win'],
                           filled=True, rounded=True, fontsize=10, ax=ax)
                 st.pyplot(fig)
 
-                # Leaf win percentages as scrollable dataframe
                 st.subheader("Leaf Win Percentages")
                 leaf_ids = dt.apply(X)
                 leaf_stats = []
@@ -538,7 +559,6 @@ else:
                 leaf_df = pd.DataFrame(leaf_stats)
                 st.dataframe(leaf_df, use_container_width=True, hide_index=True)
 
-                # Prediction for the tree's own selected fight
                 st.subheader("Prediction for Selected Upcoming Fight")
                 if tree_selected_fight is not None:
                     fight_rows = tree_upcoming[tree_upcoming['FightID'] == tree_selected_fight]
@@ -561,7 +581,7 @@ else:
                     st.info("No fight selected for the tree. Choose a fight above.")
 
 # -----------------------------------------------
-# FEATURE IMPORTANCE (bottom, unchanged)
+# FEATURE IMPORTANCE (unchanged)
 # -----------------------------------------------
 st.header("Top 20 Feature Importance (Full Data, No Absolute Ratings)")
 hist_imp_full = data[data['Win?'].isin(['Yes','No'])].copy()
