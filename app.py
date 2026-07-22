@@ -292,8 +292,8 @@ def build_independent_filter(df, key_prefix):
             new_wc = st.checkbox("New Weight Class", key=f"{key_prefix}_new_wc") if 'IsNewWeightClass' in df.columns else False
 
     # ===== BUILD MASKS =====
-    mask_strict = pd.Series(True, index=df.index)        # AND across both rows
-    mask_permissive_row = pd.Series(False, index=df.index)  # OR accumulation (any row satisfies)
+    mask_strict = pd.Series(True, index=df.index)
+    mask_permissive_row = pd.Series(False, index=df.index)
     any_permissive_active = False
 
     def add_strict(condition, col_name=None):
@@ -314,8 +314,6 @@ def build_independent_filter(df, key_prefix):
     if event_country: mask_strict &= df['EventCountry'].isin(event_country)
     if new_wc and 'IsNewWeightClass' in df.columns: mask_strict &= df['IsNewWeightClass'] == True
 
-    # (Title filters removed from strict – they will be permissive)
-    # Remaining numeric & rating strict filters
     if 'FightNumber' in df.columns:
         mask_strict &= add_strict((df['FightNumber'] >= fn_min) & (df['FightNumber'] <= fn_max), 'FightNumber')
     if 'Opponent_FightNumber' in df.columns:
@@ -345,13 +343,12 @@ def build_independent_filter(df, key_prefix):
 
     # ---- Permissive filters (OR across fight rows) ----
     def add_permissive(col, condition):
-        """Add a per‑row condition to the permissive mask (if condition is not None)."""
+        nonlocal mask_permissive_row, any_permissive_active  # <<< FIX
         if condition is not None:
-            nonlocal any_permissive_active
             mask_permissive_row |= condition
             any_permissive_active = True
 
-    # Title filters
+    # Title filters (now permissive)
     if prev_title != "All" and 'Prev1_Title' in df.columns:
         cond = df['Prev1_Title'].str.strip().str.lower() == prev_title.lower()
         add_permissive('Prev1_Title', cond)
@@ -398,7 +395,6 @@ def build_independent_filter(df, key_prefix):
 
     # ---- Combine ----
     if any_permissive_active:
-        # For a fight to survive, at least one row must satisfy at least one permissive condition
         fight_ok = mask_permissive_row.groupby(df['FightID']).transform('any')
         final_mask = mask_strict & fight_ok
     else:
