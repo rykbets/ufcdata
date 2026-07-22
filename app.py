@@ -379,7 +379,7 @@ def build_independent_filter(df, key_prefix):
     return df[mask].copy()
 
 # -----------------------------------------------
-# SPIDER CHART (MULTI‑METRIC – FIXED)
+# SPIDER CHART (MULTI‑METRIC – Euclidean, Manhattan, Chebyshev only)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
@@ -403,7 +403,7 @@ else:
         else:
             selected_vars = st.multiselect("Select variables for similarity", sim_features, default=sim_features[:5], max_selections=8, key="spider_vars")
             # --- Distance metric selector ---
-            available_metrics = ["Euclidean", "Manhattan", "Chebyshev", "Cosine", "Correlation"]
+            available_metrics = ["Euclidean", "Manhattan", "Chebyshev"]
             distance_metrics = st.multiselect("Distance metrics", available_metrics, default=["Euclidean"], key="spider_metrics")
             if not distance_metrics:
                 st.warning("Please select at least one distance metric.")
@@ -429,25 +429,16 @@ else:
                         # Map display names to scipy metric names
                         metric_map = {
                             "Euclidean": "euclidean",
-                            "Manhattan": "cityblock",   # scipy uses cityblock for Manhattan
-                            "Chebyshev": "chebyshev",
-                            "Cosine": "cosine",
-                            "Correlation": "correlation"
+                            "Manhattan": "cityblock",
+                            "Chebyshev": "chebyshev"
                         }
 
                         metric_similarities = {}
                         for metric_display in distance_metrics:
                             metric = metric_map[metric_display]
-                            if metric in ("cosine", "correlation"):
-                                # distance in [0,2]; convert to similarity 0‑100
-                                dists = cdist(up_scaled, hist_scaled, metric=metric).flatten()
-                                # scale: 0 -> 100, 2 -> 0
-                                sim = 100 * (1 - dists / 2.0)
-                            else:
-                                # Euclidean, cityblock (Manhattan), chebyshev
-                                dists = cdist(up_scaled, hist_scaled, metric=metric).flatten()
-                                max_dist = dists.max() if dists.max() > 0 else 1.0
-                                sim = 100 * (1 - dists / max_dist)
+                            dists = cdist(up_scaled, hist_scaled, metric=metric).flatten()
+                            max_dist = dists.max() if dists.max() > 0 else 1.0
+                            sim = 100 * (1 - dists / max_dist)
                             metric_similarities[metric_display] = sim
 
                         # Combine metrics by averaging
