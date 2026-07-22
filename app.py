@@ -3,9 +3,12 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import gdown
-from sklearn.linear_model import LogisticRegressionCV
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
+from sklearn.metrics import log_loss, brier_score_loss
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.ensemble import RandomForestClassifier
 from scipy.spatial.distance import cdist
@@ -48,17 +51,58 @@ def get_diff_range(df, col_name):
     if len(vals) == 0: return -1.0, 1.0
     return float(vals.min()), float(vals.max())
 
-# Feature lists for filters (all numeric columns except internal ones)
+def get_first_col(df, col_name):
+    if col_name not in df.columns: return np.full(len(df), np.nan)
+    sub = df[col_name]
+    if isinstance(sub, pd.DataFrame):
+        return sub.iloc[:, 0].to_numpy(dtype=np.float64, na_value=np.nan)
+    return pd.to_numeric(sub, errors='coerce').to_numpy(dtype=np.float64)
+
+# ---------- MODEL FEATURES (ratings + differentials) ----------
+rating_raw_cols = [
+    'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecayDiff',
+    'FighterMasseyFinishDecay', 'OpponentMasseyFinishDecay', 'MasseyFinishDecayDiff',
+    'FighterMasseyStrikeDecay', 'OpponentMasseyStrikeDecay', 'MasseyStrikeDecayDiff',
+    'FighterMasseyCtrlDecay', 'OpponentMasseyCtrlDecay', 'MasseyCtrlDecayDiff',
+    'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecayDiff'
+]
+rating_avg7_cols = [
+    'FighterColleyDecay_avg7', 'Opponent_FighterColleyDecay_avg7', 'FighterColleyDecay_avg7_diff',
+    'FighterMasseyFinishDecay_avg7', 'Opponent_FighterMasseyFinishDecay_avg7', 'FighterMasseyFinishDecay_avg7_diff',
+    'FighterMasseyStrikeDecay_avg7', 'Opponent_FighterMasseyStrikeDecay_avg7', 'FighterMasseyStrikeDecay_avg7_diff',
+    'FighterMasseyCtrlDecay_avg7', 'Opponent_FighterMasseyCtrlDecay_avg7', 'FighterMasseyCtrlDecay_avg7_diff',
+    'FighterWeightedMasseyDecay_avg7', 'Opponent_FighterWeightedMasseyDecay_avg7', 'FighterWeightedMasseyDecay_avg7_diff'
+]
+
+numeric_features = [c for c in data.columns
+                    if c.endswith('_opp_diff')
+                    or (c.startswith('adj_') and c.endswith('_diff'))
+                    or c in rating_raw_cols
+                    or c in rating_avg7_cols]
+
+# All other features (for filters, not used for model/similarity)
 base_cols = [c for c in data.columns if c not in ['FightID','Fighter','Opponent','FightDate','Win?','Method','Round',
                                                     'DetailedResult','Fight','FightDurationMinutes']]
 new_features = list(dict.fromkeys(base_cols))
 
-# Session state
+# Session state init
 for key, default in [
+    ('lr_model', None), ('calibrated_knn', None), ('scaler', None),
+    ('X_train', None), ('y_train_knn', None),
     ('overall_wr', 0.0), ('recent_wr', 0.0), ('recent_count', 0),
+    ('lr_train_status', "Not trained"), ('knn_train_status', "Not trained"),
+    ('selected_fight_row', None),
+    ('lr_feature_names', []), ('knn_feature_names', []),
+    ('knn_model_k', 5),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
+
+if len(numeric_features) >= 3:
+    if not st.session_state.lr_feature_names:
+        st.session_state.lr_feature_names = numeric_features[:3]
+    if not st.session_state.knn_feature_names:
+        st.session_state.knn_feature_names = numeric_features[:3]
 
 # -----------------------------------------------
 # SIDEBAR FILTERS
@@ -154,6 +198,28 @@ new_wc = st.sidebar.checkbox("New Weight Class", key="filter_new_wc") if 'IsNewW
 
 prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight_global")
 recent_window = st.sidebar.slider("Recent fights window", 1, 100, 50, key="recent_win_global")
+
+# Model features (safe defaults)
+st.sidebar.header("Model Features")
+
+default_lr = [f for f in st.session_state.lr_feature_names[:8] if f in numeric_features]
+if not default_lr:
+    default_lr = numeric_features[:min(8, len(numeric_features))]
+lr_features = st.sidebar.multiselect("LR features (up to 8)", numeric_features,
+                                    default=default_lr,
+                                    max_selections=8, key="lr_feat_select")
+
+default_knn = [f for f in st.session_state.knn_feature_names[:8] if f in numeric_features]
+if not default_knn:
+    default_knn = numeric_features[:min(8, len(numeric_features))]
+knn_features = st.sidebar.multiselect("KNN features (up to 8)", numeric_features,
+                                      default=default_knn,
+                                      max_selections=8, key="knn_feat_select")
+
+if lr_features != st.session_state.lr_feature_names:
+    st.session_state.lr_feature_names = lr_features
+if knn_features != st.session_state.knn_feature_names:
+    st.session_state.knn_feature_names = knn_features
 
 # -----------------------------------------------
 # BUILD MAIN FILTER MASK
@@ -264,6 +330,76 @@ color_map = {
     'Loss by DQ': 'darkred', 'No Contest': 'purple', 'Upcoming': 'blue', 'Draw': 'gray'
 }
 
+# -----------------------------------------------
+# CACHED MODEL TRAINING (variable features)
+# -----------------------------------------------
+@st.cache_data(show_spinner="Training models...")
+def train_models_cached(df, lr_feats, knn_feats, k_knn):
+    result = {
+        'lr_model': None, 'lr_train_status': 'LR features not set.',
+        'lr_feature_names': lr_feats,
+        'calibrated_knn': None, 'scaler': None,
+        'knn_train_status': 'KNN features not set.',
+        'knn_feature_names': knn_feats,
+        'X_train': None, 'y_train_knn': None,
+        'y_train_lr': None, 'X_train_lr': None
+    }
+    # LR
+    if lr_feats and all(c in df.columns for c in lr_feats):
+        hist = df[df['Win?'].isin(['Yes','No'])].copy()
+        sub = hist[lr_feats + ['Win?']].dropna()
+        if len(sub) >= 10 and sub['Win?'].nunique() == 2:
+            try:
+                sub['target'] = (sub['Win?'] == 'Yes').astype(int)
+                X = sub[lr_feats].values; y = sub['target'].values
+                lr = LogisticRegression(max_iter=1000).fit(X, y)
+                result['lr_model'] = lr
+                result['lr_train_status'] = f"LR trained on {len(sub)} fights with {len(lr_feats)} features."
+                result['y_train_lr'] = y; result['X_train_lr'] = X
+            except Exception as e:
+                result['lr_train_status'] = f"LR error: {e}"
+        else:
+            result['lr_train_status'] = "LR needs ≥10 rows with both Win/Loss."
+    else:
+        result['lr_train_status'] = "LR features not set or missing."
+
+    # KNN
+    if knn_feats and all(c in df.columns for c in knn_feats):
+        hist = df[df['Win?'].isin(['Yes','No'])].copy()
+        X = hist[knn_feats].apply(lambda col: pd.to_numeric(col, errors='coerce')).values
+        y = (hist['Win?'] == 'Yes').astype(int).values
+        mask_valid = ~np.isnan(X).any(axis=1)
+        X = X[mask_valid]; y = y[mask_valid]
+        if len(X) >= 10 and len(np.unique(y)) == 2:
+            try:
+                scaler = StandardScaler(); X_scaled = scaler.fit_transform(X)
+                base_knn = KNeighborsClassifier(n_neighbors=k_knn, weights='distance')
+                calibrated = CalibratedClassifierCV(base_knn, method='sigmoid', cv=5).fit(X_scaled, y)
+                result['calibrated_knn'] = calibrated; result['scaler'] = scaler
+                result['X_train'] = X; result['y_train_knn'] = y
+                result['knn_train_status'] = f"KNN trained on {len(X)} fights with {len(knn_feats)} features."
+            except Exception as e:
+                result['knn_train_status'] = f"KNN error: {e}"
+        else:
+            result['knn_train_status'] = "KNN needs ≥10 rows with both Win/Loss."
+    else:
+        result['knn_train_status'] = "KNN features not set or missing."
+
+    return result
+
+train_result = train_models_cached(filtered, st.session_state.lr_feature_names,
+                                   st.session_state.knn_feature_names,
+                                   st.session_state.knn_model_k)
+st.session_state.lr_model = train_result['lr_model']
+st.session_state.lr_train_status = train_result['lr_train_status']
+st.session_state.y_train_lr = train_result.get('y_train_lr')
+st.session_state.X_train_lr = train_result.get('X_train_lr')
+st.session_state.calibrated_knn = train_result['calibrated_knn']
+st.session_state.scaler = train_result['scaler']
+st.session_state.knn_train_status = train_result['knn_train_status']
+st.session_state.X_train = train_result['X_train']
+st.session_state.y_train_knn = train_result['y_train_knn']
+
 # Win rates
 hist_for_wr = filtered[filtered['Win?'].isin(['Yes','No'])].copy()
 if len(hist_for_wr) > 0:
@@ -286,18 +422,19 @@ col1, col2, col3 = st.columns(3)
 col1.metric("Total Fights", total); col2.metric("Wins", wins); col3.metric("Win Rate", f"{win_rate:.1f}%")
 
 # -----------------------------------------------
-# LAST 20 FIGHTS
-# -----------------------------------------------
-st.header("Last 20 Fights")
-last20 = filtered.sort_values('FightDate', ascending=False).head(20)
-cols = ['FightDate','Fighter','Opponent','Win?','Method','AgeDiff','HeightDiff','ReachDiff','CareerWinPct_diff']
-cols = [c for c in cols if c in last20.columns]
-st.dataframe(last20[cols], use_container_width=True)
-
-# -----------------------------------------------
 # UPCOMING FIGHT MATCHUP (FULL TABLE + TOP 5 DIFFS)
 # -----------------------------------------------
 st.header("Upcoming Fight Matchup")
+lr_status = st.session_state.lr_train_status
+if lr_status and "error" not in lr_status.lower():
+    st.success(f"✅ LR: {lr_status}")
+else:
+    st.error(f"❌ LR: {lr_status}")
+knn_status = st.session_state.knn_train_status
+if knn_status and "error" not in knn_status.lower():
+    st.success(f"✅ KNN: {knn_status}")
+else:
+    st.error(f"❌ KNN: {knn_status}")
 
 upcoming_display = matchup_data[matchup_data['Win?'].isna() | (matchup_data['Win?'] == '')]
 st.write(f"**Upcoming fights after filters:** {len(upcoming_display['FightID'].unique())}")
@@ -312,50 +449,90 @@ if not upcoming_display.empty:
             st.session_state.selected_fight_row = f1
             st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
 
+            # ---- BUILD TABLE SECTIONS ----
             sections = {}
+
             identity_cols = ['WC','Title','ScheduledRounds','Stance','Country','HometownFighter','EventCountry']
             sections["Identity"] = [c for c in identity_cols if c in f1.index]
+
             physical_cols = ['Age','Height','Reach','AgeDiff','HeightDiff','ReachDiff']
             sections["Physical"] = [c for c in physical_cols if c in f1.index]
+
             fight_hist_cols = ['FightNumber','DaysSincePrev','Avg3DaysGap','Prev7WinPct','CareerWinPct',
                                'DaysSincePrev_diff','Avg3DaysGap_diff','CareerWinPct_diff','FightNumber_diff']
             sections["Fight History"] = [c for c in fight_hist_cols if c in f1.index]
+
             sections["Normalized Simple Stats (diff)"] = [
                 c for c in f1.index if c.startswith('adj_') and c.endswith('_diff')
             ]
+
             odds_cols = ['FighterOddsNum','PrevFighterOddsNum']
             sections["Odds"] = [c for c in odds_cols if c in f1.index]
+
             sections["Ratings (Raw)"] = [c for c in f1.index if ('Colley' in c or 'Massey' in c) and 'avg7' not in c]
             sections["Ratings (7‑Fight Avg)"] = [c for c in f1.index if 'avg7' in c]
+
             sections["Striking & Grappling Final Differentials"] = [
                 c for c in f1.index if c.endswith('_opp_diff')
             ]
+
             sections["Outcomes"] = [c for c in f1.index if 'Outcome' in c]
+
             other_cols = ['Prev1_Title','IsNewWeightClass','PrevFighterOddsNum']
             sections["Other"] = [c for c in other_cols if c in f1.index]
 
             rows = []
             for sec_name, cols in sections.items():
-                if not cols: continue
+                if not cols:
+                    continue
                 rows.append({"Stat": f"--- {sec_name} ---", f1['Fighter']: "", f2['Fighter']: ""})
                 for c in cols:
-                    val1 = f1[c]; val2 = f2[c]
+                    val1 = f1[c]
+                    val2 = f2[c]
                     def fmt(v):
-                        if isinstance(v, (int,float)) and pd.notna(v): return f"{v:.2f}"
-                        elif pd.isna(v): return ""
-                        else: return str(v)
+                        if isinstance(v, (int, float)) and pd.notna(v):
+                            return f"{v:.2f}"
+                        elif pd.isna(v):
+                            return ""
+                        else:
+                            return str(v)
                     rows.append({"Stat": c, f1['Fighter']: fmt(val1), f2['Fighter']: fmt(val2)})
+
             df_stats = pd.DataFrame(rows)
             st.dataframe(df_stats, use_container_width=True, hide_index=True)
 
-            # Top 5 Differentials
+            # Model win probabilities
+            st.subheader(f"Model Win Probabilities for {f1['Fighter']}")
+            lr_model = st.session_state.lr_model; lr_feats = st.session_state.lr_feature_names
+            if lr_model and lr_feats:
+                vals = [f1[c] if c in f1 and pd.notna(f1[c]) else 0.0 for c in lr_feats]
+                try:
+                    prob = lr_model.predict_proba(np.array([vals]))[0,1]
+                    shrunk = (prior_weight * st.session_state.overall_wr/100 + prob) / (prior_weight + 1)
+                    st.write(f"**LR:** {prob:.1%} | Shrunken: {shrunk:.1%}")
+                except Exception as e: st.error(f"LR prediction error: {e}")
+            else: st.info("LR model not trained.")
+
+            knn_model = st.session_state.calibrated_knn; scaler = st.session_state.scaler; knn_feats = st.session_state.knn_feature_names
+            if knn_model and scaler and knn_feats:
+                vals = [f1[c] if c in f1 and pd.notna(f1[c]) else 0.0 for c in knn_feats]
+                try:
+                    up_scaled = scaler.transform(np.array([vals]))
+                    prob = np.clip(knn_model.predict_proba(up_scaled)[0,1], 0.1, 0.9)
+                    shrunk = (prior_weight * st.session_state.overall_wr/100 + prob) / (prior_weight + 1)
+                    st.write(f"**KNN:** {prob:.1%} | Shrunken: {shrunk:.1%}")
+                except Exception as e: st.error(f"KNN prediction error: {e}")
+            else: st.info("KNN model not trained.")
+
+            # Top 5 Differentials (signed)
             st.subheader("Top 5 Differentials")
             for fighter, row in [(f1['Fighter'], f1), (f2['Fighter'], f2)]:
                 diffs = {}
                 for c in row.index:
                     if (c.endswith('_opp_diff') or (c.startswith('adj_') and c.endswith('_diff'))):
                         val = row[c]
-                        if pd.notna(val): diffs[c] = val
+                        if pd.notna(val):
+                            diffs[c] = val
                 top5 = sorted(diffs.items(), key=lambda x: x[1], reverse=True)[:5]
                 if top5:
                     st.write(f"**{fighter}**")
@@ -368,8 +545,87 @@ if not upcoming_display.empty:
 else:
     st.info("No upcoming fights with current filters.")
 
+# KNN neighbors slider
+st.sidebar.subheader("KNN Settings")
+k_knn = st.sidebar.slider("KNN neighbors", 1, 20, st.session_state.knn_model_k, key="knn_slider")
+if k_knn != st.session_state.knn_model_k:
+    st.session_state.knn_model_k = k_knn
+    st.rerun()
+
 # -----------------------------------------------
-# FIGHT SIMILARITY (INDEPENDENT FILTERS – FULL ORIGINAL VARIABLE LIST)
+# LAST 20 FIGHTS
+# -----------------------------------------------
+st.header("Last 20 Fights")
+last20 = filtered.sort_values('FightDate', ascending=False).head(20)
+cols = ['FightDate','Fighter','Opponent','Win?','Method','AgeDiff','HeightDiff','ReachDiff','CareerWinPct_diff']
+cols = [c for c in cols if c in last20.columns]
+st.dataframe(last20[cols], use_container_width=True)
+
+# -----------------------------------------------
+# FEATURE IMPORTANCE (MI + Lasso + Random Forest)
+# -----------------------------------------------
+st.header("Top 20 Feature Importance & Global Model Ranking")
+hist_imp = filtered[filtered['Win?'].isin(['Yes','No'])].copy()
+if len(hist_imp) < 10:
+    st.warning("Too few historical fights after filtering to compute importance.")
+else:
+    hist_imp['Target'] = (hist_imp['Win?'] == 'Yes').astype(int)
+    feats = [c for c in numeric_features if c in hist_imp.columns]
+    if feats:
+        X_mi = hist_imp[feats].dropna()
+        if len(X_mi) >= 10:
+            imputer = SimpleImputer(strategy='median')
+            X_imp = imputer.fit_transform(X_mi)
+            y_mi = hist_imp.loc[X_mi.index, 'Target']
+            mi = mutual_info_classif(X_imp, y_mi, discrete_features=False, random_state=42)
+            mi_df = pd.DataFrame({'Feature': feats, 'MI': mi}).sort_values('MI', ascending=False).head(20)
+            fig_mi = px.bar(mi_df, x='MI', y='Feature', orientation='h',
+                            title="Top 20 Mutual Information")
+            st.plotly_chart(fig_mi, use_container_width=True, key="mi_plot")
+        else:
+            st.warning("Not enough complete rows for MI.")
+
+        if st.button("Compute Lasso Importance (all features)"):
+            with st.spinner("Fitting LassoCV..."):
+                X_lasso = hist_imp[feats].copy(); y_lasso = hist_imp['Target']
+                imp = SimpleImputer(strategy='median')
+                X_lasso_imp = imp.fit_transform(X_lasso)
+                scaler_lasso = StandardScaler()
+                X_lasso_scaled = scaler_lasso.fit_transform(X_lasso_imp)
+                lasso = LogisticRegressionCV(
+                    penalty='l1', solver='saga', cv=5,
+                    scoring='neg_brier_score', max_iter=2000,
+                    Cs=10, n_jobs=-1, random_state=42
+                )
+                lasso.fit(X_lasso_scaled, y_lasso)
+                coef = lasso.coef_.flatten()
+                coef_df = pd.DataFrame({'Feature': feats, 'Coefficient': coef})
+                coef_df = coef_df[coef_df['Coefficient'] != 0].sort_values('Coefficient', key=abs, ascending=False)
+                st.subheader("Lasso Non‑Zero Coefficients")
+                if len(coef_df) > 0:
+                    fig_lasso = px.bar(coef_df.head(30), x='Coefficient', y='Feature', orientation='h',
+                                       title="Lasso Coefficients")
+                    st.plotly_chart(fig_lasso, use_container_width=True, key="lasso_plot")
+                else:
+                    st.write("Lasso eliminated all features.")
+
+        if st.button("Compute Random Forest Importance (all features)"):
+            with st.spinner("Training Random Forest..."):
+                X_rf = hist_imp[feats].copy(); y_rf = hist_imp['Target']
+                imp = SimpleImputer(strategy='median')
+                X_rf_imp = imp.fit_transform(X_rf)
+                rf = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
+                rf.fit(X_rf_imp, y_rf)
+                rf_imp = pd.DataFrame({'Feature': feats, 'Importance': rf.feature_importances_}).sort_values('Importance', ascending=False).head(30)
+                st.subheader("Random Forest Feature Importance (Gini)")
+                fig_rf = px.bar(rf_imp, x='Importance', y='Feature', orientation='h',
+                                title="Random Forest Feature Importance")
+                st.plotly_chart(fig_rf, use_container_width=True, key="rf_plot")
+    else:
+        st.warning("No numeric features.")
+
+# -----------------------------------------------
+# FIGHT SIMILARITY (INDEPENDENT FILTERS + COMBO BUILDER)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 st.write("These filters are separate from the main sidebar and do not affect the dashboard above.")
@@ -419,10 +675,12 @@ with st.expander("Similarity Filters", expanded=True):
         spider_career2 = st.multiselect("Career F2", all_outcomes_career, key="spider_career2")
         spider_career3 = st.multiselect("Career F3", all_outcomes_career, key="spider_career3")
 
+        # Opponent previous outcomes
         spider_opp_prev1 = st.multiselect("Opp Prev 1", all_outcomes_raw, key="spider_opp_prev1")
         spider_opp_prev2 = st.multiselect("Opp Prev 2", all_outcomes_raw, key="spider_opp_prev2")
         spider_opp_prev3 = st.multiselect("Opp Prev 3", all_outcomes_raw, key="spider_opp_prev3")
 
+        # Opponent career outcomes
         spider_opp_career1 = st.multiselect("Opp Career F1", all_outcomes_career, key="spider_opp_career1")
         spider_opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career, key="spider_opp_career2")
         spider_opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career, key="spider_opp_career3")
@@ -494,6 +752,7 @@ for col, val in [(spider_prev1_col, spider_prev1), (spider_prev2_col, spider_pre
     if val and col in original_data.columns:
         spider_mask &= original_data[col].isin(val)
 
+# Opponent shifted previous outcomes
 for shift, wlist in [(1, spider_opp_prev1), (2, spider_opp_prev2), (3, spider_opp_prev3)]:
     col = f'Opponent_Prev{shift}_Outcome_raw'
     if wlist and col in original_data.columns:
@@ -504,6 +763,7 @@ for shift, wlist in [(1, spider_opp_prev1), (2, spider_opp_prev2), (3, spider_op
         else:
             spider_mask &= original_data[col].isin(wlist)
 
+# Opponent career outcomes
 for col, val in [('Opponent_Career1_Outcome_raw', spider_opp_career1),
                  ('Opponent_Career2_Outcome_raw', spider_opp_career2),
                  ('Opponent_Career3_Outcome_raw', spider_opp_career3)]:
@@ -533,8 +793,8 @@ else:
     if spider_upcoming.empty:
         st.warning("No upcoming fight has both fighters after similarity filters.")
     else:
-        # Full original set: all numeric columns (new_features) that exist in spider_data
-        sim_features = [c for c in new_features if c in spider_data.columns]
+        # SIMILARITY FEATURES: use the exact same list as model features
+        sim_features = [c for c in numeric_features if c in spider_data.columns]
         if not sim_features:
             st.warning("No numeric features for similarity.")
         else:
@@ -577,27 +837,19 @@ else:
                         col1.metric("Count (Top N)", count); col2.metric("Avg Similarity", f"{avg_sim:.1f}%")
                         col3.metric("Total Similarity", f"{total_sim:.1f}"); col4.metric("Composite Score", f"{composite:.1f}")
 
-                        high_sim_90 = top_n[top_n['Similarity'] >= 90]
-                        if len(high_sim_90) > 0:
-                            wins_90 = (high_sim_90['Win?'] == 'Yes').sum()
-                            win_rate_90 = wins_90 / len(high_sim_90) * 100
-                            weight_sum_wins = high_sim_90.loc[high_sim_90['Win?'] == 'Yes', 'Similarity'].sum()
-                            weight_sum_all = high_sim_90['Similarity'].sum()
-                            weighted_wr_90 = (weight_sum_wins / weight_sum_all) * 100 if weight_sum_all > 0 else 0.0
-                            st.metric("Win Rate (≥90% sim)", f"{win_rate_90:.1f}%", delta=f"{len(high_sim_90)} fights")
-                            st.metric("Weighted Win Rate (≥90% sim)", f"{weighted_wr_90:.1f}%")
+                        high_sim = top_n[top_n['Similarity'] >= 90]
+                        if len(high_sim) > 0:
+                            wins_high = (high_sim['Win?'] == 'Yes').sum()
+                            st.metric("Win Rate (≥90% sim)", f"{wins_high/len(high_sim)*100:.1f}%", delta=f"{len(high_sim)} fights")
                         else:
                             st.write("No historical fights with similarity ≥ 90% in the top selection.")
 
+                        # 80% similarity win rate
                         high_sim_80 = top_n[top_n['Similarity'] >= 80]
                         if len(high_sim_80) > 0:
-                            wins_80 = (high_sim_80['Win?'] == 'Yes').sum()
-                            win_rate_80 = wins_80 / len(high_sim_80) * 100
-                            weight_sum_wins_80 = high_sim_80.loc[high_sim_80['Win?'] == 'Yes', 'Similarity'].sum()
-                            weight_sum_all_80 = high_sim_80['Similarity'].sum()
-                            weighted_wr_80 = (weight_sum_wins_80 / weight_sum_all_80) * 100 if weight_sum_all_80 > 0 else 0.0
-                            st.metric("Win Rate (≥80% sim)", f"{win_rate_80:.1f}%", delta=f"{len(high_sim_80)} fights")
-                            st.metric("Weighted Win Rate (≥80% sim)", f"{weighted_wr_80:.1f}%")
+                            wins_high_80 = (high_sim_80['Win?'] == 'Yes').sum()
+                            st.metric("Win Rate (≥80% sim)", f"{wins_high_80/len(high_sim_80)*100:.1f}%",
+                                      delta=f"{len(high_sim_80)} fights")
                         else:
                             st.write("No historical fights with similarity ≥ 80% in the top selection.")
 
@@ -607,65 +859,71 @@ else:
                         st.subheader(f"Top {n_top} Most Similar Historical Fights")
                         st.dataframe(top_n, use_container_width=True)
 
-# -----------------------------------------------
-# FEATURE IMPORTANCE (BOTTOM)
-# -----------------------------------------------
-st.header("Top 20 Feature Importance & Global Model Ranking")
-hist_imp = filtered[filtered['Win?'].isin(['Yes','No'])].copy()
-if len(hist_imp) < 10:
-    st.warning("Too few historical fights after filtering to compute importance.")
-else:
-    hist_imp['Target'] = (hist_imp['Win?'] == 'Yes').astype(int)
-    feats = [c for c in new_features if pd.api.types.is_numeric_dtype(data[c]) and c in hist_imp.columns]
-    if feats:
-        X_mi = hist_imp[feats].dropna()
-        if len(X_mi) >= 10:
-            imputer = SimpleImputer(strategy='median')
-            X_imp = imputer.fit_transform(X_mi)
-            y_mi = hist_imp.loc[X_mi.index, 'Target']
-            mi = mutual_info_classif(X_imp, y_mi, discrete_features=False, random_state=42)
-            mi_df = pd.DataFrame({'Feature': feats, 'MI': mi}).sort_values('MI', ascending=False).head(20)
-            fig_mi = px.bar(mi_df, x='MI', y='Feature', orientation='h',
-                            title="Top 20 Mutual Information")
-            st.plotly_chart(fig_mi, use_container_width=True, key="mi_plot")
-        else:
-            st.warning("Not enough complete rows for MI.")
+                        # ---------- COMBINATION BUILDER ----------
+                        st.subheader("🔧 Variable‑Combination Builder (automatic ranking)")
+                        tmp_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
+                        if len(tmp_hist) > 10:
+                            tmp_hist['Target'] = (tmp_hist['Win?'] == 'Yes').astype(int)
+                            feats_mi = [c for c in sim_features if c in tmp_hist.columns]
+                            X_mi_comb = tmp_hist[feats_mi].dropna()
+                            if len(X_mi_comb) > 10:
+                                imputer = SimpleImputer(strategy='median')
+                                X_imp_comb = imputer.fit_transform(X_mi_comb)
+                                y_comb = tmp_hist.loc[X_mi_comb.index, 'Target']
+                                mi_vals = mutual_info_classif(X_imp_comb, y_comb, discrete_features=False, random_state=42)
+                                mi_df_comb = pd.DataFrame({'Feature': feats_mi, 'MI': mi_vals}).sort_values('MI', ascending=False)
+                            else:
+                                mi_df_comb = pd.DataFrame({'Feature': sim_features})
+                        else:
+                            mi_df_comb = pd.DataFrame({'Feature': sim_features})
 
-        if st.button("Compute Lasso Importance (all features)"):
-            with st.spinner("Fitting LassoCV..."):
-                X_lasso = hist_imp[feats].copy(); y_lasso = hist_imp['Target']
-                imp = SimpleImputer(strategy='median')
-                X_lasso_imp = imp.fit_transform(X_lasso)
-                scaler_lasso = StandardScaler()
-                X_lasso_scaled = scaler_lasso.fit_transform(X_lasso_imp)
-                lasso = LogisticRegressionCV(
-                    penalty='l1', solver='saga', cv=5,
-                    scoring='neg_brier_score', max_iter=2000,
-                    Cs=10, n_jobs=-1, random_state=42
-                )
-                lasso.fit(X_lasso_scaled, y_lasso)
-                coef = lasso.coef_.flatten()
-                coef_df = pd.DataFrame({'Feature': feats, 'Coefficient': coef})
-                coef_df = coef_df[coef_df['Coefficient'] != 0].sort_values('Coefficient', key=abs, ascending=False)
-                st.subheader("Lasso Non‑Zero Coefficients")
-                if len(coef_df) > 0:
-                    fig_lasso = px.bar(coef_df.head(30), x='Coefficient', y='Feature', orientation='h',
-                                       title="Lasso Coefficients")
-                    st.plotly_chart(fig_lasso, use_container_width=True, key="lasso_plot")
-                else:
-                    st.write("Lasso eliminated all features.")
+                        n_top_feats = st.slider("Number of top features to consider", 5, min(30, len(mi_df_comb)), 10, step=1, key="combo_n_features")
+                        combo_sizes = st.multiselect("Combination sizes to test", [2, 3, 4], default=[2, 3], key="combo_sizes")
+                        top_pool = mi_df_comb.head(n_top_feats)['Feature'].tolist()
 
-        if st.button("Compute Random Forest Importance (all features)"):
-            with st.spinner("Training Random Forest..."):
-                X_rf = hist_imp[feats].copy(); y_rf = hist_imp['Target']
-                imp = SimpleImputer(strategy='median')
-                X_rf_imp = imp.fit_transform(X_rf)
-                rf = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
-                rf.fit(X_rf_imp, y_rf)
-                rf_imp = pd.DataFrame({'Feature': feats, 'Importance': rf.feature_importances_}).sort_values('Importance', ascending=False).head(30)
-                st.subheader("Random Forest Feature Importance (Gini)")
-                fig_rf = px.bar(rf_imp, x='Importance', y='Feature', orientation='h',
-                                title="Random Forest Feature Importance")
-                st.plotly_chart(fig_rf, use_container_width=True, key="rf_plot")
-    else:
-        st.warning("No numeric features.")
+                        if st.button("Find best variable combinations for this fight"):
+                            from itertools import combinations
+                            results = []
+                            for r in combo_sizes:
+                                for combo in combinations(top_pool, r):
+                                    hist_sub_comb = spider_hist[list(combo)].dropna()
+                                    if len(hist_sub_comb) < 2:
+                                        continue
+                                    scaler_comb = StandardScaler()
+                                    scaler_comb.fit(hist_sub_comb)
+                                    up_vals_comb = []
+                                    for var in combo:
+                                        raw = f1[var]
+                                        try:
+                                            v = float(raw) if pd.notna(raw) else 0.0
+                                        except:
+                                            v = 0.0
+                                        up_vals_comb.append(v)
+                                    up_vec_comb = np.array([up_vals_comb], dtype=np.float64)
+                                    up_scaled_comb = scaler_comb.transform(up_vec_comb)
+                                    hist_scaled_comb = scaler_comb.transform(hist_sub_comb)
+                                    dists_comb = cdist(up_scaled_comb, hist_scaled_comb, 'euclidean').flatten()
+                                    max_d = dists_comb.max() if dists_comb.max() > 0 else 1.0
+                                    sim_scores_comb = 100 * (1 - dists_comb / max_d)
+                                    sim_df_comb = spider_hist.loc[hist_sub_comb.index, ['FightDate','Fighter','Opponent','Win?']].copy()
+                                    sim_df_comb['Similarity'] = sim_scores_comb.round(1)
+                                    top50 = sim_df_comb.sort_values('Similarity', ascending=False).head(50)
+                                    count_comb = len(top50)
+                                    avg_sim_comb = top50['Similarity'].mean()
+                                    composite_comb = avg_sim_comb * (count_comb ** 0.5) / 100
+                                    wins_comb = (top50['Win?'] == 'Yes').sum()
+                                    wr_comb = wins_comb / count_comb * 100 if count_comb > 0 else 0.0
+                                    results.append({
+                                        'Variables': ', '.join(combo),
+                                        'Size': r,
+                                        'Count (top50)': count_comb,
+                                        'Avg Sim': round(avg_sim_comb, 1),
+                                        'Composite': round(composite_comb, 1),
+                                        'Win Rate': round(wr_comb, 1)
+                                    })
+                            if results:
+                                combo_df = pd.DataFrame(results).sort_values('Composite', ascending=False).head(20)
+                                st.dataframe(combo_df, use_container_width=True)
+                                st.caption("Composite = Avg Similarity × √Count / 100. Higher means many highly similar historical fights.")
+                            else:
+                                st.warning("Could not evaluate any combinations. Try adjusting filters.")
