@@ -80,7 +80,7 @@ numeric_features = [c for c in data.columns
                     or c in rating_raw_cols
                     or c in rating_avg7_cols]
 
-# All other features (for similarity & filters)
+# All other features (for filters, not used for model/similarity)
 base_cols = [c for c in data.columns if c not in ['FightID','Fighter','Opponent','FightDate','Win?','Method','Round',
                                                     'DetailedResult','Fight','FightDurationMinutes']]
 new_features = list(dict.fromkeys(base_cols))
@@ -765,11 +765,8 @@ else:
     if spider_upcoming.empty:
         st.warning("No upcoming fight has both fighters after similarity filters.")
     else:
-        sim_features = [c for c in new_features if c in spider_data.columns and c not in ['Win?', 'Method', 'Round', 'Title']]
-        if 'Opponent_FightNumber' in spider_data.columns:
-            sim_features.append('Opponent_FightNumber')
-        sim_features = list(dict.fromkeys(sim_features))
-
+        # SIMILARITY FEATURES: use the exact same list as model features
+        sim_features = [c for c in numeric_features if c in spider_data.columns]
         if not sim_features:
             st.warning("No numeric features for similarity.")
         else:
