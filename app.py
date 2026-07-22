@@ -5,28 +5,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 import gdown
 from sklearn.linear_model import LogisticRegressionCV
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.tree import DecisionTreeClassifier, export_text
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import brier_score_loss
-from sklearn.model_selection import cross_val_predict
-from sklearn.inspection import permutation_importance
 from scipy.spatial.distance import cdist
-
-# Optional imports – missing ones handled gracefully
-try:
-    import lightgbm as lgb
-    HAS_LIGHTGBM = True
-except ImportError:
-    HAS_LIGHTGBM = False
-
-try:
-    import dtreeviz
-    HAS_DTREEVIZ = True
-except ImportError:
-    HAS_DTREEVIZ = False
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
@@ -245,7 +229,6 @@ def build_independent_filter(df, key_prefix):
             all_outcomes_raw = sorted(df[prev1_col].dropna().unique()) if prev1_col in df.columns else []
             all_outcomes_career = sorted(df[career1_col].dropna().unique()) if career1_col in df.columns else []
 
-            # Add "Win (any)" and "Loss (any)" options
             outcome_options_raw = all_outcomes_raw + ["Win (any)", "Loss (any)"]
             outcome_options_career = all_outcomes_career + ["Win (any)", "Loss (any)"]
 
@@ -327,21 +310,18 @@ def build_independent_filter(df, key_prefix):
         if col in df.columns:
             mask &= add_filter((df[col] >= cmin) & (df[col] <= cmax), col)
 
-    # Helper to apply outcome filter with "Win (any)" / "Loss (any)"
+    # Outcome filter helper
     def apply_outcome_filter(col, selected):
         if not selected or col not in df.columns:
             return None
-        # Check if "Win (any)" is in the selection
         cond = pd.Series(False, index=df.index)
         if "Win (any)" in selected:
             cond |= df[col].str.startswith('Win', na=False)
         if "Loss (any)" in selected:
             cond |= df[col].str.startswith('Loss', na=False)
-        # Exact matches (excluding the special options)
         exact = [s for s in selected if s not in ("Win (any)", "Loss (any)")]
         if exact:
             cond |= df[col].isin(exact)
-        # Keep NaN
         return cond | df[col].isna()
 
     for col, val in [(prev1_col, prev1), (prev2_col, prev2), (prev3_col, prev3),
@@ -351,7 +331,6 @@ def build_independent_filter(df, key_prefix):
             if c is not None:
                 mask &= c
 
-    # Opponent previous outcomes
     for shift, wlist in [(1, opp_prev1), (2, opp_prev2), (3, opp_prev3)]:
         col = f'Opponent_Prev{shift}_Outcome_raw'
         if wlist and col in df.columns:
@@ -364,7 +343,6 @@ def build_independent_filter(df, key_prefix):
                 c = apply_outcome_filter(col, wlist)
                 if c is not None: mask &= c
 
-    # Opponent career outcomes
     for col, val in [('Opponent_Career1_Outcome_raw', opp_career1),
                      ('Opponent_Career2_Outcome_raw', opp_career2),
                      ('Opponent_Career3_Outcome_raw', opp_career3)]:
@@ -475,7 +453,7 @@ else:
                         st.dataframe(top_n, use_container_width=True)
 
 # -----------------------------------------------
-# DECISION TREE (independent filters) – fixed graphviz issue
+# DECISION TREE (independent filters) – always text tree
 # -----------------------------------------------
 st.header("Decision Tree Model (with adjustable depth/leaf)")
 tree_data = build_independent_filter(original_data.copy(), "tree")
@@ -504,36 +482,9 @@ else:
                 dt = DecisionTreeClassifier(max_depth=max_depth, min_samples_leaf=min_samples_leaf, random_state=42)
                 dt.fit(X, y)
 
-                # Visualisation – use text tree if graphviz not available
-                if HAS_DTREEVIZ:
-                    # Check if graphviz executable is available
-                    import shutil
-                    if shutil.which('dot') is None:
-                        st.warning("Graphviz executable not found. Showing text tree instead.")
-                        from sklearn.tree import export_text
-                        tree_text = export_text(dt, feature_names=tree_features)
-                        st.text(tree_text)
-                    else:
-                        try:
-                            viz = dtreeviz.model(
-                                dt, X, y,
-                                target_name='Win',
-                                feature_names=tree_features,
-                                class_names=['Loss', 'Win']
-                            )
-                            # Get SVG string and display directly
-                            svg_str = viz.view().svg()
-                            st.image(svg_str, use_column_width=True)
-                        except Exception as e:
-                            st.warning(f"dtreeviz error: {e}. Showing text tree instead.")
-                            from sklearn.tree import export_text
-                            tree_text = export_text(dt, feature_names=tree_features)
-                            st.text(tree_text)
-                else:
-                    st.warning("dtreeviz not installed. Showing text tree instead.")
-                    from sklearn.tree import export_text
-                    tree_text = export_text(dt, feature_names=tree_features)
-                    st.text(tree_text)
+                # Always use text tree (no external dependencies)
+                tree_text = export_text(dt, feature_names=tree_features)
+                st.text(tree_text)
 
                 # Leaf win percentages
                 st.subheader("Leaf Win Percentages")
@@ -542,67 +493,6 @@ else:
                     mask_leaf = leaf_ids == leaf_id
                     win_rate_leaf = y[mask_leaf].mean() * 100
                     st.write(f"Leaf {leaf_id}: {mask_leaf.sum()} samples, Win rate = {win_rate_leaf:.1f}%")
-
-# -----------------------------------------------
-# LIGHTGBM (independent filters)
-# -----------------------------------------------
-st.header("LightGBM Model (with Brier score and probability)")
-if not HAS_LIGHTGBM:
-    st.warning("LightGBM is not installed. Run `pip install lightgbm` to use this section.")
-else:
-    lgbm_data = build_independent_filter(original_data.copy(), "lgbm")
-
-    lgbm_hist = lgbm_data[lgbm_data['Win?'].isin(['Yes','No'])].copy()
-    if len(lgbm_hist) < 10:
-        st.warning("Not enough historical fights for LightGBM.")
-    else:
-        lgbm_hist['Target'] = (lgbm_hist['Win?'] == 'Yes').astype(int)
-
-        lgbm_features = [c for c in numeric_features if c in lgbm_hist.columns and c not in abs_rating_cols]
-        if not lgbm_features:
-            st.warning("No features available for LightGBM.")
-        else:
-            X_lgbm = lgbm_hist[lgbm_features].fillna(lgbm_hist[lgbm_features].median())
-            y_lgbm = lgbm_hist['Target']
-
-            if st.button("Train LightGBM (CV Brier)", key="train_lgbm"):
-                with st.spinner("Training LightGBM with 5‑fold CV..."):
-                    model = lgb.LGBMClassifier(random_state=42, verbose=-1)
-                    y_prob = cross_val_predict(model, X_lgbm, y_lgbm, cv=5, method='predict_proba')[:, 1]
-                    bs = brier_score_loss(y_lgbm, y_prob)
-                    st.metric("Cross‑Validated Brier Score", f"{bs:.4f}")
-
-                    final_model = lgb.LGBMClassifier(random_state=42, verbose=-1)
-                    final_model.fit(X_lgbm, y_lgbm)
-
-                    if st.session_state.get("selected_fight_row") is not None:
-                        f1_row = st.session_state.selected_fight_row
-                        if f1_row['FightID'] in lgbm_data['FightID'].values:
-                            vals = []
-                            for c in lgbm_features:
-                                val = f1_row.get(c, np.nan)
-                                if pd.isna(val):
-                                    val = lgbm_hist[c].median()
-                                vals.append(val)
-                            try:
-                                prob = final_model.predict_proba(np.array([vals]))[0, 1]
-                                st.write(f"LightGBM win probability for **{f1_row['Fighter']}**: {prob:.1%}")
-                            except Exception as e:
-                                st.error(f"Prediction error: {e}")
-                        else:
-                            st.info("Selected fight not in the filtered dataset.")
-
-                    st.subheader("Permutation Importance (LightGBM)")
-                    with st.spinner("Computing permutation importance..."):
-                        perm_imp = permutation_importance(final_model, X_lgbm, y_lgbm, n_repeats=5, random_state=42, scoring='neg_brier_score')
-                        perm_df = pd.DataFrame({
-                            'Feature': lgbm_features,
-                            'Importance': perm_imp.importances_mean,
-                            'Std': perm_imp.importances_std
-                        }).sort_values('Importance', ascending=False).head(20)
-                        fig_perm = px.bar(perm_df, x='Importance', y='Feature', orientation='h',
-                                          error_x='Std', title="LightGBM Permutation Importance")
-                        st.plotly_chart(fig_perm, use_container_width=True)
 
 # -----------------------------------------------
 # FEATURE IMPORTANCE (bottom, full data, no absolute ratings)
