@@ -117,7 +117,10 @@ if not upcoming_display.empty:
     if selected_fight:
         fight_rows = upcoming_display[upcoming_display['FightID'] == selected_fight]
         if len(fight_rows) == 2:
-            f1 = fight_rows.iloc[0]; f2 = fight_rows.iloc[1]
+            # FIX: sort alphabetically by Fighter so f1/f2 order is deterministic
+            fight_rows = fight_rows.sort_values('Fighter')
+            f1 = fight_rows.iloc[0]
+            f2 = fight_rows.iloc[1]
             st.session_state.selected_fight_row = f1
             st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
 
@@ -187,7 +190,7 @@ else:
     st.info("No upcoming fights available.")
 
 # -----------------------------------------------
-# INDEPENDENT FILTER HELPER (unchanged)
+# INDEPENDENT FILTER HELPER
 # -----------------------------------------------
 def build_independent_filter(df, key_prefix):
     with st.expander(f"{key_prefix} Filters", expanded=True):
@@ -379,7 +382,7 @@ def build_independent_filter(df, key_prefix):
     return df[mask].copy()
 
 # -----------------------------------------------
-# SPIDER CHART (unchanged)
+# SPIDER CHART (Similarity)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
@@ -417,7 +420,10 @@ else:
                     selected_fight_spider = st.selectbox("Choose an upcoming fight for similarity", up_ids, key="spider_fight_select")
                     if selected_fight_spider:
                         fight_rows = spider_upcoming[spider_upcoming['FightID'] == selected_fight_spider]
-                        f1 = fight_rows.iloc[0]; f2 = fight_rows.iloc[1]
+                        # FIX: sort alphabetically to guarantee consistent order
+                        fight_rows = fight_rows.sort_values('Fighter')
+                        f1 = fight_rows.iloc[0]
+                        f2 = fight_rows.iloc[1]
                         st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
 
                         up_vals = [float(f1.get(var, 0.0)) for var in selected_vars]
@@ -488,7 +494,7 @@ else:
                         st.dataframe(top_n[col_order], use_container_width=True)
 
 # -----------------------------------------------
-# DECISION TREE (with fixed fight selector display)
+# DECISION TREE
 # -----------------------------------------------
 st.header("Decision Tree Model (with adjustable depth/leaf)")
 tree_data = build_independent_filter(original_data.copy(), "tree")
@@ -499,6 +505,8 @@ if not tree_upcoming.empty:
     tree_selected_fight = st.selectbox("Select fight for tree prediction", tree_upcoming_ids, key="tree_fight_selector")
     if tree_selected_fight:
         tree_fight_rows = tree_upcoming[tree_upcoming['FightID'] == tree_selected_fight]
+        # FIX: sort alphabetically to guarantee consistent order
+        tree_fight_rows = tree_fight_rows.sort_values('Fighter')
         if len(tree_fight_rows) == 2:
             st.write(f"Selected: **{tree_fight_rows.iloc[0]['Fighter']}** vs **{tree_fight_rows.iloc[1]['Fighter']}**")
         elif len(tree_fight_rows) == 1:
@@ -555,7 +563,7 @@ else:
 
                 st.subheader("Prediction for Selected Upcoming Fight")
                 if tree_selected_fight is not None:
-                    fight_rows = tree_upcoming[tree_upcoming['FightID'] == tree_selected_fight]
+                    fight_rows = tree_upcoming[tree_upcoming['FightID'] == tree_selected_fight].sort_values('Fighter')
                     if len(fight_rows) == 2:
                         f1_row = fight_rows.iloc[0]
                         input_vals = []
@@ -577,7 +585,7 @@ else:
                     st.info("No fight selected for the tree. Choose a fight above.")
 
 # -----------------------------------------------
-# FEATURE IMPORTANCE (unchanged)
+# FEATURE IMPORTANCE
 # -----------------------------------------------
 st.header("Top 20 Feature Importance (Full Data, No Absolute Ratings)")
 hist_imp_full = data[data['Win?'].isin(['Yes','No'])].copy()
