@@ -48,12 +48,32 @@ def get_diff_range(df, col_name):
     if len(vals) == 0: return -1.0, 1.0
     return float(vals.min()), float(vals.max())
 
-# Feature lists for filters
+# Rating columns for display and spider chart
+rating_raw_cols = [
+    'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecayDiff',
+    'FighterMasseyFinishDecay', 'OpponentMasseyFinishDecay', 'MasseyFinishDecayDiff',
+    'FighterMasseyStrikeDecay', 'OpponentMasseyStrikeDecay', 'MasseyStrikeDecayDiff',
+    'FighterMasseyCtrlDecay', 'OpponentMasseyCtrlDecay', 'MasseyCtrlDecayDiff',
+    'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecayDiff'
+]
+rating_avg7_cols = [
+    'FighterColleyDecay_avg7', 'Opponent_FighterColleyDecay_avg7', 'FighterColleyDecay_avg7_diff',
+    'FighterMasseyFinishDecay_avg7', 'Opponent_FighterMasseyFinishDecay_avg7', 'FighterMasseyFinishDecay_avg7_diff',
+    'FighterMasseyStrikeDecay_avg7', 'Opponent_FighterMasseyStrikeDecay_avg7', 'FighterMasseyStrikeDecay_avg7_diff',
+    'FighterMasseyCtrlDecay_avg7', 'Opponent_FighterMasseyCtrlDecay_avg7', 'FighterMasseyCtrlDecay_avg7_diff',
+    'FighterWeightedMasseyDecay_avg7', 'Opponent_FighterWeightedMasseyDecay_avg7', 'FighterWeightedMasseyDecay_avg7_diff'
+]
+
+# Feature lists for filters and similarity (spider will use only rating diffs)
 base_cols = [c for c in data.columns if c not in ['FightID','Fighter','Opponent','FightDate','Win?','Method','Round',
                                                     'DetailedResult','Fight','FightDurationMinutes']]
 new_features = list(dict.fromkeys(base_cols))
 
-# Session state
+# For spider chart: only rating differentials
+spider_rating_diff_cols = [c for c in rating_raw_cols if c.endswith('Diff')] + \
+                          [c for c in rating_avg7_cols if c.endswith('_diff')]
+
+# Session state (minimal, no models)
 for key, default in [
     ('overall_wr', 0.0), ('recent_wr', 0.0), ('recent_count', 0),
 ]:
@@ -264,7 +284,7 @@ color_map = {
     'Loss by DQ': 'darkred', 'No Contest': 'purple', 'Upcoming': 'blue', 'Draw': 'gray'
 }
 
-# Win rates
+# Win rates (for shrinkage if needed later)
 hist_for_wr = filtered[filtered['Win?'].isin(['Yes','No'])].copy()
 if len(hist_for_wr) > 0:
     st.session_state.overall_wr = (hist_for_wr['Win?'] == 'Yes').mean() * 100
@@ -286,7 +306,7 @@ col1, col2, col3 = st.columns(3)
 col1.metric("Total Fights", total); col2.metric("Wins", wins); col3.metric("Win Rate", f"{win_rate:.1f}%")
 
 # -----------------------------------------------
-# LAST 20 FIGHTS
+# LAST 20 FIGHTS (moved up)
 # -----------------------------------------------
 st.header("Last 20 Fights")
 last20 = filtered.sort_values('FightDate', ascending=False).head(20)
@@ -312,50 +332,67 @@ if not upcoming_display.empty:
             st.session_state.selected_fight_row = f1
             st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
 
+            # ---- BUILD TABLE SECTIONS ----
             sections = {}
+
             identity_cols = ['WC','Title','ScheduledRounds','Stance','Country','HometownFighter','EventCountry']
             sections["Identity"] = [c for c in identity_cols if c in f1.index]
+
             physical_cols = ['Age','Height','Reach','AgeDiff','HeightDiff','ReachDiff']
             sections["Physical"] = [c for c in physical_cols if c in f1.index]
+
             fight_hist_cols = ['FightNumber','DaysSincePrev','Avg3DaysGap','Prev7WinPct','CareerWinPct',
                                'DaysSincePrev_diff','Avg3DaysGap_diff','CareerWinPct_diff','FightNumber_diff']
             sections["Fight History"] = [c for c in fight_hist_cols if c in f1.index]
+
             sections["Normalized Simple Stats (diff)"] = [
                 c for c in f1.index if c.startswith('adj_') and c.endswith('_diff')
             ]
+
             odds_cols = ['FighterOddsNum','PrevFighterOddsNum']
             sections["Odds"] = [c for c in odds_cols if c in f1.index]
+
             sections["Ratings (Raw)"] = [c for c in f1.index if ('Colley' in c or 'Massey' in c) and 'avg7' not in c]
             sections["Ratings (7‑Fight Avg)"] = [c for c in f1.index if 'avg7' in c]
+
             sections["Striking & Grappling Final Differentials"] = [
                 c for c in f1.index if c.endswith('_opp_diff')
             ]
+
             sections["Outcomes"] = [c for c in f1.index if 'Outcome' in c]
+
             other_cols = ['Prev1_Title','IsNewWeightClass','PrevFighterOddsNum']
             sections["Other"] = [c for c in other_cols if c in f1.index]
 
             rows = []
             for sec_name, cols in sections.items():
-                if not cols: continue
+                if not cols:
+                    continue
                 rows.append({"Stat": f"--- {sec_name} ---", f1['Fighter']: "", f2['Fighter']: ""})
                 for c in cols:
-                    val1 = f1[c]; val2 = f2[c]
+                    val1 = f1[c]
+                    val2 = f2[c]
                     def fmt(v):
-                        if isinstance(v, (int,float)) and pd.notna(v): return f"{v:.2f}"
-                        elif pd.isna(v): return ""
-                        else: return str(v)
+                        if isinstance(v, (int, float)) and pd.notna(v):
+                            return f"{v:.2f}"
+                        elif pd.isna(v):
+                            return ""
+                        else:
+                            return str(v)
                     rows.append({"Stat": c, f1['Fighter']: fmt(val1), f2['Fighter']: fmt(val2)})
+
             df_stats = pd.DataFrame(rows)
             st.dataframe(df_stats, use_container_width=True, hide_index=True)
 
-            # Top 5 Differentials
+            # Top 5 Differentials (signed)
             st.subheader("Top 5 Differentials")
             for fighter, row in [(f1['Fighter'], f1), (f2['Fighter'], f2)]:
                 diffs = {}
                 for c in row.index:
                     if (c.endswith('_opp_diff') or (c.startswith('adj_') and c.endswith('_diff'))):
                         val = row[c]
-                        if pd.notna(val): diffs[c] = val
+                        if pd.notna(val):
+                            diffs[c] = val
                 top5 = sorted(diffs.items(), key=lambda x: x[1], reverse=True)[:5]
                 if top5:
                     st.write(f"**{fighter}**")
@@ -369,7 +406,7 @@ else:
     st.info("No upcoming fights with current filters.")
 
 # -----------------------------------------------
-# FIGHT SIMILARITY (INDEPENDENT FILTERS – FULL SET, MINUS RATING ABSOLUTES)
+# FIGHT SIMILARITY (INDEPENDENT FILTERS, RATING DIFFS ONLY, NO COMBO BUILDER)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 st.write("These filters are separate from the main sidebar and do not affect the dashboard above.")
@@ -419,10 +456,12 @@ with st.expander("Similarity Filters", expanded=True):
         spider_career2 = st.multiselect("Career F2", all_outcomes_career, key="spider_career2")
         spider_career3 = st.multiselect("Career F3", all_outcomes_career, key="spider_career3")
 
+        # Opponent previous outcomes
         spider_opp_prev1 = st.multiselect("Opp Prev 1", all_outcomes_raw, key="spider_opp_prev1")
         spider_opp_prev2 = st.multiselect("Opp Prev 2", all_outcomes_raw, key="spider_opp_prev2")
         spider_opp_prev3 = st.multiselect("Opp Prev 3", all_outcomes_raw, key="spider_opp_prev3")
 
+        # Opponent career outcomes
         spider_opp_career1 = st.multiselect("Opp Career F1", all_outcomes_career, key="spider_opp_career1")
         spider_opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career, key="spider_opp_career2")
         spider_opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career, key="spider_opp_career3")
@@ -494,6 +533,7 @@ for col, val in [(spider_prev1_col, spider_prev1), (spider_prev2_col, spider_pre
     if val and col in original_data.columns:
         spider_mask &= original_data[col].isin(val)
 
+# Opponent shifted previous outcomes
 for shift, wlist in [(1, spider_opp_prev1), (2, spider_opp_prev2), (3, spider_opp_prev3)]:
     col = f'Opponent_Prev{shift}_Outcome_raw'
     if wlist and col in original_data.columns:
@@ -504,6 +544,7 @@ for shift, wlist in [(1, spider_opp_prev1), (2, spider_opp_prev2), (3, spider_op
         else:
             spider_mask &= original_data[col].isin(wlist)
 
+# Opponent career outcomes
 for col, val in [('Opponent_Career1_Outcome_raw', spider_opp_career1),
                  ('Opponent_Career2_Outcome_raw', spider_opp_career2),
                  ('Opponent_Career3_Outcome_raw', spider_opp_career3)]:
@@ -533,24 +574,12 @@ else:
     if spider_upcoming.empty:
         st.warning("No upcoming fight has both fighters after similarity filters.")
     else:
-        # All numeric features EXCEPT absolute rating columns (FighterXXX, OpponentXXX without Diff)
-        rating_abs_cols = [
-            'FighterColleyDecay', 'OpponentColleyDecay',
-            'FighterMasseyFinishDecay', 'OpponentMasseyFinishDecay',
-            'FighterMasseyStrikeDecay', 'OpponentMasseyStrikeDecay',
-            'FighterMasseyCtrlDecay', 'OpponentMasseyCtrlDecay',
-            'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay',
-            'FighterColleyDecay_avg7', 'Opponent_FighterColleyDecay_avg7',
-            'FighterMasseyFinishDecay_avg7', 'Opponent_FighterMasseyFinishDecay_avg7',
-            'FighterMasseyStrikeDecay_avg7', 'Opponent_FighterMasseyStrikeDecay_avg7',
-            'FighterMasseyCtrlDecay_avg7', 'Opponent_FighterMasseyCtrlDecay_avg7',
-            'FighterWeightedMasseyDecay_avg7', 'Opponent_FighterWeightedMasseyDecay_avg7'
-        ]
-        sim_features = [c for c in new_features if c in spider_data.columns and c not in rating_abs_cols]
+        # Only rating differentials for similarity
+        sim_features = [c for c in spider_rating_diff_cols if c in spider_data.columns]
         if not sim_features:
-            st.warning("No numeric features for similarity.")
+            st.warning("No rating differential features available.")
         else:
-            selected_vars = st.multiselect("Select variables for similarity", sim_features, default=sim_features[:5], max_selections=8, key="spider_vars")
+            selected_vars = st.multiselect("Select rating differentials for similarity", sim_features, default=sim_features[:5], max_selections=8, key="spider_vars")
             if selected_vars:
                 hist_sub = spider_hist[selected_vars].dropna()
                 if len(hist_sub) < 2:
@@ -589,28 +618,37 @@ else:
                         col1.metric("Count (Top N)", count); col2.metric("Avg Similarity", f"{avg_sim:.1f}%")
                         col3.metric("Total Similarity", f"{total_sim:.1f}"); col4.metric("Composite Score", f"{composite:.1f}")
 
-                        # 90% similarity
+                        # 90% similarity metrics
                         high_sim_90 = top_n[top_n['Similarity'] >= 90]
                         if len(high_sim_90) > 0:
                             wins_90 = (high_sim_90['Win?'] == 'Yes').sum()
                             win_rate_90 = wins_90 / len(high_sim_90) * 100
-                            weight_sum_wins = high_sim_90.loc[high_sim_90['Win?'] == 'Yes', 'Similarity'].sum()
-                            weight_sum_all = high_sim_90['Similarity'].sum()
-                            weighted_wr_90 = (weight_sum_wins / weight_sum_all) * 100 if weight_sum_all > 0 else 0.0
-                            st.metric("Win Rate (≥90% sim)", f"{win_rate_90:.1f}%", delta=f"{len(high_sim_90)} fights")
+                            # weighted win rate
+                            if wins_90 > 0:
+                                weight_sum_wins = high_sim_90.loc[high_sim_90['Win?'] == 'Yes', 'Similarity'].sum()
+                                weight_sum_all = high_sim_90['Similarity'].sum()
+                                weighted_wr_90 = (weight_sum_wins / weight_sum_all) * 100 if weight_sum_all > 0 else 0.0
+                            else:
+                                weighted_wr_90 = 0.0
+                            st.metric("Win Rate (≥90% sim)", f"{win_rate_90:.1f}%",
+                                      delta=f"{len(high_sim_90)} fights")
                             st.metric("Weighted Win Rate (≥90% sim)", f"{weighted_wr_90:.1f}%")
                         else:
                             st.write("No historical fights with similarity ≥ 90% in the top selection.")
 
-                        # 80% similarity
+                        # 80% similarity metrics
                         high_sim_80 = top_n[top_n['Similarity'] >= 80]
                         if len(high_sim_80) > 0:
                             wins_80 = (high_sim_80['Win?'] == 'Yes').sum()
                             win_rate_80 = wins_80 / len(high_sim_80) * 100
-                            weight_sum_wins_80 = high_sim_80.loc[high_sim_80['Win?'] == 'Yes', 'Similarity'].sum()
-                            weight_sum_all_80 = high_sim_80['Similarity'].sum()
-                            weighted_wr_80 = (weight_sum_wins_80 / weight_sum_all_80) * 100 if weight_sum_all_80 > 0 else 0.0
-                            st.metric("Win Rate (≥80% sim)", f"{win_rate_80:.1f}%", delta=f"{len(high_sim_80)} fights")
+                            if wins_80 > 0:
+                                weight_sum_wins_80 = high_sim_80.loc[high_sim_80['Win?'] == 'Yes', 'Similarity'].sum()
+                                weight_sum_all_80 = high_sim_80['Similarity'].sum()
+                                weighted_wr_80 = (weight_sum_wins_80 / weight_sum_all_80) * 100 if weight_sum_all_80 > 0 else 0.0
+                            else:
+                                weighted_wr_80 = 0.0
+                            st.metric("Win Rate (≥80% sim)", f"{win_rate_80:.1f}%",
+                                      delta=f"{len(high_sim_80)} fights")
                             st.metric("Weighted Win Rate (≥80% sim)", f"{weighted_wr_80:.1f}%")
                         else:
                             st.write("No historical fights with similarity ≥ 80% in the top selection.")
@@ -622,7 +660,7 @@ else:
                         st.dataframe(top_n, use_container_width=True)
 
 # -----------------------------------------------
-# FEATURE IMPORTANCE (BOTTOM)
+# FEATURE IMPORTANCE (MOVED TO BOTTOM)
 # -----------------------------------------------
 st.header("Top 20 Feature Importance & Global Model Ranking")
 hist_imp = filtered[filtered['Win?'].isin(['Yes','No'])].copy()
@@ -630,6 +668,7 @@ if len(hist_imp) < 10:
     st.warning("Too few historical fights after filtering to compute importance.")
 else:
     hist_imp['Target'] = (hist_imp['Win?'] == 'Yes').astype(int)
+    # Use all numeric features that are in the data (from new_features, excluding internal)
     feats = [c for c in new_features if pd.api.types.is_numeric_dtype(data[c]) and c in hist_imp.columns]
     if feats:
         X_mi = hist_imp[feats].dropna()
