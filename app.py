@@ -48,7 +48,7 @@ def get_diff_range(df, col_name):
     if len(vals) == 0: return -1.0, 1.0
     return float(vals.min()), float(vals.max())
 
-# Feature lists – exact same as original numeric_features
+# Rating column definitions (same as before)
 rating_raw_cols = [
     'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecayDiff',
     'FighterMasseyFinishDecay', 'OpponentMasseyFinishDecay', 'MasseyFinishDecayDiff',
@@ -281,7 +281,7 @@ color_map = {
     'Loss by DQ': 'darkred', 'No Contest': 'purple', 'Upcoming': 'blue', 'Draw': 'gray'
 }
 
-# Win rates (for shrinkage if needed later)
+# Win rates
 hist_for_wr = filtered[filtered['Win?'].isin(['Yes','No'])].copy()
 if len(hist_for_wr) > 0:
     st.session_state.overall_wr = (hist_for_wr['Win?'] == 'Yes').mean() * 100
@@ -403,7 +403,7 @@ else:
     st.info("No upcoming fights with current filters.")
 
 # -----------------------------------------------
-# FIGHT SIMILARITY (INDEPENDENT FILTERS, FULL ORIGINAL VARIABLES, NO COMBO BUILDER)
+# FIGHT SIMILARITY (INDEPENDENT FILTERS – FULL ORIGINAL, MINUS ABSOLUTE RATINGS)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 st.write("These filters are separate from the main sidebar and do not affect the dashboard above.")
@@ -453,12 +453,10 @@ with st.expander("Similarity Filters", expanded=True):
         spider_career2 = st.multiselect("Career F2", all_outcomes_career, key="spider_career2")
         spider_career3 = st.multiselect("Career F3", all_outcomes_career, key="spider_career3")
 
-        # Opponent previous outcomes
         spider_opp_prev1 = st.multiselect("Opp Prev 1", all_outcomes_raw, key="spider_opp_prev1")
         spider_opp_prev2 = st.multiselect("Opp Prev 2", all_outcomes_raw, key="spider_opp_prev2")
         spider_opp_prev3 = st.multiselect("Opp Prev 3", all_outcomes_raw, key="spider_opp_prev3")
 
-        # Opponent career outcomes
         spider_opp_career1 = st.multiselect("Opp Career F1", all_outcomes_career, key="spider_opp_career1")
         spider_opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career, key="spider_opp_career2")
         spider_opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career, key="spider_opp_career3")
@@ -530,7 +528,6 @@ for col, val in [(spider_prev1_col, spider_prev1), (spider_prev2_col, spider_pre
     if val and col in original_data.columns:
         spider_mask &= original_data[col].isin(val)
 
-# Opponent shifted previous outcomes
 for shift, wlist in [(1, spider_opp_prev1), (2, spider_opp_prev2), (3, spider_opp_prev3)]:
     col = f'Opponent_Prev{shift}_Outcome_raw'
     if wlist and col in original_data.columns:
@@ -541,7 +538,6 @@ for shift, wlist in [(1, spider_opp_prev1), (2, spider_opp_prev2), (3, spider_op
         else:
             spider_mask &= original_data[col].isin(wlist)
 
-# Opponent career outcomes
 for col, val in [('Opponent_Career1_Outcome_raw', spider_opp_career1),
                  ('Opponent_Career2_Outcome_raw', spider_opp_career2),
                  ('Opponent_Career3_Outcome_raw', spider_opp_career3)]:
@@ -571,8 +567,10 @@ else:
     if spider_upcoming.empty:
         st.warning("No upcoming fight has both fighters after similarity filters.")
     else:
-        # Use the exact same feature list as numeric_features (original)
-        sim_features = [c for c in numeric_features if c in spider_data.columns]
+        # Exclude only the absolute rating columns (keep diffs and everything else)
+        rating_abs_to_exclude = [c for c in rating_raw_cols if not c.endswith('Diff')] + \
+                                [c for c in rating_avg7_cols if not c.endswith('_diff')]
+        sim_features = [c for c in numeric_features if c in spider_data.columns and c not in rating_abs_to_exclude]
         if not sim_features:
             st.warning("No numeric features for similarity.")
         else:
@@ -620,13 +618,9 @@ else:
                         if len(high_sim_90) > 0:
                             wins_90 = (high_sim_90['Win?'] == 'Yes').sum()
                             win_rate_90 = wins_90 / len(high_sim_90) * 100
-                            # weighted win rate (by similarity score)
-                            if wins_90 > 0:
-                                weight_sum_wins = high_sim_90.loc[high_sim_90['Win?'] == 'Yes', 'Similarity'].sum()
-                                weight_sum_all = high_sim_90['Similarity'].sum()
-                                weighted_wr_90 = (weight_sum_wins / weight_sum_all) * 100 if weight_sum_all > 0 else 0.0
-                            else:
-                                weighted_wr_90 = 0.0
+                            weight_sum_wins = high_sim_90.loc[high_sim_90['Win?'] == 'Yes', 'Similarity'].sum()
+                            weight_sum_all = high_sim_90['Similarity'].sum()
+                            weighted_wr_90 = (weight_sum_wins / weight_sum_all) * 100 if weight_sum_all > 0 else 0.0
                             st.metric("Win Rate (≥90% sim)", f"{win_rate_90:.1f}%", delta=f"{len(high_sim_90)} fights")
                             st.metric("Weighted Win Rate (≥90% sim)", f"{weighted_wr_90:.1f}%")
                         else:
@@ -637,12 +631,9 @@ else:
                         if len(high_sim_80) > 0:
                             wins_80 = (high_sim_80['Win?'] == 'Yes').sum()
                             win_rate_80 = wins_80 / len(high_sim_80) * 100
-                            if wins_80 > 0:
-                                weight_sum_wins_80 = high_sim_80.loc[high_sim_80['Win?'] == 'Yes', 'Similarity'].sum()
-                                weight_sum_all_80 = high_sim_80['Similarity'].sum()
-                                weighted_wr_80 = (weight_sum_wins_80 / weight_sum_all_80) * 100 if weight_sum_all_80 > 0 else 0.0
-                            else:
-                                weighted_wr_80 = 0.0
+                            weight_sum_wins_80 = high_sim_80.loc[high_sim_80['Win?'] == 'Yes', 'Similarity'].sum()
+                            weight_sum_all_80 = high_sim_80['Similarity'].sum()
+                            weighted_wr_80 = (weight_sum_wins_80 / weight_sum_all_80) * 100 if weight_sum_all_80 > 0 else 0.0
                             st.metric("Win Rate (≥80% sim)", f"{win_rate_80:.1f}%", delta=f"{len(high_sim_80)} fights")
                             st.metric("Weighted Win Rate (≥80% sim)", f"{weighted_wr_80:.1f}%")
                         else:
