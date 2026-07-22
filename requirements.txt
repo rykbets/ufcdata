@@ -5,3 +5,5 @@ plotly
 matplotlib
 gdown
 scikit-learn
+lightgbm
+dtreeviz
