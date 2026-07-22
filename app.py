@@ -24,7 +24,6 @@ PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"   # <-- update with your f
 def load_data():
     gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
     df = pd.read_parquet("data.parquet")
-    # Basic integrity check
     required_cols = ['FightID', 'Fighter', 'Opponent', 'FightDate', 'Win?', 'Age', 'Height', 'Reach', 'WC']
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
@@ -183,14 +182,23 @@ new_wc = st.sidebar.checkbox("New Weight Class", key="filter_new_wc") if 'IsNewW
 prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight_global")
 recent_window = st.sidebar.slider("Recent fights window", 1, 100, 50, key="recent_win_global")
 
-# Model features (now only the final differentials)
+# Model features (safe defaults)
 st.sidebar.header("Model Features")
+
+default_lr = [f for f in st.session_state.lr_feature_names[:8] if f in numeric_features]
+if not default_lr:
+    default_lr = numeric_features[:min(8, len(numeric_features))]
 lr_features = st.sidebar.multiselect("LR features (up to 8)", numeric_features,
-                                    default=st.session_state.lr_feature_names[:8],
+                                    default=default_lr,
                                     max_selections=8, key="lr_feat_select")
+
+default_knn = [f for f in st.session_state.knn_feature_names[:8] if f in numeric_features]
+if not default_knn:
+    default_knn = numeric_features[:min(8, len(numeric_features))]
 knn_features = st.sidebar.multiselect("KNN features (up to 8)", numeric_features,
-                                      default=st.session_state.knn_feature_names[:8],
+                                      default=default_knn,
                                       max_selections=8, key="knn_feat_select")
+
 if lr_features != st.session_state.lr_feature_names:
     st.session_state.lr_feature_names = lr_features
 if knn_features != st.session_state.knn_feature_names:
