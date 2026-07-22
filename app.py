@@ -173,7 +173,7 @@ else:
     st.info("No upcoming fights available.")
 
 # -----------------------------------------------
-# INDEPENDENT FILTER HELPER (same as before)
+# INDEPENDENT FILTER HELPER
 # -----------------------------------------------
 def build_independent_filter(df, key_prefix):
     with st.expander(f"{key_prefix} Filters", expanded=True):
@@ -362,7 +362,7 @@ def build_independent_filter(df, key_prefix):
     return df[mask].copy()
 
 # -----------------------------------------------
-# SPIDER CHART (unchanged)
+# SPIDER CHART
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
@@ -454,7 +454,7 @@ else:
                         st.dataframe(top_n, use_container_width=True)
 
 # -----------------------------------------------
-# DECISION TREE (graphical, using sklearn plot_tree)
+# DECISION TREE (graphical, with proportion=True for win rates)
 # -----------------------------------------------
 st.header("Decision Tree Model (with adjustable depth/leaf)")
 tree_data = build_independent_filter(original_data.copy(), "tree")
@@ -483,13 +483,14 @@ else:
                 dt = DecisionTreeClassifier(max_depth=max_depth, min_samples_leaf=min_samples_leaf, random_state=42)
                 dt.fit(X, y)
 
-                # Graphical tree using matplotlib
-                fig, ax = plt.subplots(figsize=(20, 10))
+                # Graphical tree with win proportions labelled on nodes
+                fig, ax = plt.subplots(figsize=(24, 12))
                 plot_tree(dt, feature_names=tree_features, class_names=['Loss', 'Win'],
-                          filled=True, rounded=True, fontsize=10, ax=ax)
+                          filled=True, rounded=True, fontsize=10, ax=ax,
+                          proportion=True)   # <-- this shows win % in each node
                 st.pyplot(fig)
 
-                # Leaf win percentages
+                # Leaf win percentages (precise numbers)
                 st.subheader("Leaf Win Percentages")
                 leaf_ids = dt.apply(X)
                 for leaf_id in np.unique(leaf_ids):
