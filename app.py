@@ -454,7 +454,7 @@ else:
                         st.dataframe(top_n, use_container_width=True)
 
 # -----------------------------------------------
-# DECISION TREE (graphical, with proportion=True for win rates)
+# DECISION TREE (graphical, with win% labels + prediction for selected fight)
 # -----------------------------------------------
 st.header("Decision Tree Model (with adjustable depth/leaf)")
 tree_data = build_independent_filter(original_data.copy(), "tree")
@@ -483,20 +483,44 @@ else:
                 dt = DecisionTreeClassifier(max_depth=max_depth, min_samples_leaf=min_samples_leaf, random_state=42)
                 dt.fit(X, y)
 
-                # Graphical tree with win proportions labelled on nodes
+                # Graphical tree with proportions
                 fig, ax = plt.subplots(figsize=(24, 12))
                 plot_tree(dt, feature_names=tree_features, class_names=['Loss', 'Win'],
-                          filled=True, rounded=True, fontsize=10, ax=ax,
-                          proportion=True)   # <-- this shows win % in each node
+                          filled=True, rounded=True, fontsize=10, ax=ax, proportion=True)
                 st.pyplot(fig)
 
-                # Leaf win percentages (precise numbers)
+                # Leaf win percentages
                 st.subheader("Leaf Win Percentages")
                 leaf_ids = dt.apply(X)
                 for leaf_id in np.unique(leaf_ids):
                     mask_leaf = leaf_ids == leaf_id
                     win_rate_leaf = y[mask_leaf].mean() * 100
                     st.write(f"Leaf {leaf_id}: {mask_leaf.sum()} samples, Win rate = {win_rate_leaf:.1f}%")
+
+                # --- Prediction for the selected upcoming fight ---
+                st.subheader("Prediction for Selected Upcoming Fight")
+                if st.session_state.get("selected_fight_row") is not None:
+                    f1_row = st.session_state.selected_fight_row
+                    # Check if the fight is in the filtered data
+                    if f1_row['FightID'] in tree_data['FightID'].values:
+                        # Build the input vector (same imputation as training)
+                        input_vals = []
+                        for c in tree_features:
+                            val = f1_row.get(c, np.nan)
+                            if pd.isna(val):
+                                val = tree_hist[c].median()
+                            input_vals.append(val)
+                        X_input = np.array([input_vals])
+                        try:
+                            prob = dt.predict_proba(X_input)[0, 1]
+                            leaf = dt.apply(X_input)[0]
+                            st.write(f"**{f1_row['Fighter']}** → leaf **{leaf}** with win probability **{prob:.1%}**")
+                        except Exception as e:
+                            st.error(f"Prediction error: {e}")
+                    else:
+                        st.info("Selected fight is not in the filtered data (check your tree filters).")
+                else:
+                    st.info("No fight selected. Choose a fight in the **Upcoming Fight Matchup** section above.")
 
 # -----------------------------------------------
 # FEATURE IMPORTANCE (bottom, unchanged)
