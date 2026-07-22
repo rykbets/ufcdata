@@ -88,7 +88,6 @@ numeric_features = [c for c in data.columns
                     or c in rating_raw_cols
                     or c in rating_avg7_cols]
 
-# Absolute rating columns to exclude from feature selectors
 abs_rating_cols = [c for c in rating_raw_cols if not c.endswith('Diff')] + \
                   [c for c in rating_avg7_cols if not c.endswith('_diff')]
 
@@ -112,7 +111,7 @@ col1, col2, col3 = st.columns(3)
 col1.metric("Total Fights", total); col2.metric("Wins", wins); col3.metric("Win Rate", f"{win_rate:.1f}%")
 
 # -----------------------------------------------
-# LAST 20 FIGHTS (moved up)
+# LAST 20 FIGHTS
 # -----------------------------------------------
 st.header("Last 20 Fights")
 last20 = data.sort_values('FightDate', ascending=False).head(20)
@@ -121,7 +120,7 @@ cols = [c for c in cols if c in last20.columns]
 st.dataframe(last20[cols], use_container_width=True)
 
 # -----------------------------------------------
-# UPCOMING FIGHT MATCHUP (full upcoming data)
+# UPCOMING FIGHT MATCHUP
 # -----------------------------------------------
 st.header("Upcoming Fight Matchup")
 upcoming_display = original_data[original_data['Win?'].isna() | (original_data['Win?'] == '')]
@@ -137,7 +136,6 @@ if not upcoming_display.empty:
             st.session_state.selected_fight_row = f1
             st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
 
-            # Build table sections
             sections = {}
             identity_cols = ['WC','Title','ScheduledRounds','Stance','Country','HometownFighter','EventCountry']
             sections["Identity"] = [c for c in identity_cols if c in f1.index]
@@ -170,7 +168,6 @@ if not upcoming_display.empty:
             df_stats = pd.DataFrame(rows)
             st.dataframe(df_stats, use_container_width=True, hide_index=True)
 
-            # Top 5 Differentials (signed)
             st.subheader("Top 5 Differentials")
             for fighter, row in [(f1['Fighter'], f1), (f2['Fighter'], f2)]:
                 diffs = {}
@@ -190,36 +187,53 @@ if not upcoming_display.empty:
 else:
     st.info("No upcoming fights available.")
 
+# -----------------------------------------------
+# INDEPENDENT FILTER HELPER (with nested expanders & Win/Loss options)
+# -----------------------------------------------
 def build_independent_filter(df, key_prefix):
     with st.expander(f"{key_prefix} Filters", expanded=True):
-        with st.container():
+        # --- General ---
+        with st.expander("General", expanded=True):
             col1, col2 = st.columns(2)
             with col1:
                 wc = st.multiselect("Weight Class", sorted(df['WC'].dropna().unique()), key=f"{key_prefix}_wc") if 'WC' in df.columns else []
                 stance = st.multiselect("Stance", sorted(df['Stance'].dropna().unique()), key=f"{key_prefix}_stance") if 'Stance' in df.columns else []
                 country = st.multiselect("Country", sorted(df['Country'].dropna().unique()), key=f"{key_prefix}_country") if 'Country' in df.columns else []
+                event_country = st.multiselect("Event Country", sorted(df['EventCountry'].dropna().unique()), key=f"{key_prefix}_event") if 'EventCountry' in df.columns else []
+            with col2:
                 sched_rounds = st.multiselect("Scheduled Rounds", sorted(df['ScheduledRounds'].dropna().unique()), key=f"{key_prefix}_sched") if 'ScheduledRounds' in df.columns else []
                 title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"], key=f"{key_prefix}_title") if 'Title' in df.columns else "All"
                 hometown_fighter = st.multiselect("Hometown (Fighter)", sorted(df['HometownFighter'].dropna().unique()), key=f"{key_prefix}_hometown") if 'HometownFighter' in df.columns else []
                 opp_hometown = st.multiselect("Opponent Hometown", sorted(df['Opponent_Hometown'].dropna().unique()), key=f"{key_prefix}_opp_hometown") if 'Opponent_Hometown' in df.columns else []
-                event_country = st.multiselect("Event Country", sorted(df['EventCountry'].dropna().unique()), key=f"{key_prefix}_event") if 'EventCountry' in df.columns else []
-            with col2:
+
+        # --- Fight Numbers & Win% ---
+        with st.expander("Fight Numbers & Career Win%", expanded=False):
+            col1, col2 = st.columns(2)
+            with col1:
                 fn_min = st.number_input("Min Fight #", value=1, min_value=1, max_value=int(df['FightNumber'].max()), key=f"{key_prefix}_fn_min") if 'FightNumber' in df.columns else 1
                 fn_max = st.number_input("Max Fight #", value=int(df['FightNumber'].max()), key=f"{key_prefix}_fn_max") if 'FightNumber' in df.columns else 1000
+            with col2:
                 ofn_min = st.number_input("Opp Min Fight #", value=1, key=f"{key_prefix}_ofn_min") if 'Opponent_FightNumber' in df.columns else 1
                 ofn_max = st.number_input("Opp Max Fight #", value=int(df['Opponent_FightNumber'].max()), key=f"{key_prefix}_ofn_max") if 'Opponent_FightNumber' in df.columns else 1000
-                cwp_min, cwp_max = st.slider("Career Win % Diff", -100, 100, (-100, 100), step=5, key=f"{key_prefix}_cwp") if 'CareerWinPct_diff' in df.columns else (-100,100)
-                age_min, age_max = st.slider("Age", int(df['Age'].min()), int(df['Age'].max()), (int(df['Age'].min()), int(df['Age'].max())), key=f"{key_prefix}_age") if 'Age' in df.columns else (0,100)
-                ad_min, ad_max = st.slider("Age Diff", int(df['AgeDiff'].min()), int(df['AgeDiff'].max()), (int(df['AgeDiff'].min()), int(df['AgeDiff'].max())), key=f"{key_prefix}_age_diff") if 'AgeDiff' in df.columns else (-100,100)
-                hd_min, hd_max = st.slider("Height Diff", int(df['HeightDiff'].min()), int(df['HeightDiff'].max()), (int(df['HeightDiff'].min()), int(df['HeightDiff'].max())), key=f"{key_prefix}_hd") if 'HeightDiff' in df.columns else (-50,50)
-                rd_min, rd_max = st.slider("Reach Diff", int(df['ReachDiff'].min()), int(df['ReachDiff'].max()), (int(df['ReachDiff'].min()), int(df['ReachDiff'].max())), key=f"{key_prefix}_rd") if 'ReachDiff' in df.columns else (-50,50)
-                days_min, days_max = st.slider("Days Since Prev", int(df['DaysSincePrev'].min()), int(df['DaysSincePrev'].max()), (int(df['DaysSincePrev'].min()), int(df['DaysSincePrev'].max())), key=f"{key_prefix}_days") if 'DaysSincePrev' in df.columns else (0,1000)
-                ddiff_min, ddiff_max = st.slider("Days Since Prev Diff", int(df['DaysSincePrev_diff'].min()), int(df['DaysSincePrev_diff'].max()), (int(df['DaysSincePrev_diff'].min()), int(df['DaysSincePrev_diff'].max())), key=f"{key_prefix}_ddiff") if 'DaysSincePrev_diff' in df.columns else (-1000,1000)
-                avg3_min, avg3_max = st.slider("Avg3DaysGap Diff", int(df['Avg3DaysGap_diff'].min()), int(df['Avg3DaysGap_diff'].max()), (int(df['Avg3DaysGap_diff'].min()), int(df['Avg3DaysGap_diff'].max())), key=f"{key_prefix}_avg3") if 'Avg3DaysGap_diff' in df.columns else (-1000,1000)
-                odds_min, odds_max = st.slider("Fighter Odds", int(df['FighterOddsNum'].min()), int(df['FighterOddsNum'].max()), (int(df['FighterOddsNum'].min()), int(df['FighterOddsNum'].max())), step=10, key=f"{key_prefix}_odds") if 'FighterOddsNum' in df.columns else (-1000,1000)
-                podds_min, podds_max = st.slider("Prev Fighter Odds", int(df['PrevFighterOddsNum'].min()), int(df['PrevFighterOddsNum'].max()), (int(df['PrevFighterOddsNum'].min()), int(df['PrevFighterOddsNum'].max())), step=10, key=f"{key_prefix}_podds") if 'PrevFighterOddsNum' in df.columns else (-1000,1000)
+            cwp_min, cwp_max = st.slider("Career Win % Diff", -100, 100, (-100, 100), step=5, key=f"{key_prefix}_cwp") if 'CareerWinPct_diff' in df.columns else (-100,100)
 
-            # Previous outcomes
+        # --- Physical & Days ---
+        with st.expander("Physical & Days", expanded=False):
+            age_min, age_max = st.slider("Age", int(df['Age'].min()), int(df['Age'].max()), (int(df['Age'].min()), int(df['Age'].max())), key=f"{key_prefix}_age") if 'Age' in df.columns else (0,100)
+            ad_min, ad_max = st.slider("Age Diff", int(df['AgeDiff'].min()), int(df['AgeDiff'].max()), (int(df['AgeDiff'].min()), int(df['AgeDiff'].max())), key=f"{key_prefix}_age_diff") if 'AgeDiff' in df.columns else (-100,100)
+            hd_min, hd_max = st.slider("Height Diff", int(df['HeightDiff'].min()), int(df['HeightDiff'].max()), (int(df['HeightDiff'].min()), int(df['HeightDiff'].max())), key=f"{key_prefix}_hd") if 'HeightDiff' in df.columns else (-50,50)
+            rd_min, rd_max = st.slider("Reach Diff", int(df['ReachDiff'].min()), int(df['ReachDiff'].max()), (int(df['ReachDiff'].min()), int(df['ReachDiff'].max())), key=f"{key_prefix}_rd") if 'ReachDiff' in df.columns else (-50,50)
+            days_min, days_max = st.slider("Days Since Prev", int(df['DaysSincePrev'].min()), int(df['DaysSincePrev'].max()), (int(df['DaysSincePrev'].min()), int(df['DaysSincePrev'].max())), key=f"{key_prefix}_days") if 'DaysSincePrev' in df.columns else (0,1000)
+            ddiff_min, ddiff_max = st.slider("Days Since Prev Diff", int(df['DaysSincePrev_diff'].min()), int(df['DaysSincePrev_diff'].max()), (int(df['DaysSincePrev_diff'].min()), int(df['DaysSincePrev_diff'].max())), key=f"{key_prefix}_ddiff") if 'DaysSincePrev_diff' in df.columns else (-1000,1000)
+            avg3_min, avg3_max = st.slider("Avg3DaysGap Diff", int(df['Avg3DaysGap_diff'].min()), int(df['Avg3DaysGap_diff'].max()), (int(df['Avg3DaysGap_diff'].min()), int(df['Avg3DaysGap_diff'].max())), key=f"{key_prefix}_avg3") if 'Avg3DaysGap_diff' in df.columns else (-1000,1000)
+
+        # --- Odds ---
+        with st.expander("Odds", expanded=False):
+            odds_min, odds_max = st.slider("Fighter Odds", int(df['FighterOddsNum'].min()), int(df['FighterOddsNum'].max()), (int(df['FighterOddsNum'].min()), int(df['FighterOddsNum'].max())), step=10, key=f"{key_prefix}_odds") if 'FighterOddsNum' in df.columns else (-1000,1000)
+            podds_min, podds_max = st.slider("Prev Fighter Odds", int(df['PrevFighterOddsNum'].min()), int(df['PrevFighterOddsNum'].max()), (int(df['PrevFighterOddsNum'].min()), int(df['PrevFighterOddsNum'].max())), step=10, key=f"{key_prefix}_podds") if 'PrevFighterOddsNum' in df.columns else (-1000,1000)
+
+        # --- Previous Outcomes (with Win/Loss options) ---
+        with st.expander("Previous Outcomes", expanded=False):
             skip_nc = st.checkbox("Skip NC outcomes", key=f"{key_prefix}_skip_nc")
             if skip_nc:
                 prev1_col = 'Prev1_Outcome_skipNC'; prev2_col = 'Prev2_Outcome_skipNC'; prev3_col = 'Prev3_Outcome_skipNC'
@@ -231,20 +245,25 @@ def build_independent_filter(df, key_prefix):
             all_outcomes_raw = sorted(df[prev1_col].dropna().unique()) if prev1_col in df.columns else []
             all_outcomes_career = sorted(df[career1_col].dropna().unique()) if career1_col in df.columns else []
 
-            prev1 = st.multiselect("Prev Fight 1", all_outcomes_raw, key=f"{key_prefix}_prev1")
-            prev2 = st.multiselect("Prev Fight 2", all_outcomes_raw, key=f"{key_prefix}_prev2")
-            prev3 = st.multiselect("Prev Fight 3", all_outcomes_raw, key=f"{key_prefix}_prev3")
-            opp_prev1 = st.multiselect("Opp Prev 1", all_outcomes_raw, key=f"{key_prefix}_opp_prev1")
-            opp_prev2 = st.multiselect("Opp Prev 2", all_outcomes_raw, key=f"{key_prefix}_opp_prev2")
-            opp_prev3 = st.multiselect("Opp Prev 3", all_outcomes_raw, key=f"{key_prefix}_opp_prev3")
-            career1 = st.multiselect("Career F1", all_outcomes_career, key=f"{key_prefix}_career1")
-            career2 = st.multiselect("Career F2", all_outcomes_career, key=f"{key_prefix}_career2")
-            career3 = st.multiselect("Career F3", all_outcomes_career, key=f"{key_prefix}_career3")
-            opp_career1 = st.multiselect("Opp Career F1", all_outcomes_career, key=f"{key_prefix}_opp_career1")
-            opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career, key=f"{key_prefix}_opp_career2")
-            opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career, key=f"{key_prefix}_opp_career3")
+            # Add "Win (any)" and "Loss (any)" options
+            outcome_options_raw = all_outcomes_raw + ["Win (any)", "Loss (any)"]
+            outcome_options_career = all_outcomes_career + ["Win (any)", "Loss (any)"]
 
-            # Ratings filters
+            prev1 = st.multiselect("Prev Fight 1", outcome_options_raw, key=f"{key_prefix}_prev1")
+            prev2 = st.multiselect("Prev Fight 2", outcome_options_raw, key=f"{key_prefix}_prev2")
+            prev3 = st.multiselect("Prev Fight 3", outcome_options_raw, key=f"{key_prefix}_prev3")
+            opp_prev1 = st.multiselect("Opp Prev 1", outcome_options_raw, key=f"{key_prefix}_opp_prev1")
+            opp_prev2 = st.multiselect("Opp Prev 2", outcome_options_raw, key=f"{key_prefix}_opp_prev2")
+            opp_prev3 = st.multiselect("Opp Prev 3", outcome_options_raw, key=f"{key_prefix}_opp_prev3")
+            career1 = st.multiselect("Career F1", outcome_options_career, key=f"{key_prefix}_career1")
+            career2 = st.multiselect("Career F2", outcome_options_career, key=f"{key_prefix}_career2")
+            career3 = st.multiselect("Career F3", outcome_options_career, key=f"{key_prefix}_career3")
+            opp_career1 = st.multiselect("Opp Career F1", outcome_options_career, key=f"{key_prefix}_opp_career1")
+            opp_career2 = st.multiselect("Opp Career F2", outcome_options_career, key=f"{key_prefix}_opp_career2")
+            opp_career3 = st.multiselect("Opp Career F3", outcome_options_career, key=f"{key_prefix}_opp_career3")
+
+        # --- Ratings ---
+        with st.expander("Ratings", expanded=False):
             use_colley = st.checkbox("Filter ColleyDecayDiff", value=False, key=f"{key_prefix}_use_colley")
             if use_colley:
                 min_cd, max_cd = get_diff_range(df, 'ColleyDecayDiff')
@@ -258,6 +277,8 @@ def build_independent_filter(df, key_prefix):
                 min_wmd, max_wmd = get_diff_range(df, 'WeightedMasseyDecayDiff')
                 wmd_range = st.slider("WeightedMasseyDecayDiff range", min_wmd, max_wmd, (min_wmd, max_wmd), step=0.01, key=f"{key_prefix}_wmd")
 
+        # --- Other ---
+        with st.expander("Other", expanded=False):
             prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key=f"{key_prefix}_prev_title")
             opp_prev_title = st.selectbox("Opp Prev Fight Was Title?", ["All", "Yes", "No"], key=f"{key_prefix}_opp_prev_title")
             new_wc = st.checkbox("New Weight Class", key=f"{key_prefix}_new_wc") if 'IsNewWeightClass' in df.columns else False
@@ -265,7 +286,6 @@ def build_independent_filter(df, key_prefix):
     # ===== BUILD MASK =====
     mask = pd.Series(True, index=df.index)
 
-    # Generic filter helper (keeps NaN rows by default)
     def add_filter(condition, col_name=None):
         if condition is None:
             return None
@@ -287,7 +307,7 @@ def build_independent_filter(df, key_prefix):
     if opp_prev_title != "All" and 'Opponent_Prev1_Title' in df.columns:
         mask &= add_filter(df['Opponent_Prev1_Title'].str.strip().str.lower() == opp_prev_title.lower(), 'Opponent_Prev1_Title')
 
-    # Numeric filters
+    # Numeric
     if 'FightNumber' in df.columns:
         mask &= add_filter((df['FightNumber'] >= fn_min) & (df['FightNumber'] <= fn_max), 'FightNumber')
     if 'Opponent_FightNumber' in df.columns:
@@ -307,11 +327,29 @@ def build_independent_filter(df, key_prefix):
         if col in df.columns:
             mask &= add_filter((df[col] >= cmin) & (df[col] <= cmax), col)
 
-    # Outcome filters (keep NaN rows so missing data doesn't exclude fights)
+    # Helper to apply outcome filter with "Win (any)" / "Loss (any)"
+    def apply_outcome_filter(col, selected):
+        if not selected or col not in df.columns:
+            return None
+        # Check if "Win (any)" is in the selection
+        cond = pd.Series(False, index=df.index)
+        if "Win (any)" in selected:
+            cond |= df[col].str.startswith('Win', na=False)
+        if "Loss (any)" in selected:
+            cond |= df[col].str.startswith('Loss', na=False)
+        # Exact matches (excluding the special options)
+        exact = [s for s in selected if s not in ("Win (any)", "Loss (any)")]
+        if exact:
+            cond |= df[col].isin(exact)
+        # Keep NaN
+        return cond | df[col].isna()
+
     for col, val in [(prev1_col, prev1), (prev2_col, prev2), (prev3_col, prev3),
                      (career1_col, career1), (career2_col, career2), (career3_col, career3)]:
-        if val and col in df.columns:
-            mask &= df[col].isin(val) | df[col].isna()
+        if val:
+            c = apply_outcome_filter(col, val)
+            if c is not None:
+                mask &= c
 
     # Opponent previous outcomes
     for shift, wlist in [(1, opp_prev1), (2, opp_prev2), (3, opp_prev3)]:
@@ -320,18 +358,21 @@ def build_independent_filter(df, key_prefix):
             if skip_nc:
                 col_use = f'Opponent_Prev{shift}_Outcome_skipNC'
                 if col_use in df.columns:
-                    mask &= df[col_use].isin(wlist) | df[col_use].isna()
+                    c = apply_outcome_filter(col_use, wlist)
+                    if c is not None: mask &= c
             else:
-                mask &= df[col].isin(wlist) | df[col].isna()
+                c = apply_outcome_filter(col, wlist)
+                if c is not None: mask &= c
 
     # Opponent career outcomes
-    for col, val in [('Opponent_Career1_Outcome_raw' if not skip_nc else 'Opponent_Career1_Outcome_skipNC', opp_career1),
-                     ('Opponent_Career2_Outcome_raw' if not skip_nc else 'Opponent_Career2_Outcome_skipNC', opp_career2),
-                     ('Opponent_Career3_Outcome_raw' if not skip_nc else 'Opponent_Career3_Outcome_skipNC', opp_career3)]:
+    for col, val in [('Opponent_Career1_Outcome_raw', opp_career1),
+                     ('Opponent_Career2_Outcome_raw', opp_career2),
+                     ('Opponent_Career3_Outcome_raw', opp_career3)]:
         if val and col in df.columns:
-            mask &= df[col].isin(val) | df[col].isna()
+            c = apply_outcome_filter(col, val)
+            if c is not None: mask &= c
 
-    # Rating filters (keep NaN)
+    # Ratings
     if use_colley and 'ColleyDecayDiff' in df.columns:
         mask &= add_filter((df['ColleyDecayDiff'] >= colley_range[0]) & (df['ColleyDecayDiff'] <= colley_range[1]), 'ColleyDecayDiff')
     if use_massey and 'MasseyFinishDecayDiff' in df.columns:
@@ -340,6 +381,7 @@ def build_independent_filter(df, key_prefix):
         mask &= add_filter((df['WeightedMasseyDecayDiff'] >= wmd_range[0]) & (df['WeightedMasseyDecayDiff'] <= wmd_range[1]), 'WeightedMasseyDecayDiff')
 
     return df[mask].copy()
+
 # -----------------------------------------------
 # SPIDER CHART (independent filters)
 # -----------------------------------------------
@@ -359,7 +401,6 @@ else:
     if spider_upcoming.empty:
         st.warning("No upcoming fight has both fighters after similarity filters.")
     else:
-        # Features: exclude absolute ratings
         sim_features = [c for c in numeric_features if c in spider_data.columns and c not in abs_rating_cols]
         if not sim_features:
             st.warning("No numeric features for similarity.")
@@ -403,7 +444,6 @@ else:
                         col1.metric("Count (Top N)", count); col2.metric("Avg Similarity", f"{avg_sim:.1f}%")
                         col3.metric("Total Similarity", f"{total_sim:.1f}"); col4.metric("Composite Score", f"{composite:.1f}")
 
-                        # 90% similarity metrics
                         high_sim_90 = top_n[top_n['Similarity'] >= 90]
                         if len(high_sim_90) > 0:
                             wins_90 = (high_sim_90['Win?'] == 'Yes').sum()
@@ -416,7 +456,6 @@ else:
                         else:
                             st.write("No historical fights with similarity ≥ 90% in the top selection.")
 
-                        # 80% similarity metrics
                         high_sim_80 = top_n[top_n['Similarity'] >= 80]
                         if len(high_sim_80) > 0:
                             wins_80 = (high_sim_80['Win?'] == 'Yes').sum()
@@ -436,22 +475,7 @@ else:
                         st.dataframe(top_n, use_container_width=True)
 
 # -----------------------------------------------
-# CORRELATION MATRIX (using spider variables)
-# -----------------------------------------------
-st.header("Correlation Matrix (Spider Variables)")
-if 'sim_features' in locals() and sim_features:
-    corr_data = spider_data[sim_features].dropna()
-    if len(corr_data) > 1:
-        corr = corr_data.corr()
-        fig_corr = px.imshow(corr, text_auto='.2f', aspect='auto', title="Correlation of Spider Features")
-        st.plotly_chart(fig_corr, use_container_width=True)
-    else:
-        st.warning("Not enough data for correlation matrix.")
-else:
-    st.info("Select variables in the spider chart to compute correlation.")
-
-# -----------------------------------------------
-# DECISION TREE (independent filters)
+# DECISION TREE (independent filters) – fixed graphviz issue
 # -----------------------------------------------
 st.header("Decision Tree Model (with adjustable depth/leaf)")
 tree_data = build_independent_filter(original_data.copy(), "tree")
@@ -480,16 +504,31 @@ else:
                 dt = DecisionTreeClassifier(max_depth=max_depth, min_samples_leaf=min_samples_leaf, random_state=42)
                 dt.fit(X, y)
 
-                # Visualisation
+                # Visualisation – use text tree if graphviz not available
                 if HAS_DTREEVIZ:
-                    viz = dtreeviz.model(
-                        dt, X, y,
-                        target_name='Win',
-                        feature_names=tree_features,
-                        class_names=['Loss', 'Win']
-                    )
-                    svg = viz.view().save("tree.svg")
-                    st.image("tree.svg", use_column_width=True)
+                    # Check if graphviz executable is available
+                    import shutil
+                    if shutil.which('dot') is None:
+                        st.warning("Graphviz executable not found. Showing text tree instead.")
+                        from sklearn.tree import export_text
+                        tree_text = export_text(dt, feature_names=tree_features)
+                        st.text(tree_text)
+                    else:
+                        try:
+                            viz = dtreeviz.model(
+                                dt, X, y,
+                                target_name='Win',
+                                feature_names=tree_features,
+                                class_names=['Loss', 'Win']
+                            )
+                            # Get SVG string and display directly
+                            svg_str = viz.view().svg()
+                            st.image(svg_str, use_column_width=True)
+                        except Exception as e:
+                            st.warning(f"dtreeviz error: {e}. Showing text tree instead.")
+                            from sklearn.tree import export_text
+                            tree_text = export_text(dt, feature_names=tree_features)
+                            st.text(tree_text)
                 else:
                     st.warning("dtreeviz not installed. Showing text tree instead.")
                     from sklearn.tree import export_text
@@ -533,11 +572,9 @@ else:
                     bs = brier_score_loss(y_lgbm, y_prob)
                     st.metric("Cross‑Validated Brier Score", f"{bs:.4f}")
 
-                    # Fit on full data for prediction
                     final_model = lgb.LGBMClassifier(random_state=42, verbose=-1)
                     final_model.fit(X_lgbm, y_lgbm)
 
-                    # Win probability for selected fight
                     if st.session_state.get("selected_fight_row") is not None:
                         f1_row = st.session_state.selected_fight_row
                         if f1_row['FightID'] in lgbm_data['FightID'].values:
@@ -555,7 +592,6 @@ else:
                         else:
                             st.info("Selected fight not in the filtered dataset.")
 
-                    # Permutation importance
                     st.subheader("Permutation Importance (LightGBM)")
                     with st.spinner("Computing permutation importance..."):
                         perm_imp = permutation_importance(final_model, X_lgbm, y_lgbm, n_repeats=5, random_state=42, scoring='neg_brier_score')
@@ -631,5 +667,4 @@ else:
         else:
             st.warning("Not enough complete rows for MI.")
     else:
-        st.warning("No numeric features (excluding absolute ratings).")
         st.warning("No numeric features (excluding absolute ratings).")
