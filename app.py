@@ -58,7 +58,7 @@ def get_first_col(df, col_name):
         return sub.iloc[:, 0].to_numpy(dtype=np.float64, na_value=np.nan)
     return pd.to_numeric(sub, errors='coerce').to_numpy(dtype=np.float64)
 
-# ---------- MODEL FEATURES (includes ratings + differentials) ----------
+# ---------- MODEL FEATURES (ratings + differentials) ----------
 rating_raw_cols = [
     'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecayDiff',
     'FighterMasseyFinishDecay', 'OpponentMasseyFinishDecay', 'MasseyFinishDecayDiff',
@@ -674,7 +674,8 @@ with st.expander("Similarity Filters", expanded=True):
         spider_career1 = st.multiselect("Career F1", all_outcomes_career, key="spider_career1")
         spider_career2 = st.multiselect("Career F2", all_outcomes_career, key="spider_career2")
         spider_career3 = st.multiselect("Career F3", all_outcomes_career, key="spider_career3")
-                # Opponent previous outcomes
+
+        # Opponent previous outcomes
         spider_opp_prev1 = st.multiselect("Opp Prev 1", all_outcomes_raw, key="spider_opp_prev1")
         spider_opp_prev2 = st.multiselect("Opp Prev 2", all_outcomes_raw, key="spider_opp_prev2")
         spider_opp_prev3 = st.multiselect("Opp Prev 3", all_outcomes_raw, key="spider_opp_prev3")
@@ -751,6 +752,24 @@ for col, val in [(spider_prev1_col, spider_prev1), (spider_prev2_col, spider_pre
     if val and col in original_data.columns:
         spider_mask &= original_data[col].isin(val)
 
+# Opponent shifted previous outcomes
+for shift, wlist in [(1, spider_opp_prev1), (2, spider_opp_prev2), (3, spider_opp_prev3)]:
+    col = f'Opponent_Prev{shift}_Outcome_raw'
+    if wlist and col in original_data.columns:
+        if spider_skip_nc:
+            col_use = f'Opponent_Prev{shift}_Outcome_skipNC'
+            if col_use in original_data.columns:
+                spider_mask &= original_data[col_use].isin(wlist)
+        else:
+            spider_mask &= original_data[col].isin(wlist)
+
+# Opponent career outcomes
+for col, val in [('Opponent_Career1_Outcome_raw', spider_opp_career1),
+                 ('Opponent_Career2_Outcome_raw', spider_opp_career2),
+                 ('Opponent_Career3_Outcome_raw', spider_opp_career3)]:
+    if val and col in original_data.columns:
+        spider_mask &= original_data[col].isin(val)
+
 if spider_use_colley and 'ColleyDecayDiff' in original_data.columns:
     spider_mask &= spider_add_filter((original_data['ColleyDecayDiff'] >= spider_colley_range[0]) & (original_data['ColleyDecayDiff'] <= spider_colley_range[1]), 'ColleyDecayDiff')
 if spider_use_massey and 'MasseyFinishDecayDiff' in original_data.columns:
@@ -823,7 +842,16 @@ else:
                             wins_high = (high_sim['Win?'] == 'Yes').sum()
                             st.metric("Win Rate (≥90% sim)", f"{wins_high/len(high_sim)*100:.1f}%", delta=f"{len(high_sim)} fights")
                         else:
-                            st.write("No historical fights with similarity ≥ 90%.")
+                            st.write("No historical fights with similarity ≥ 90% in the top selection.")
+
+                        # 80% similarity win rate
+                        high_sim_80 = top_n[top_n['Similarity'] >= 80]
+                        if len(high_sim_80) > 0:
+                            wins_high_80 = (high_sim_80['Win?'] == 'Yes').sum()
+                            st.metric("Win Rate (≥80% sim)", f"{wins_high_80/len(high_sim_80)*100:.1f}%",
+                                      delta=f"{len(high_sim_80)} fights")
+                        else:
+                            st.write("No historical fights with similarity ≥ 80% in the top selection.")
 
                         fig_hist = px.histogram(sim_df, x='Similarity', nbins=20, title="Similarity Distribution (All)")
                         st.plotly_chart(fig_hist, use_container_width=True, key="sim_hist_chart")
