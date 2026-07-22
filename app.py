@@ -1,3 +1,195 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+import gdown
+from sklearn.linear_model import LogisticRegressionCV
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.impute import SimpleImputer
+from sklearn.feature_selection import mutual_info_classif
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import brier_score_loss
+from sklearn.model_selection import cross_val_predict
+from sklearn.inspection import permutation_importance
+from scipy.spatial.distance import cdist
+
+# Optional imports – missing ones handled gracefully
+try:
+    import lightgbm as lgb
+    HAS_LIGHTGBM = True
+except ImportError:
+    HAS_LIGHTGBM = False
+
+try:
+    import dtreeviz
+    HAS_DTREEVIZ = True
+except ImportError:
+    HAS_DTREEVIZ = False
+
+st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
+
+# -----------------------------------------------
+# LOAD DATA
+# -----------------------------------------------
+PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"   # <-- update with your file ID
+
+@st.cache_data
+def load_data():
+    gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
+    df = pd.read_parquet("data.parquet")
+    required_cols = ['FightID', 'Fighter', 'Opponent', 'FightDate', 'Win?', 'Age', 'Height', 'Reach', 'WC']
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Parquet is missing required columns: {missing}")
+    return df
+
+try:
+    data = load_data()
+except Exception as e:
+    st.error(f"Failed to load data: {e}")
+    st.stop()
+
+if 'FightDate' in data.columns:
+    data = data[data['FightDate'] >= '2015-01-01'].copy()
+original_data = data.copy()
+
+# Helper functions
+def normalize_title_col(series):
+    if series is None: return pd.Series('', index=series.index)
+    return series.astype(str).str.strip().str.lower()
+
+def get_diff_range(df, col_name):
+    if col_name not in df.columns: return -1.0, 1.0
+    vals = df[col_name].dropna()
+    if len(vals) == 0: return -1.0, 1.0
+    return float(vals.min()), float(vals.max())
+
+# ---------- VARIABLE DEFINITIONS ----------
+rating_raw_cols = [
+    'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecayDiff',
+    'FighterMasseyFinishDecay', 'OpponentMasseyFinishDecay', 'MasseyFinishDecayDiff',
+    'FighterMasseyStrikeDecay', 'OpponentMasseyStrikeDecay', 'MasseyStrikeDecayDiff',
+    'FighterMasseyCtrlDecay', 'OpponentMasseyCtrlDecay', 'MasseyCtrlDecayDiff',
+    'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecayDiff'
+]
+rating_avg7_cols = [
+    'FighterColleyDecay_avg7', 'Opponent_FighterColleyDecay_avg7', 'FighterColleyDecay_avg7_diff',
+    'FighterMasseyFinishDecay_avg7', 'Opponent_FighterMasseyFinishDecay_avg7', 'FighterMasseyFinishDecay_avg7_diff',
+    'FighterMasseyStrikeDecay_avg7', 'Opponent_FighterMasseyStrikeDecay_avg7', 'FighterMasseyStrikeDecay_avg7_diff',
+    'FighterMasseyCtrlDecay_avg7', 'Opponent_FighterMasseyCtrlDecay_avg7', 'FighterMasseyCtrlDecay_avg7_diff',
+    'FighterWeightedMasseyDecay_avg7', 'Opponent_FighterWeightedMasseyDecay_avg7', 'FighterWeightedMasseyDecay_avg7_diff'
+]
+
+numeric_features = [c for c in data.columns
+                    if c.endswith('_opp_diff')
+                    or (c.startswith('adj_') and c.endswith('_diff'))
+                    or c in rating_raw_cols
+                    or c in rating_avg7_cols]
+
+# Absolute rating columns to exclude from feature selectors
+abs_rating_cols = [c for c in rating_raw_cols if not c.endswith('Diff')] + \
+                  [c for c in rating_avg7_cols if not c.endswith('_diff')]
+
+# Session state
+for key, default in [
+    ('overall_wr', 0.0), ('recent_wr', 0.0), ('recent_count', 0),
+    ('selected_fight_row', None),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+# -----------------------------------------------
+# PERFORMANCE SUMMARY
+# -----------------------------------------------
+st.title("UFC Pre‑Fight Performance Dashboard")
+st.header("Performance Summary")
+total = len(data)
+wins = (data['Win?'] == 'Yes').sum()
+win_rate = wins / total * 100 if total > 0 else 0
+col1, col2, col3 = st.columns(3)
+col1.metric("Total Fights", total); col2.metric("Wins", wins); col3.metric("Win Rate", f"{win_rate:.1f}%")
+
+# -----------------------------------------------
+# LAST 20 FIGHTS (moved up)
+# -----------------------------------------------
+st.header("Last 20 Fights")
+last20 = data.sort_values('FightDate', ascending=False).head(20)
+cols = ['FightDate','Fighter','Opponent','Win?','Method','AgeDiff','HeightDiff','ReachDiff','CareerWinPct_diff']
+cols = [c for c in cols if c in last20.columns]
+st.dataframe(last20[cols], use_container_width=True)
+
+# -----------------------------------------------
+# UPCOMING FIGHT MATCHUP (full upcoming data)
+# -----------------------------------------------
+st.header("Upcoming Fight Matchup")
+upcoming_display = original_data[original_data['Win?'].isna() | (original_data['Win?'] == '')]
+st.write(f"**All upcoming fights:** {len(upcoming_display['FightID'].unique())}")
+
+if not upcoming_display.empty:
+    upcoming_ids = sorted(upcoming_display['FightID'].unique())
+    selected_fight = st.selectbox("Choose an upcoming fight", upcoming_ids, key="upcoming_select")
+    if selected_fight:
+        fight_rows = upcoming_display[upcoming_display['FightID'] == selected_fight]
+        if len(fight_rows) == 2:
+            f1 = fight_rows.iloc[0]; f2 = fight_rows.iloc[1]
+            st.session_state.selected_fight_row = f1
+            st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
+
+            # Build table sections
+            sections = {}
+            identity_cols = ['WC','Title','ScheduledRounds','Stance','Country','HometownFighter','EventCountry']
+            sections["Identity"] = [c for c in identity_cols if c in f1.index]
+            physical_cols = ['Age','Height','Reach','AgeDiff','HeightDiff','ReachDiff']
+            sections["Physical"] = [c for c in physical_cols if c in f1.index]
+            fight_hist_cols = ['FightNumber','DaysSincePrev','Avg3DaysGap','Prev7WinPct','CareerWinPct',
+                               'DaysSincePrev_diff','Avg3DaysGap_diff','CareerWinPct_diff','FightNumber_diff']
+            sections["Fight History"] = [c for c in fight_hist_cols if c in f1.index]
+            sections["Normalized Simple Stats (diff)"] = [c for c in f1.index if c.startswith('adj_') and c.endswith('_diff')]
+            odds_cols = ['FighterOddsNum','PrevFighterOddsNum']
+            sections["Odds"] = [c for c in odds_cols if c in f1.index]
+            sections["Ratings (Raw)"] = [c for c in f1.index if ('Colley' in c or 'Massey' in c) and 'avg7' not in c]
+            sections["Ratings (7‑Fight Avg)"] = [c for c in f1.index if 'avg7' in c]
+            sections["Striking & Grappling Final Differentials"] = [c for c in f1.index if c.endswith('_opp_diff')]
+            sections["Outcomes"] = [c for c in f1.index if 'Outcome' in c]
+            other_cols = ['Prev1_Title','IsNewWeightClass','PrevFighterOddsNum']
+            sections["Other"] = [c for c in other_cols if c in f1.index]
+
+            rows = []
+            for sec_name, cols in sections.items():
+                if not cols: continue
+                rows.append({"Stat": f"--- {sec_name} ---", f1['Fighter']: "", f2['Fighter']: ""})
+                for c in cols:
+                    val1 = f1[c]; val2 = f2[c]
+                    def fmt(v):
+                        if isinstance(v, (int,float)) and pd.notna(v): return f"{v:.2f}"
+                        elif pd.isna(v): return ""
+                        else: return str(v)
+                    rows.append({"Stat": c, f1['Fighter']: fmt(val1), f2['Fighter']: fmt(val2)})
+            df_stats = pd.DataFrame(rows)
+            st.dataframe(df_stats, use_container_width=True, hide_index=True)
+
+            # Top 5 Differentials (signed)
+            st.subheader("Top 5 Differentials")
+            for fighter, row in [(f1['Fighter'], f1), (f2['Fighter'], f2)]:
+                diffs = {}
+                for c in row.index:
+                    if (c.endswith('_opp_diff') or (c.startswith('adj_') and c.endswith('_diff'))):
+                        val = row[c]
+                        if pd.notna(val): diffs[c] = val
+                top5 = sorted(diffs.items(), key=lambda x: x[1], reverse=True)[:5]
+                if top5:
+                    st.write(f"**{fighter}**")
+                    for col, val in top5:
+                        st.write(f"{col}: {val:+.2f}" if isinstance(val, float) else f"{col}: {val}")
+                else:
+                    st.write(f"**{fighter}**: No eligible differentials available.")
+        else:
+            st.warning("Fight data incomplete (expected 2 rows).")
+else:
+    st.info("No upcoming fights available.")
+
 def build_independent_filter(df, key_prefix):
     with st.expander(f"{key_prefix} Filters", expanded=True):
         with st.container():
@@ -148,75 +340,6 @@ def build_independent_filter(df, key_prefix):
         mask &= add_filter((df['WeightedMasseyDecayDiff'] >= wmd_range[0]) & (df['WeightedMasseyDecayDiff'] <= wmd_range[1]), 'WeightedMasseyDecayDiff')
 
     return df[mask].copy()
-
-    # Build mask
-    mask = pd.Series(True, index=df.index)
-    if wc: mask &= df['WC'].isin(wc)
-    if stance: mask &= df['Stance'].isin(stance)
-    if country: mask &= df['Country'].isin(country)
-    if sched_rounds: mask &= df['ScheduledRounds'].isin(sched_rounds)
-    if title_fight != "All": mask &= df['Title'] == title_fight
-    if hometown_fighter: mask &= df['HometownFighter'].isin(hometown_fighter)
-    if opp_hometown: mask &= df['Opponent_Hometown'].isin(opp_hometown)
-    if event_country: mask &= df['EventCountry'].isin(event_country)
-    if new_wc and 'IsNewWeightClass' in df.columns: mask &= df['IsNewWeightClass'] == True
-    if prev_title != "All" and 'Prev1_Title' in df.columns:
-        mask &= normalize_title_col(df['Prev1_Title']) == prev_title.lower()
-    if opp_prev_title != "All" and 'Opponent_Prev1_Title' in df.columns:
-        mask &= normalize_title_col(df['Opponent_Prev1_Title']) == opp_prev_title.lower()
-
-    def add_filter(condition, keep_nan=True, col_name=None):
-        if condition is None: return None
-        if keep_nan and col_name in df.columns:
-            return condition | df[col_name].isna()
-        return condition
-
-    if 'FightNumber' in df.columns:
-        mask &= add_filter((df['FightNumber'] >= fn_min) & (df['FightNumber'] <= fn_max), col_name='FightNumber')
-    if 'Opponent_FightNumber' in df.columns:
-        mask &= add_filter((df['Opponent_FightNumber'] >= ofn_min) & (df['Opponent_FightNumber'] <= ofn_max), col_name='Opponent_FightNumber')
-    if 'CareerWinPct_diff' in df.columns:
-        mask &= add_filter((df['CareerWinPct_diff'] >= cwp_min) & (df['CareerWinPct_diff'] <= cwp_max), col_name='CareerWinPct_diff')
-
-    for col, (cmin, cmax) in [
-        ('Age', (age_min, age_max)), ('AgeDiff', (ad_min, ad_max)), ('HeightDiff', (hd_min, hd_max)),
-        ('ReachDiff', (rd_min, rd_max)), ('DaysSincePrev', (days_min, days_max)),
-        ('DaysSincePrev_diff', (ddiff_min, ddiff_max)), ('Avg3DaysGap_diff', (avg3_min, avg3_max)),
-        ('FighterOddsNum', (odds_min, odds_max)), ('PrevFighterOddsNum', (podds_min, podds_max))
-    ]:
-        if col in df.columns:
-            mask &= add_filter((df[col] >= cmin) & (df[col] <= cmax), col_name=col)
-
-    for col, val in [(prev1_col, prev1), (prev2_col, prev2), (prev3_col, prev3),
-                     (career1_col, career1), (career2_col, career2), (career3_col, career3)]:
-        if val and col in df.columns:
-            mask &= df[col].isin(val)
-
-    for shift, wlist in [(1, opp_prev1), (2, opp_prev2), (3, opp_prev3)]:
-        col = f'Opponent_Prev{shift}_Outcome_raw'
-        if wlist and col in df.columns:
-            if skip_nc:
-                col_use = f'Opponent_Prev{shift}_Outcome_skipNC'
-                if col_use in df.columns:
-                    mask &= df[col_use].isin(wlist)
-            else:
-                mask &= df[col].isin(wlist)
-
-    for col, val in [('Opponent_Career1_Outcome_raw' if not skip_nc else 'Opponent_Career1_Outcome_skipNC', opp_career1),
-                     ('Opponent_Career2_Outcome_raw' if not skip_nc else 'Opponent_Career2_Outcome_skipNC', opp_career2),
-                     ('Opponent_Career3_Outcome_raw' if not skip_nc else 'Opponent_Career3_Outcome_skipNC', opp_career3)]:
-        if val and col in df.columns:
-            mask &= df[col].isin(val)
-
-    if use_colley and 'ColleyDecayDiff' in df.columns:
-        mask &= add_filter((df['ColleyDecayDiff'] >= colley_range[0]) & (df['ColleyDecayDiff'] <= colley_range[1]), col_name='ColleyDecayDiff')
-    if use_massey and 'MasseyFinishDecayDiff' in df.columns:
-        mask &= add_filter((df['MasseyFinishDecayDiff'] >= massey_range[0]) & (df['MasseyFinishDecayDiff'] <= massey_range[1]), col_name='MasseyFinishDecayDiff')
-    if use_wmd and 'WeightedMasseyDecayDiff' in df.columns:
-        mask &= add_filter((df['WeightedMasseyDecayDiff'] >= wmd_range[0]) & (df['WeightedMasseyDecayDiff'] <= wmd_range[1]), col_name='WeightedMasseyDecayDiff')
-
-    return df[mask].copy()
-
 # -----------------------------------------------
 # SPIDER CHART (independent filters)
 # -----------------------------------------------
@@ -508,4 +631,5 @@ else:
         else:
             st.warning("Not enough complete rows for MI.")
     else:
+        st.warning("No numeric features (excluding absolute ratings).")
         st.warning("No numeric features (excluding absolute ratings).")
