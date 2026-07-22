@@ -2,18 +2,30 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 import gdown
 from sklearn.linear_model import LogisticRegressionCV
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import brier_score_loss
+from sklearn.model_selection import cross_val_predict, permutation_importance
 from scipy.spatial.distance import cdist
+import lightgbm as lgb
+
+# dtreeviz is optional – if missing, a text tree will be shown instead
+try:
+    import dtreeviz
+    HAS_DTREEVIZ = True
+except ImportError:
+    HAS_DTREEVIZ = False
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
 # -----------------------------------------------
-# LOAD DATA
+# LOAD DATA (no main sidebar filters)
 # -----------------------------------------------
 PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"   # <-- update with your file ID
 
@@ -48,7 +60,7 @@ def get_diff_range(df, col_name):
     if len(vals) == 0: return -1.0, 1.0
     return float(vals.min()), float(vals.max())
 
-# Rating column definitions (same as before)
+# ---------- VARIABLE DEFINITIONS ----------
 rating_raw_cols = [
     'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecayDiff',
     'FighterMasseyFinishDecay', 'OpponentMasseyFinishDecay', 'MasseyFinishDecayDiff',
@@ -70,7 +82,11 @@ numeric_features = [c for c in data.columns
                     or c in rating_raw_cols
                     or c in rating_avg7_cols]
 
-# Session state (minimal, no models)
+# absolute rating columns to exclude later
+abs_rating_cols = [c for c in rating_raw_cols if not c.endswith('Diff')] + \
+                  [c for c in rating_avg7_cols if not c.endswith('_diff')]
+
+# Session state
 for key, default in [
     ('overall_wr', 0.0), ('recent_wr', 0.0), ('recent_count', 0),
 ]:
@@ -78,246 +94,31 @@ for key, default in [
         st.session_state[key] = default
 
 # -----------------------------------------------
-# SIDEBAR FILTERS
-# -----------------------------------------------
-st.sidebar.title("Filters")
-
-with st.sidebar.expander("General", expanded=True):
-    wc = st.multiselect("Weight Class", sorted(data['WC'].dropna().unique()), key="filter_wc") if 'WC' in data.columns else []
-    stance = st.multiselect("Stance", sorted(data['Stance'].dropna().unique()), key="filter_stance") if 'Stance' in data.columns else []
-    country = st.multiselect("Country", sorted(data['Country'].dropna().unique()), key="filter_country") if 'Country' in data.columns else []
-    sched_rounds = st.multiselect("Scheduled Rounds", sorted(data['ScheduledRounds'].dropna().unique()), key="filter_sched") if 'ScheduledRounds' in data.columns else []
-    title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"], key="filter_titlefight") if 'Title' in data.columns else "All"
-    hometown_fighter = st.multiselect("Hometown (Fighter)", sorted(data['HometownFighter'].dropna().unique()), key="filter_hometown_fighter") if 'HometownFighter' in data.columns else []
-    opp_hometown = st.multiselect("Opponent Hometown", sorted(data['Opponent_Hometown'].dropna().unique()), key="filter_opp_hometown") if 'Opponent_Hometown' in data.columns else []
-    event_country = st.multiselect("Event Country", sorted(data['EventCountry'].dropna().unique()), key="filter_event") if 'EventCountry' in data.columns else []
-
-with st.sidebar.expander("Fight Numbers", expanded=False):
-    fn_min = st.number_input("Min Fight #", value=1, min_value=1, max_value=int(data['FightNumber'].max()), key="filter_fn_min") if 'FightNumber' in data.columns else 1
-    fn_max = st.number_input("Max Fight #", value=int(data['FightNumber'].max()), key="filter_fn_max") if 'FightNumber' in data.columns else 1000
-    if 'Opponent_FightNumber' in data.columns:
-        ofn_min = st.number_input("Opp Min Fight #", value=1, key="filter_ofn_min")
-        ofn_max = st.number_input("Opp Max Fight #", value=int(data['Opponent_FightNumber'].max()), key="filter_ofn_max")
-    else:
-        ofn_min = st.number_input("Opp Min Fight #", value=1, disabled=True, key="filter_ofn_min_disabled")
-        ofn_max = st.number_input("Opp Max Fight #", value=1000, disabled=True, key="filter_ofn_max_disabled")
-        st.warning("'Opponent_FightNumber' column missing. Re‑run data processing script.")
-
-with st.sidebar.expander("Career Win % Diff", expanded=False):
-    if 'CareerWinPct_diff' in data.columns:
-        cwp_min, cwp_max = st.slider("Career Win % Diff", -100, 100, (-100, 100), step=5, key="filter_cwp")
-    else:
-        cwp_min, cwp_max = -100, 100
-
-with st.sidebar.expander("Physical Attributes", expanded=False):
-    age_min, age_max = st.slider("Age", int(data['Age'].min()), int(data['Age'].max()), (int(data['Age'].min()), int(data['Age'].max())), key="filter_age") if 'Age' in data.columns else (0,100)
-    ad_min, ad_max = st.slider("Age Diff", int(data['AgeDiff'].min()), int(data['AgeDiff'].max()), (int(data['AgeDiff'].min()), int(data['AgeDiff'].max())), key="filter_age_diff") if 'AgeDiff' in data.columns else (-100,100)
-    hd_min, hd_max = st.slider("Height Diff (in)", int(data['HeightDiff'].min()), int(data['HeightDiff'].max()), (int(data['HeightDiff'].min()), int(data['HeightDiff'].max())), key="filter_height_diff") if 'HeightDiff' in data.columns else (-50,50)
-    rd_min, rd_max = st.slider("Reach Diff (in)", int(data['ReachDiff'].min()), int(data['ReachDiff'].max()), (int(data['ReachDiff'].min()), int(data['ReachDiff'].max())), key="filter_reach_diff") if 'ReachDiff' in data.columns else (-50,50)
-
-with st.sidebar.expander("Days & Gaps", expanded=False):
-    days_min, days_max = st.slider("Days Since Prev", int(data['DaysSincePrev'].min()), int(data['DaysSincePrev'].max()), (int(data['DaysSincePrev'].min()), int(data['DaysSincePrev'].max())), key="filter_days") if 'DaysSincePrev' in data.columns else (0,1000)
-    ddiff_min, ddiff_max = st.slider("Days Since Prev Diff", int(data['DaysSincePrev_diff'].min()), int(data['DaysSincePrev_diff'].max()), (int(data['DaysSincePrev_diff'].min()), int(data['DaysSincePrev_diff'].max())), key="filter_days_diff") if 'DaysSincePrev_diff' in data.columns else (-1000,1000)
-    avg3_min, avg3_max = st.slider("Avg3DaysGap Diff", int(data['Avg3DaysGap_diff'].min()), int(data['Avg3DaysGap_diff'].max()), (int(data['Avg3DaysGap_diff'].min()), int(data['Avg3DaysGap_diff'].max())), key="filter_avg3_diff") if 'Avg3DaysGap_diff' in data.columns else (-1000,1000)
-
-with st.sidebar.expander("Odds", expanded=False):
-    odds_min, odds_max = st.slider("Fighter Odds", int(data['FighterOddsNum'].min()), int(data['FighterOddsNum'].max()), (int(data['FighterOddsNum'].min()), int(data['FighterOddsNum'].max())), step=10, key="filter_cur_odds") if 'FighterOddsNum' in data.columns else (-1000,1000)
-    podds_min, podds_max = st.slider("Prev Fighter Odds", int(data['PrevFighterOddsNum'].min()), int(data['PrevFighterOddsNum'].max()), (int(data['PrevFighterOddsNum'].min()), int(data['PrevFighterOddsNum'].max())), step=10, key="filter_prev_odds") if 'PrevFighterOddsNum' in data.columns else (-1000,1000)
-
-skip_nc = st.sidebar.checkbox("Skip NC outcomes", key="filter_skip_nc")
-if skip_nc:
-    prev1_col = 'Prev1_Outcome_skipNC'; prev2_col = 'Prev2_Outcome_skipNC'; prev3_col = 'Prev3_Outcome_skipNC'
-    career1_col = 'Career1_Outcome_skipNC'; career2_col = 'Career2_Outcome_skipNC'; career3_col = 'Career3_Outcome_skipNC'
-    opp_career1_col = 'Opponent_Career1_Outcome_skipNC'; opp_career2_col = 'Opponent_Career2_Outcome_skipNC'; opp_career3_col = 'Opponent_Career3_Outcome_skipNC'
-else:
-    prev1_col = 'Prev1_Outcome_raw'; prev2_col = 'Prev2_Outcome_raw'; prev3_col = 'Prev3_Outcome_raw'
-    career1_col = 'Career1_Outcome_raw'; career2_col = 'Career2_Outcome_raw'; career3_col = 'Career3_Outcome_raw'
-    opp_career1_col = 'Opponent_Career1_Outcome_raw'; opp_career2_col = 'Opponent_Career2_Outcome_raw'; opp_career3_col = 'Opponent_Career3_Outcome_raw'
-
-all_outcomes_raw = sorted(data[prev1_col].dropna().unique()) if prev1_col in data.columns else []
-all_outcomes_career = sorted(data[career1_col].dropna().unique()) if career1_col in data.columns else []
-
-with st.sidebar.expander("Previous Outcomes", expanded=False):
-    prev1 = st.multiselect("Prev Fight 1", all_outcomes_raw, key="filter_prev1")
-    prev2 = st.multiselect("Prev Fight 2", all_outcomes_raw, key="filter_prev2")
-    prev3 = st.multiselect("Prev Fight 3", all_outcomes_raw, key="filter_prev3")
-    opp_prev1 = st.multiselect("Opp Prev 1", all_outcomes_raw, key="filter_opp_prev1")
-    opp_prev2 = st.multiselect("Opp Prev 2", all_outcomes_raw, key="filter_opp_prev2")
-    opp_prev3 = st.multiselect("Opp Prev 3", all_outcomes_raw, key="filter_opp_prev3")
-    career1 = st.multiselect("Career F1", all_outcomes_career, key="filter_career1")
-    career2 = st.multiselect("Career F2", all_outcomes_career, key="filter_career2")
-    career3 = st.multiselect("Career F3", all_outcomes_career, key="filter_career3")
-    opp_career1 = st.multiselect("Opp Career F1", all_outcomes_career, key="filter_opp_career1")
-    opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career, key="filter_opp_career2")
-    opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career, key="filter_opp_career3")
-
-with st.sidebar.expander("Ratings", expanded=False):
-    use_colley = st.checkbox("Filter ColleyDecayDiff", value=False, key="filter_use_colley")
-    if use_colley:
-        min_cd, max_cd = get_diff_range(data, 'ColleyDecayDiff')
-        colley_range = st.slider("ColleyDecayDiff range", min_cd, max_cd, (min_cd, max_cd), step=0.01, key="filter_colley")
-    use_massey = st.checkbox("Filter MasseyFinishDecayDiff", value=False, key="filter_use_massey")
-    if use_massey:
-        min_md, max_md = get_diff_range(data, 'MasseyFinishDecayDiff')
-        massey_range = st.slider("MasseyFinishDecayDiff range", min_md, max_md, (min_md, max_md), step=0.01, key="filter_massey")
-    use_wmd = st.checkbox("Filter WeightedMasseyDecayDiff", value=False, key="filter_use_wmd")
-    if use_wmd:
-        min_wmd, max_wmd = get_diff_range(data, 'WeightedMasseyDecayDiff')
-        wmd_range = st.slider("WeightedMasseyDecayDiff range", min_wmd, max_wmd, (min_wmd, max_wmd), step=0.01, key="filter_wmd")
-
-prev_title = st.sidebar.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="filter_prev_title")
-opp_prev_title = st.sidebar.selectbox("Opp Prev Fight Was Title?", ["All", "Yes", "No"], key="filter_opp_prev_title")
-new_wc = st.sidebar.checkbox("New Weight Class", key="filter_new_wc") if 'IsNewWeightClass' in data.columns else False
-
-prior_weight = st.sidebar.slider("Bayesian prior weight", 0.0, 20.0, 5.0, step=0.5, key="prior_weight_global")
-recent_window = st.sidebar.slider("Recent fights window", 1, 100, 50, key="recent_win_global")
-
-# -----------------------------------------------
-# BUILD MAIN FILTER MASK
-# -----------------------------------------------
-mask = pd.Series(True, index=data.index)
-def add_filter(condition, keep_nan=False, col_name=None):
-    if condition is None: return None
-    if keep_nan and col_name and col_name in data.columns:
-        return condition | data[col_name].isna()
-    return condition
-
-if wc: mask &= data['WC'].isin(wc)
-if stance: mask &= data['Stance'].isin(stance)
-if country: mask &= data['Country'].isin(country)
-if sched_rounds: mask &= data['ScheduledRounds'].isin(sched_rounds)
-if title_fight != "All": mask &= data['Title'] == title_fight
-if hometown_fighter: mask &= data['HometownFighter'].isin(hometown_fighter)
-if opp_hometown: mask &= data['Opponent_Hometown'].isin(opp_hometown)
-if event_country: mask &= data['EventCountry'].isin(event_country)
-if new_wc and 'IsNewWeightClass' in data.columns: mask &= data['IsNewWeightClass'] == True
-
-if prev_title != "All" and 'Prev1_Title' in data.columns:
-    mask &= normalize_title_col(data['Prev1_Title']) == prev_title.lower()
-if opp_prev_title != "All" and 'Opponent_Prev1_Title' in data.columns:
-    mask &= normalize_title_col(data['Opponent_Prev1_Title']) == opp_prev_title.lower()
-
-if 'FightNumber' in data.columns:
-    mask &= add_filter((data['FightNumber'] >= fn_min) & (data['FightNumber'] <= fn_max), keep_nan=True, col_name='FightNumber')
-if 'Opponent_FightNumber' in data.columns:
-    mask &= add_filter((data['Opponent_FightNumber'] >= ofn_min) & (data['Opponent_FightNumber'] <= ofn_max), keep_nan=True, col_name='Opponent_FightNumber')
-
-if 'CareerWinPct_diff' in data.columns:
-    mask &= add_filter((data['CareerWinPct_diff'] >= cwp_min) & (data['CareerWinPct_diff'] <= cwp_max), keep_nan=True, col_name='CareerWinPct_diff')
-
-for col, (cmin, cmax) in [
-    ('Age', (age_min, age_max)),
-    ('AgeDiff', (ad_min, ad_max)),
-    ('HeightDiff', (hd_min, hd_max)),
-    ('ReachDiff', (rd_min, rd_max)),
-    ('DaysSincePrev', (days_min, days_max)),
-    ('DaysSincePrev_diff', (ddiff_min, ddiff_max)),
-    ('Avg3DaysGap_diff', (avg3_min, avg3_max)),
-    ('FighterOddsNum', (odds_min, odds_max)),
-    ('PrevFighterOddsNum', (podds_min, podds_max))
-]:
-    if col in data.columns:
-        mask &= add_filter((data[col] >= cmin) & (data[col] <= cmax), keep_nan=True, col_name=col)
-
-for col, val in [(prev1_col, prev1), (prev2_col, prev2), (prev3_col, prev3),
-                 (career1_col, career1), (career2_col, career2), (career3_col, career3)]:
-    if val and col in data.columns:
-        mask &= data[col].isin(val)
-
-for shift, wlist in [(1, opp_prev1), (2, opp_prev2), (3, opp_prev3)]:
-    col = f'Opponent_Prev{shift}_Outcome_raw'
-    if wlist and col in data.columns:
-        if skip_nc:
-            col_use = f'Opponent_Prev{shift}_Outcome_skipNC'
-            if col_use in data.columns:
-                mask &= data[col_use].isin(wlist)
-        else:
-            mask &= data[col].isin(wlist)
-
-for col, val in [(opp_career1_col, opp_career1), (opp_career2_col, opp_career2), (opp_career3_col, opp_career3)]:
-    if val and col in data.columns:
-        mask &= data[col].isin(val)
-
-if use_colley and 'ColleyDecayDiff' in data.columns:
-    mask &= add_filter((data['ColleyDecayDiff'] >= colley_range[0]) & (data['ColleyDecayDiff'] <= colley_range[1]), keep_nan=True, col_name='ColleyDecayDiff')
-if use_massey and 'MasseyFinishDecayDiff' in data.columns:
-    mask &= add_filter((data['MasseyFinishDecayDiff'] >= massey_range[0]) & (data['MasseyFinishDecayDiff'] <= massey_range[1]), keep_nan=True, col_name='MasseyFinishDecayDiff')
-if use_wmd and 'WeightedMasseyDecayDiff' in data.columns:
-    mask &= add_filter((data['WeightedMasseyDecayDiff'] >= wmd_range[0]) & (data['WeightedMasseyDecayDiff'] <= wmd_range[1]), keep_nan=True, col_name='WeightedMasseyDecayDiff')
-
-filtered = data[mask].copy()
-surviving_fight_ids = filtered['FightID'].unique()
-matchup_data = original_data[original_data['FightID'].isin(surviving_fight_ids)]
-
-# -----------------------------------------------
-# FILTER STATUS
-# -----------------------------------------------
-st.write(f"**Filter status:** {len(filtered)} / {len(data)} rows ({len(filtered)/len(data)*100:.1f}%)  |  {len(surviving_fight_ids)} unique fights")
-if len(filtered) == 0:
-    st.warning("No data matches the selected filters.")
-    st.stop()
-
-# -----------------------------------------------
-# DATA ENRICHMENT
-# -----------------------------------------------
-def detailed_result(row):
-    win_raw = row.get('Win?')
-    if pd.isna(win_raw) or str(win_raw).strip().lower() in ('', 'none', 'nan'):
-        return 'Upcoming'
-    win_val = str(win_raw).strip()
-    method = str(row.get('Method', '')).strip().lower()
-    if 'dq' in method or 'disqualif' in method:
-        return 'Win by DQ' if win_val == 'Yes' else 'Loss by DQ'
-    if win_val in ('No Contest', 'NC'): return 'No Contest'
-    if win_val == 'Draw': return 'Draw'
-    if win_val == 'Yes': return 'Win'
-    if win_val == 'No': return 'Loss'
-    return 'Upcoming'
-
-filtered['DetailedResult'] = filtered.apply(detailed_result, axis=1)
-filtered['Fight'] = filtered['Fighter'].astype(str) + ' vs ' + filtered['Opponent'].astype(str)
-color_map = {
-    'Win': 'green', 'Loss': 'red', 'Win by DQ': 'limegreen',
-    'Loss by DQ': 'darkred', 'No Contest': 'purple', 'Upcoming': 'blue', 'Draw': 'gray'
-}
-
-# Win rates
-hist_for_wr = filtered[filtered['Win?'].isin(['Yes','No'])].copy()
-if len(hist_for_wr) > 0:
-    st.session_state.overall_wr = (hist_for_wr['Win?'] == 'Yes').mean() * 100
-    recent = hist_for_wr.sort_values('FightDate', ascending=False).head(recent_window)
-    st.session_state.recent_wr = (recent['Win?'] == 'Yes').mean() * 100 if len(recent) > 0 else st.session_state.overall_wr
-    st.session_state.recent_count = len(recent)
-else:
-    st.session_state.overall_wr = 0.0; st.session_state.recent_wr = 0.0; st.session_state.recent_count = 0
-
-# -----------------------------------------------
-# PERFORMANCE SUMMARY
+# PERFORMANCE SUMMARY (full data)
 # -----------------------------------------------
 st.title("UFC Pre‑Fight Performance Dashboard")
 st.header("Performance Summary")
-total = len(filtered)
-wins = (filtered['Win?'] == 'Yes').sum()
+total = len(data)
+wins = (data['Win?'] == 'Yes').sum()
 win_rate = wins / total * 100 if total > 0 else 0
 col1, col2, col3 = st.columns(3)
 col1.metric("Total Fights", total); col2.metric("Wins", wins); col3.metric("Win Rate", f"{win_rate:.1f}%")
 
 # -----------------------------------------------
-# LAST 20 FIGHTS (moved up)
+# LAST 20 FIGHTS
 # -----------------------------------------------
 st.header("Last 20 Fights")
-last20 = filtered.sort_values('FightDate', ascending=False).head(20)
+last20 = data.sort_values('FightDate', ascending=False).head(20)
 cols = ['FightDate','Fighter','Opponent','Win?','Method','AgeDiff','HeightDiff','ReachDiff','CareerWinPct_diff']
 cols = [c for c in cols if c in last20.columns]
 st.dataframe(last20[cols], use_container_width=True)
 
 # -----------------------------------------------
-# UPCOMING FIGHT MATCHUP (FULL TABLE + TOP 5 DIFFS, NO MODELS)
+# UPCOMING FIGHT MATCHUP (full upcoming data)
 # -----------------------------------------------
 st.header("Upcoming Fight Matchup")
-
-upcoming_display = matchup_data[matchup_data['Win?'].isna() | (matchup_data['Win?'] == '')]
-st.write(f"**Upcoming fights after filters:** {len(upcoming_display['FightID'].unique())}")
+upcoming_display = original_data[original_data['Win?'].isna() | (original_data['Win?'] == '')]
+st.write(f"**All upcoming fights:** {len(upcoming_display['FightID'].unique())}")
 
 if not upcoming_display.empty:
     upcoming_ids = sorted(upcoming_display['FightID'].unique())
@@ -329,67 +130,47 @@ if not upcoming_display.empty:
             st.session_state.selected_fight_row = f1
             st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
 
-            # ---- BUILD TABLE SECTIONS ----
+            # Build table sections (same as before)
             sections = {}
-
             identity_cols = ['WC','Title','ScheduledRounds','Stance','Country','HometownFighter','EventCountry']
             sections["Identity"] = [c for c in identity_cols if c in f1.index]
-
             physical_cols = ['Age','Height','Reach','AgeDiff','HeightDiff','ReachDiff']
             sections["Physical"] = [c for c in physical_cols if c in f1.index]
-
             fight_hist_cols = ['FightNumber','DaysSincePrev','Avg3DaysGap','Prev7WinPct','CareerWinPct',
                                'DaysSincePrev_diff','Avg3DaysGap_diff','CareerWinPct_diff','FightNumber_diff']
             sections["Fight History"] = [c for c in fight_hist_cols if c in f1.index]
-
-            sections["Normalized Simple Stats (diff)"] = [
-                c for c in f1.index if c.startswith('adj_') and c.endswith('_diff')
-            ]
-
+            sections["Normalized Simple Stats (diff)"] = [c for c in f1.index if c.startswith('adj_') and c.endswith('_diff')]
             odds_cols = ['FighterOddsNum','PrevFighterOddsNum']
             sections["Odds"] = [c for c in odds_cols if c in f1.index]
-
             sections["Ratings (Raw)"] = [c for c in f1.index if ('Colley' in c or 'Massey' in c) and 'avg7' not in c]
             sections["Ratings (7‑Fight Avg)"] = [c for c in f1.index if 'avg7' in c]
-
-            sections["Striking & Grappling Final Differentials"] = [
-                c for c in f1.index if c.endswith('_opp_diff')
-            ]
-
+            sections["Striking & Grappling Final Differentials"] = [c for c in f1.index if c.endswith('_opp_diff')]
             sections["Outcomes"] = [c for c in f1.index if 'Outcome' in c]
-
             other_cols = ['Prev1_Title','IsNewWeightClass','PrevFighterOddsNum']
             sections["Other"] = [c for c in other_cols if c in f1.index]
 
             rows = []
             for sec_name, cols in sections.items():
-                if not cols:
-                    continue
+                if not cols: continue
                 rows.append({"Stat": f"--- {sec_name} ---", f1['Fighter']: "", f2['Fighter']: ""})
                 for c in cols:
-                    val1 = f1[c]
-                    val2 = f2[c]
+                    val1 = f1[c]; val2 = f2[c]
                     def fmt(v):
-                        if isinstance(v, (int, float)) and pd.notna(v):
-                            return f"{v:.2f}"
-                        elif pd.isna(v):
-                            return ""
-                        else:
-                            return str(v)
+                        if isinstance(v, (int,float)) and pd.notna(v): return f"{v:.2f}"
+                        elif pd.isna(v): return ""
+                        else: return str(v)
                     rows.append({"Stat": c, f1['Fighter']: fmt(val1), f2['Fighter']: fmt(val2)})
-
             df_stats = pd.DataFrame(rows)
             st.dataframe(df_stats, use_container_width=True, hide_index=True)
 
-            # Top 5 Differentials (signed)
+            # Top 5 Differentials
             st.subheader("Top 5 Differentials")
             for fighter, row in [(f1['Fighter'], f1), (f2['Fighter'], f2)]:
                 diffs = {}
                 for c in row.index:
                     if (c.endswith('_opp_diff') or (c.startswith('adj_') and c.endswith('_diff'))):
                         val = row[c]
-                        if pd.notna(val):
-                            diffs[c] = val
+                        if pd.notna(val): diffs[c] = val
                 top5 = sorted(diffs.items(), key=lambda x: x[1], reverse=True)[:5]
                 if top5:
                     st.write(f"**{fighter}**")
@@ -400,160 +181,152 @@ if not upcoming_display.empty:
         else:
             st.warning("Fight data incomplete (expected 2 rows).")
 else:
-    st.info("No upcoming fights with current filters.")
+    st.info("No upcoming fights available.")
 
 # -----------------------------------------------
-# FIGHT SIMILARITY (INDEPENDENT FILTERS – FULL ORIGINAL, MINUS ABSOLUTE RATINGS)
+# INDEPENDENT FILTER HELPER
+# -----------------------------------------------
+def build_independent_filter(df, key_prefix):
+    """Return filtered dataframe based on independent filter widgets."""
+    filters = {}
+    with st.expander(f"{key_prefix} Filters", expanded=True):
+        with st.container():
+            col1, col2 = st.columns(2)
+            with col1:
+                wc = st.multiselect("Weight Class", sorted(df['WC'].dropna().unique()), key=f"{key_prefix}_wc") if 'WC' in df.columns else []
+                stance = st.multiselect("Stance", sorted(df['Stance'].dropna().unique()), key=f"{key_prefix}_stance") if 'Stance' in df.columns else []
+                country = st.multiselect("Country", sorted(df['Country'].dropna().unique()), key=f"{key_prefix}_country") if 'Country' in df.columns else []
+                sched_rounds = st.multiselect("Scheduled Rounds", sorted(df['ScheduledRounds'].dropna().unique()), key=f"{key_prefix}_sched") if 'ScheduledRounds' in df.columns else []
+                title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"], key=f"{key_prefix}_title") if 'Title' in df.columns else "All"
+                hometown_fighter = st.multiselect("Hometown (Fighter)", sorted(df['HometownFighter'].dropna().unique()), key=f"{key_prefix}_hometown") if 'HometownFighter' in df.columns else []
+                opp_hometown = st.multiselect("Opponent Hometown", sorted(df['Opponent_Hometown'].dropna().unique()), key=f"{key_prefix}_opp_hometown") if 'Opponent_Hometown' in df.columns else []
+                event_country = st.multiselect("Event Country", sorted(df['EventCountry'].dropna().unique()), key=f"{key_prefix}_event") if 'EventCountry' in df.columns else []
+            with col2:
+                fn_min = st.number_input("Min Fight #", value=1, min_value=1, max_value=int(df['FightNumber'].max()), key=f"{key_prefix}_fn_min") if 'FightNumber' in df.columns else 1
+                fn_max = st.number_input("Max Fight #", value=int(df['FightNumber'].max()), key=f"{key_prefix}_fn_max") if 'FightNumber' in df.columns else 1000
+                ofn_min = st.number_input("Opp Min Fight #", value=1, key=f"{key_prefix}_ofn_min") if 'Opponent_FightNumber' in df.columns else 1
+                ofn_max = st.number_input("Opp Max Fight #", value=int(df['Opponent_FightNumber'].max()), key=f"{key_prefix}_ofn_max") if 'Opponent_FightNumber' in df.columns else 1000
+                cwp_min, cwp_max = st.slider("Career Win % Diff", -100, 100, (-100, 100), step=5, key=f"{key_prefix}_cwp") if 'CareerWinPct_diff' in df.columns else (-100,100)
+                age_min, age_max = st.slider("Age", int(df['Age'].min()), int(df['Age'].max()), (int(df['Age'].min()), int(df['Age'].max())), key=f"{key_prefix}_age") if 'Age' in df.columns else (0,100)
+                ad_min, ad_max = st.slider("Age Diff", int(df['AgeDiff'].min()), int(df['AgeDiff'].max()), (int(df['AgeDiff'].min()), int(df['AgeDiff'].max())), key=f"{key_prefix}_age_diff") if 'AgeDiff' in df.columns else (-100,100)
+                hd_min, hd_max = st.slider("Height Diff", int(df['HeightDiff'].min()), int(df['HeightDiff'].max()), (int(df['HeightDiff'].min()), int(df['HeightDiff'].max())), key=f"{key_prefix}_hd") if 'HeightDiff' in df.columns else (-50,50)
+                rd_min, rd_max = st.slider("Reach Diff", int(df['ReachDiff'].min()), int(df['ReachDiff'].max()), (int(df['ReachDiff'].min()), int(df['ReachDiff'].max())), key=f"{key_prefix}_rd") if 'ReachDiff' in df.columns else (-50,50)
+                days_min, days_max = st.slider("Days Since Prev", int(df['DaysSincePrev'].min()), int(df['DaysSincePrev'].max()), (int(df['DaysSincePrev'].min()), int(df['DaysSincePrev'].max())), key=f"{key_prefix}_days") if 'DaysSincePrev' in df.columns else (0,1000)
+                ddiff_min, ddiff_max = st.slider("Days Since Prev Diff", int(df['DaysSincePrev_diff'].min()), int(df['DaysSincePrev_diff'].max()), (int(df['DaysSincePrev_diff'].min()), int(df['DaysSincePrev_diff'].max())), key=f"{key_prefix}_ddiff") if 'DaysSincePrev_diff' in df.columns else (-1000,1000)
+                avg3_min, avg3_max = st.slider("Avg3DaysGap Diff", int(df['Avg3DaysGap_diff'].min()), int(df['Avg3DaysGap_diff'].max()), (int(df['Avg3DaysGap_diff'].min()), int(df['Avg3DaysGap_diff'].max())), key=f"{key_prefix}_avg3") if 'Avg3DaysGap_diff' in df.columns else (-1000,1000)
+                odds_min, odds_max = st.slider("Fighter Odds", int(df['FighterOddsNum'].min()), int(df['FighterOddsNum'].max()), (int(df['FighterOddsNum'].min()), int(df['FighterOddsNum'].max())), step=10, key=f"{key_prefix}_odds") if 'FighterOddsNum' in df.columns else (-1000,1000)
+                podds_min, podds_max = st.slider("Prev Fighter Odds", int(df['PrevFighterOddsNum'].min()), int(df['PrevFighterOddsNum'].max()), (int(df['PrevFighterOddsNum'].min()), int(df['PrevFighterOddsNum'].max())), step=10, key=f"{key_prefix}_podds") if 'PrevFighterOddsNum' in df.columns else (-1000,1000)
+
+            # Previous outcomes
+            skip_nc = st.checkbox("Skip NC outcomes", key=f"{key_prefix}_skip_nc")
+            prev_col_prefix = 'Prev1_Outcome_skipNC' if skip_nc else 'Prev1_Outcome_raw'
+            all_outcomes_raw = sorted(df[prev_col_prefix].dropna().unique()) if prev_col_prefix in df.columns else []
+            prev1 = st.multiselect("Prev Fight 1", all_outcomes_raw, key=f"{key_prefix}_prev1")
+            prev2 = st.multiselect("Prev Fight 2", all_outcomes_raw, key=f"{key_prefix}_prev2")
+            prev3 = st.multiselect("Prev Fight 3", all_outcomes_raw, key=f"{key_prefix}_prev3")
+            opp_prev1 = st.multiselect("Opp Prev 1", all_outcomes_raw, key=f"{key_prefix}_opp_prev1")
+            opp_prev2 = st.multiselect("Opp Prev 2", all_outcomes_raw, key=f"{key_prefix}_opp_prev2")
+            opp_prev3 = st.multiselect("Opp Prev 3", all_outcomes_raw, key=f"{key_prefix}_opp_prev3")
+            career1 = st.multiselect("Career F1", all_outcomes_raw, key=f"{key_prefix}_career1")
+            career2 = st.multiselect("Career F2", all_outcomes_raw, key=f"{key_prefix}_career2")
+            career3 = st.multiselect("Career F3", all_outcomes_raw, key=f"{key_prefix}_career3")
+            opp_career1 = st.multiselect("Opp Career F1", all_outcomes_raw, key=f"{key_prefix}_opp_career1")
+            opp_career2 = st.multiselect("Opp Career F2", all_outcomes_raw, key=f"{key_prefix}_opp_career2")
+            opp_career3 = st.multiselect("Opp Career F3", all_outcomes_raw, key=f"{key_prefix}_opp_career3")
+
+            # Ratings filters
+            use_colley = st.checkbox("Filter ColleyDecayDiff", value=False, key=f"{key_prefix}_use_colley")
+            if use_colley:
+                min_cd, max_cd = get_diff_range(df, 'ColleyDecayDiff')
+                colley_range = st.slider("ColleyDecayDiff range", min_cd, max_cd, (min_cd, max_cd), step=0.01, key=f"{key_prefix}_colley")
+            use_massey = st.checkbox("Filter MasseyFinishDecayDiff", value=False, key=f"{key_prefix}_use_massey")
+            if use_massey:
+                min_md, max_md = get_diff_range(df, 'MasseyFinishDecayDiff')
+                massey_range = st.slider("MasseyFinishDecayDiff range", min_md, max_md, (min_md, max_md), step=0.01, key=f"{key_prefix}_massey")
+            use_wmd = st.checkbox("Filter WeightedMasseyDecayDiff", value=False, key=f"{key_prefix}_use_wmd")
+            if use_wmd:
+                min_wmd, max_wmd = get_diff_range(df, 'WeightedMasseyDecayDiff')
+                wmd_range = st.slider("WeightedMasseyDecayDiff range", min_wmd, max_wmd, (min_wmd, max_wmd), step=0.01, key=f"{key_prefix}_wmd")
+
+            prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key=f"{key_prefix}_prev_title")
+            opp_prev_title = st.selectbox("Opp Prev Fight Was Title?", ["All", "Yes", "No"], key=f"{key_prefix}_opp_prev_title")
+            new_wc = st.checkbox("New Weight Class", key=f"{key_prefix}_new_wc") if 'IsNewWeightClass' in df.columns else False
+
+    # Build mask
+    mask = pd.Series(True, index=df.index)
+    if wc: mask &= df['WC'].isin(wc)
+    if stance: mask &= df['Stance'].isin(stance)
+    if country: mask &= df['Country'].isin(country)
+    if sched_rounds: mask &= df['ScheduledRounds'].isin(sched_rounds)
+    if title_fight != "All": mask &= df['Title'] == title_fight
+    if hometown_fighter: mask &= df['HometownFighter'].isin(hometown_fighter)
+    if opp_hometown: mask &= df['Opponent_Hometown'].isin(opp_hometown)
+    if event_country: mask &= df['EventCountry'].isin(event_country)
+    if new_wc and 'IsNewWeightClass' in df.columns: mask &= df['IsNewWeightClass'] == True
+    if prev_title != "All" and 'Prev1_Title' in df.columns:
+        mask &= normalize_title_col(df['Prev1_Title']) == prev_title.lower()
+    if opp_prev_title != "All" and 'Opponent_Prev1_Title' in df.columns:
+        mask &= normalize_title_col(df['Opponent_Prev1_Title']) == opp_prev_title.lower()
+    # Numeric filters
+    def add_filter(condition, keep_nan=True, col_name=None):
+        if condition is None: return None
+        if keep_nan and col_name in df.columns:
+            return condition | df[col_name].isna()
+        return condition
+    if 'FightNumber' in df.columns:
+        mask &= add_filter((df['FightNumber'] >= fn_min) & (df['FightNumber'] <= fn_max), col_name='FightNumber')
+    if 'Opponent_FightNumber' in df.columns:
+        mask &= add_filter((df['Opponent_FightNumber'] >= ofn_min) & (df['Opponent_FightNumber'] <= ofn_max), col_name='Opponent_FightNumber')
+    if 'CareerWinPct_diff' in df.columns:
+        mask &= add_filter((df['CareerWinPct_diff'] >= cwp_min) & (df['CareerWinPct_diff'] <= cwp_max), col_name='CareerWinPct_diff')
+    for col, (cmin, cmax) in [
+        ('Age', (age_min, age_max)), ('AgeDiff', (ad_min, ad_max)), ('HeightDiff', (hd_min, hd_max)),
+        ('ReachDiff', (rd_min, rd_max)), ('DaysSincePrev', (days_min, days_max)),
+        ('DaysSincePrev_diff', (ddiff_min, ddiff_max)), ('Avg3DaysGap_diff', (avg3_min, avg3_max)),
+        ('FighterOddsNum', (odds_min, odds_max)), ('PrevFighterOddsNum', (podds_min, podds_max))
+    ]:
+        if col in df.columns:
+            mask &= add_filter((df[col] >= cmin) & (df[col] <= cmax), col_name=col)
+    # Outcome filters
+    for col, val in [('Prev1_Outcome_raw' if not skip_nc else 'Prev1_Outcome_skipNC', prev1),
+                     ('Prev2_Outcome_raw' if not skip_nc else 'Prev2_Outcome_skipNC', prev2),
+                     ('Prev3_Outcome_raw' if not skip_nc else 'Prev3_Outcome_skipNC', prev3),
+                     ('Career1_Outcome_raw' if not skip_nc else 'Career1_Outcome_skipNC', career1),
+                     ('Career2_Outcome_raw' if not skip_nc else 'Career2_Outcome_skipNC', career2),
+                     ('Career3_Outcome_raw' if not skip_nc else 'Career3_Outcome_skipNC', career3)]:
+        if val and col in df.columns:
+            mask &= df[col].isin(val)
+    for shift, wlist in [(1, opp_prev1), (2, opp_prev2), (3, opp_prev3)]:
+        col = f'Opponent_Prev{shift}_Outcome_raw'
+        if wlist and col in df.columns:
+            if skip_nc:
+                col_use = f'Opponent_Prev{shift}_Outcome_skipNC'
+                if col_use in df.columns:
+                    mask &= df[col_use].isin(wlist)
+            else:
+                mask &= df[col].isin(wlist)
+    for col, val in [('Opponent_Career1_Outcome_raw' if not skip_nc else 'Opponent_Career1_Outcome_skipNC', opp_career1),
+                     ('Opponent_Career2_Outcome_raw' if not skip_nc else 'Opponent_Career2_Outcome_skipNC', opp_career2),
+                     ('Opponent_Career3_Outcome_raw' if not skip_nc else 'Opponent_Career3_Outcome_skipNC', opp_career3)]:
+        if val and col in df.columns:
+            mask &= df[col].isin(val)
+    if use_colley and 'ColleyDecayDiff' in df.columns:
+        mask &= add_filter((df['ColleyDecayDiff'] >= colley_range[0]) & (df['ColleyDecayDiff'] <= colley_range[1]), col_name='ColleyDecayDiff')
+    if use_massey and 'MasseyFinishDecayDiff' in df.columns:
+        mask &= add_filter((df['MasseyFinishDecayDiff'] >= massey_range[0]) & (df['MasseyFinishDecayDiff'] <= massey_range[1]), col_name='MasseyFinishDecayDiff')
+    if use_wmd and 'WeightedMasseyDecayDiff' in df.columns:
+        mask &= add_filter((df['WeightedMasseyDecayDiff'] >= wmd_range[0]) & (df['WeightedMasseyDecayDiff'] <= wmd_range[1]), col_name='WeightedMasseyDecayDiff')
+
+    return df[mask].copy()
+
+# -----------------------------------------------
+# SPIDER CHART (independent filters)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
-st.write("These filters are separate from the main sidebar and do not affect the dashboard above.")
+st.write("These filters are separate and do not affect other sections.")
 
-with st.expander("Similarity Filters", expanded=True):
-    with st.expander("General", expanded=True):
-        spider_wc = st.multiselect("Weight Class", sorted(original_data['WC'].dropna().unique()), key="spider_wc") if 'WC' in original_data.columns else []
-        spider_stance = st.multiselect("Stance", sorted(original_data['Stance'].dropna().unique()), key="spider_stance") if 'Stance' in original_data.columns else []
-        spider_country = st.multiselect("Country", sorted(original_data['Country'].dropna().unique()), key="spider_country") if 'Country' in original_data.columns else []
-        spider_sched_rounds = st.multiselect("Scheduled Rounds", sorted(original_data['ScheduledRounds'].dropna().unique()), key="spider_sched") if 'ScheduledRounds' in original_data.columns else []
-        spider_title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"], key="spider_title") if 'Title' in original_data.columns else "All"
-        spider_hometown_fighter = st.multiselect("Hometown (Fighter)", sorted(original_data['HometownFighter'].dropna().unique()), key="spider_hometown_fighter") if 'HometownFighter' in original_data.columns else []
-        spider_opp_hometown = st.multiselect("Opponent Hometown", sorted(original_data['Opponent_Hometown'].dropna().unique()), key="spider_opp_hometown") if 'Opponent_Hometown' in original_data.columns else []
-        spider_event_country = st.multiselect("Event Country", sorted(original_data['EventCountry'].dropna().unique()), key="spider_eventc") if 'EventCountry' in original_data.columns else []
-
-    with st.expander("Physical Attributes & Fight Numbers", expanded=False):
-        spider_fn_min = st.number_input("Min Fight #", value=1, min_value=1, max_value=int(original_data['FightNumber'].max()), key="spider_fn_min") if 'FightNumber' in original_data.columns else 1
-        spider_fn_max = st.number_input("Max Fight #", value=int(original_data['FightNumber'].max()), key="spider_fn_max") if 'FightNumber' in original_data.columns else 1000
-        spider_ofn_min = st.number_input("Opp Min Fight #", value=1, key="spider_ofn_min") if 'Opponent_FightNumber' in original_data.columns else 1
-        spider_ofn_max = st.number_input("Opp Max Fight #", value=int(original_data['Opponent_FightNumber'].max()), key="spider_ofn_max") if 'Opponent_FightNumber' in original_data.columns else 1000
-        spider_cwp_min, spider_cwp_max = st.slider("Career Win % Diff", -100, 100, (-100, 100), step=5, key="spider_cwp") if 'CareerWinPct_diff' in original_data.columns else (-100,100)
-        spider_age_min, spider_age_max = st.slider("Age", int(original_data['Age'].min()), int(original_data['Age'].max()), (int(original_data['Age'].min()), int(original_data['Age'].max())), key="spider_age") if 'Age' in original_data.columns else (0,100)
-        spider_ad_min, spider_ad_max = st.slider("Age Diff", int(original_data['AgeDiff'].min()), int(original_data['AgeDiff'].max()), (int(original_data['AgeDiff'].min()), int(original_data['AgeDiff'].max())), key="spider_age_diff") if 'AgeDiff' in original_data.columns else (-100,100)
-        spider_hd_min, spider_hd_max = st.slider("Height Diff", int(original_data['HeightDiff'].min()), int(original_data['HeightDiff'].max()), (int(original_data['HeightDiff'].min()), int(original_data['HeightDiff'].max())), key="spider_height_diff") if 'HeightDiff' in original_data.columns else (-50,50)
-        spider_rd_min, spider_rd_max = st.slider("Reach Diff", int(original_data['ReachDiff'].min()), int(original_data['ReachDiff'].max()), (int(original_data['ReachDiff'].min()), int(original_data['ReachDiff'].max())), key="spider_reach_diff") if 'ReachDiff' in original_data.columns else (-50,50)
-        spider_days_min, spider_days_max = st.slider("Days Since Prev", int(original_data['DaysSincePrev'].min()), int(original_data['DaysSincePrev'].max()), (int(original_data['DaysSincePrev'].min()), int(original_data['DaysSincePrev'].max())), key="spider_days") if 'DaysSincePrev' in original_data.columns else (0,1000)
-        spider_ddiff_min, spider_ddiff_max = st.slider("Days Since Prev Diff", int(original_data['DaysSincePrev_diff'].min()), int(original_data['DaysSincePrev_diff'].max()), (int(original_data['DaysSincePrev_diff'].min()), int(original_data['DaysSincePrev_diff'].max())), key="spider_days_diff") if 'DaysSincePrev_diff' in original_data.columns else (-1000,1000)
-        spider_avg3_min, spider_avg3_max = st.slider("Avg3DaysGap Diff", int(original_data['Avg3DaysGap_diff'].min()), int(original_data['Avg3DaysGap_diff'].max()), (int(original_data['Avg3DaysGap_diff'].min()), int(original_data['Avg3DaysGap_diff'].max())), key="spider_avg3_diff") if 'Avg3DaysGap_diff' in original_data.columns else (-1000,1000)
-
-    with st.expander("Odds", expanded=False):
-        spider_odds_min, spider_odds_max = st.slider("Fighter Odds", int(original_data['FighterOddsNum'].min()), int(original_data['FighterOddsNum'].max()), (int(original_data['FighterOddsNum'].min()), int(original_data['FighterOddsNum'].max())), step=10, key="spider_cur_odds") if 'FighterOddsNum' in original_data.columns else (-1000,1000)
-        spider_podds_min, spider_podds_max = st.slider("Prev Fighter Odds", int(original_data['PrevFighterOddsNum'].min()), int(original_data['PrevFighterOddsNum'].max()), (int(original_data['PrevFighterOddsNum'].min()), int(original_data['PrevFighterOddsNum'].max())), step=10, key="spider_prev_odds") if 'PrevFighterOddsNum' in original_data.columns else (-1000,1000)
-
-    with st.expander("Previous Outcomes", expanded=False):
-        spider_skip_nc = st.checkbox("Skip NC outcomes", key="spider_skip_nc")
-        if spider_skip_nc:
-            spider_prev1_col = 'Prev1_Outcome_skipNC'; spider_prev2_col = 'Prev2_Outcome_skipNC'; spider_prev3_col = 'Prev3_Outcome_skipNC'
-            spider_career1_col = 'Career1_Outcome_skipNC'; spider_career2_col = 'Career2_Outcome_skipNC'; spider_career3_col = 'Career3_Outcome_skipNC'
-        else:
-            spider_prev1_col = 'Prev1_Outcome_raw'; spider_prev2_col = 'Prev2_Outcome_raw'; spider_prev3_col = 'Prev3_Outcome_raw'
-            spider_career1_col = 'Career1_Outcome_raw'; spider_career2_col = 'Career2_Outcome_raw'; spider_career3_col = 'Career3_Outcome_raw'
-
-        spider_prev1 = st.multiselect("Prev Fight 1", all_outcomes_raw, key="spider_prev1")
-        spider_prev2 = st.multiselect("Prev Fight 2", all_outcomes_raw, key="spider_prev2")
-        spider_prev3 = st.multiselect("Prev Fight 3", all_outcomes_raw, key="spider_prev3")
-        spider_career1 = st.multiselect("Career F1", all_outcomes_career, key="spider_career1")
-        spider_career2 = st.multiselect("Career F2", all_outcomes_career, key="spider_career2")
-        spider_career3 = st.multiselect("Career F3", all_outcomes_career, key="spider_career3")
-
-        spider_opp_prev1 = st.multiselect("Opp Prev 1", all_outcomes_raw, key="spider_opp_prev1")
-        spider_opp_prev2 = st.multiselect("Opp Prev 2", all_outcomes_raw, key="spider_opp_prev2")
-        spider_opp_prev3 = st.multiselect("Opp Prev 3", all_outcomes_raw, key="spider_opp_prev3")
-
-        spider_opp_career1 = st.multiselect("Opp Career F1", all_outcomes_career, key="spider_opp_career1")
-        spider_opp_career2 = st.multiselect("Opp Career F2", all_outcomes_career, key="spider_opp_career2")
-        spider_opp_career3 = st.multiselect("Opp Career F3", all_outcomes_career, key="spider_opp_career3")
-
-    with st.expander("Other", expanded=False):
-        spider_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
-        spider_opp_prev_title = st.selectbox("Opp Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_opp_prev_title")
-        spider_new_wc = st.checkbox("New Weight Class", key="spider_new_wc") if 'IsNewWeightClass' in original_data.columns else False
-
-    with st.expander("Ratings", expanded=False):
-        spider_use_colley = st.checkbox("Filter ColleyDecayDiff", value=False, key="spider_use_colley")
-        if spider_use_colley:
-            min_cd, max_cd = get_diff_range(original_data, 'ColleyDecayDiff')
-            spider_colley_range = st.slider("ColleyDecayDiff range", min_cd, max_cd, (min_cd, max_cd), step=0.01, key="spider_colley")
-        spider_use_massey = st.checkbox("Filter MasseyFinishDecayDiff", value=False, key="spider_use_massey")
-        if spider_use_massey:
-            min_md, max_md = get_diff_range(original_data, 'MasseyFinishDecayDiff')
-            spider_massey_range = st.slider("MasseyFinishDecayDiff range", min_md, max_md, (min_md, max_md), step=0.01, key="spider_massey")
-        spider_use_wmd = st.checkbox("Filter WeightedMasseyDecayDiff", value=False, key="spider_use_wmd")
-        if spider_use_wmd:
-            min_wmd, max_wmd = get_diff_range(original_data, 'WeightedMasseyDecayDiff')
-            spider_wmd_range = st.slider("WeightedMasseyDecayDiff range", min_wmd, max_wmd, (min_wmd, max_wmd), step=0.01, key="spider_wmd")
-
-# Build spider mask
-spider_mask = pd.Series(True, index=original_data.index)
-if spider_wc: spider_mask &= original_data['WC'].isin(spider_wc)
-if spider_stance: spider_mask &= original_data['Stance'].isin(spider_stance)
-if spider_country: spider_mask &= original_data['Country'].isin(spider_country)
-if spider_sched_rounds: spider_mask &= original_data['ScheduledRounds'].isin(spider_sched_rounds)
-if spider_title_fight != "All": spider_mask &= original_data['Title'] == spider_title_fight
-if spider_hometown_fighter: spider_mask &= original_data['HometownFighter'].isin(spider_hometown_fighter)
-if spider_opp_hometown: spider_mask &= original_data['Opponent_Hometown'].isin(spider_opp_hometown)
-if spider_event_country: spider_mask &= original_data['EventCountry'].isin(spider_event_country)
-if spider_new_wc and 'IsNewWeightClass' in original_data.columns: spider_mask &= original_data['IsNewWeightClass'] == True
-if spider_prev_title != "All" and 'Prev1_Title' in original_data.columns:
-    spider_mask &= normalize_title_col(original_data['Prev1_Title']) == spider_prev_title.lower()
-if spider_opp_prev_title != "All" and 'Opponent_Prev1_Title' in original_data.columns:
-    spider_mask &= normalize_title_col(original_data['Opponent_Prev1_Title']) == spider_opp_prev_title.lower()
-
-def spider_add_filter(condition, col_name):
-    if condition is None: return None
-    if col_name in original_data.columns:
-        return condition | original_data[col_name].isna()
-    return condition
-
-if 'FightNumber' in original_data.columns:
-    spider_mask &= spider_add_filter((original_data['FightNumber'] >= spider_fn_min) & (original_data['FightNumber'] <= spider_fn_max), 'FightNumber')
-if 'Opponent_FightNumber' in original_data.columns:
-    spider_mask &= spider_add_filter((original_data['Opponent_FightNumber'] >= spider_ofn_min) & (original_data['Opponent_FightNumber'] <= spider_ofn_max), 'Opponent_FightNumber')
-if 'CareerWinPct_diff' in original_data.columns:
-    spider_mask &= spider_add_filter((original_data['CareerWinPct_diff'] >= spider_cwp_min) & (original_data['CareerWinPct_diff'] <= spider_cwp_max), 'CareerWinPct_diff')
-
-for col, (cmin, cmax) in [
-    ('Age', (spider_age_min, spider_age_max)),
-    ('AgeDiff', (spider_ad_min, spider_ad_max)),
-    ('HeightDiff', (spider_hd_min, spider_hd_max)),
-    ('ReachDiff', (spider_rd_min, spider_rd_max)),
-    ('DaysSincePrev', (spider_days_min, spider_days_max)),
-    ('DaysSincePrev_diff', (spider_ddiff_min, spider_ddiff_max)),
-    ('Avg3DaysGap_diff', (spider_avg3_min, spider_avg3_max)),
-    ('FighterOddsNum', (spider_odds_min, spider_odds_max)),
-    ('PrevFighterOddsNum', (spider_podds_min, spider_podds_max))
-]:
-    if col in original_data.columns:
-        spider_mask &= spider_add_filter((original_data[col] >= cmin) & (original_data[col] <= cmax), col)
-
-for col, val in [(spider_prev1_col, spider_prev1), (spider_prev2_col, spider_prev2), (spider_prev3_col, spider_prev3),
-                 (spider_career1_col, spider_career1), (spider_career2_col, spider_career2), (spider_career3_col, spider_career3)]:
-    if val and col in original_data.columns:
-        spider_mask &= original_data[col].isin(val)
-
-for shift, wlist in [(1, spider_opp_prev1), (2, spider_opp_prev2), (3, spider_opp_prev3)]:
-    col = f'Opponent_Prev{shift}_Outcome_raw'
-    if wlist and col in original_data.columns:
-        if spider_skip_nc:
-            col_use = f'Opponent_Prev{shift}_Outcome_skipNC'
-            if col_use in original_data.columns:
-                spider_mask &= original_data[col_use].isin(wlist)
-        else:
-            spider_mask &= original_data[col].isin(wlist)
-
-for col, val in [('Opponent_Career1_Outcome_raw', spider_opp_career1),
-                 ('Opponent_Career2_Outcome_raw', spider_opp_career2),
-                 ('Opponent_Career3_Outcome_raw', spider_opp_career3)]:
-    if val and col in original_data.columns:
-        spider_mask &= original_data[col].isin(val)
-
-if spider_use_colley and 'ColleyDecayDiff' in original_data.columns:
-    spider_mask &= spider_add_filter((original_data['ColleyDecayDiff'] >= spider_colley_range[0]) & (original_data['ColleyDecayDiff'] <= spider_colley_range[1]), 'ColleyDecayDiff')
-if spider_use_massey and 'MasseyFinishDecayDiff' in original_data.columns:
-    spider_mask &= spider_add_filter((original_data['MasseyFinishDecayDiff'] >= spider_massey_range[0]) & (original_data['MasseyFinishDecayDiff'] <= spider_massey_range[1]), 'MasseyFinishDecayDiff')
-if spider_use_wmd and 'WeightedMasseyDecayDiff' in original_data.columns:
-    spider_mask &= spider_add_filter((original_data['WeightedMasseyDecayDiff'] >= spider_wmd_range[0]) & (original_data['WeightedMasseyDecayDiff'] <= spider_wmd_range[1]), 'WeightedMasseyDecayDiff')
-
-spider_filtered = original_data[spider_mask].copy()
-spider_fight_ids = spider_filtered['FightID'].unique()
-spider_data = original_data[original_data['FightID'].isin(spider_fight_ids)]
+spider_data_full = original_data.copy()
+spider_data = build_independent_filter(spider_data_full, "spider")
 
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
 spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
@@ -567,10 +340,7 @@ else:
     if spider_upcoming.empty:
         st.warning("No upcoming fight has both fighters after similarity filters.")
     else:
-        # Exclude only the absolute rating columns (keep diffs and everything else)
-        rating_abs_to_exclude = [c for c in rating_raw_cols if not c.endswith('Diff')] + \
-                                [c for c in rating_avg7_cols if not c.endswith('_diff')]
-        sim_features = [c for c in numeric_features if c in spider_data.columns and c not in rating_abs_to_exclude]
+        sim_features = [c for c in numeric_features if c in spider_data.columns and c not in abs_rating_cols]
         if not sim_features:
             st.warning("No numeric features for similarity.")
         else:
@@ -613,7 +383,7 @@ else:
                         col1.metric("Count (Top N)", count); col2.metric("Avg Similarity", f"{avg_sim:.1f}%")
                         col3.metric("Total Similarity", f"{total_sim:.1f}"); col4.metric("Composite Score", f"{composite:.1f}")
 
-                        # 90% similarity metrics
+                        # 90% similarity
                         high_sim_90 = top_n[top_n['Similarity'] >= 90]
                         if len(high_sim_90) > 0:
                             wins_90 = (high_sim_90['Win?'] == 'Yes').sum()
@@ -626,7 +396,7 @@ else:
                         else:
                             st.write("No historical fights with similarity ≥ 90% in the top selection.")
 
-                        # 80% similarity metrics
+                        # 80% similarity
                         high_sim_80 = top_n[top_n['Similarity'] >= 80]
                         if len(high_sim_80) > 0:
                             wins_80 = (high_sim_80['Win?'] == 'Yes').sum()
@@ -646,64 +416,199 @@ else:
                         st.dataframe(top_n, use_container_width=True)
 
 # -----------------------------------------------
-# FEATURE IMPORTANCE (BOTTOM)
+# CORRELATION MATRIX (using spider variables)
 # -----------------------------------------------
-st.header("Top 20 Feature Importance & Global Model Ranking")
-hist_imp = filtered[filtered['Win?'].isin(['Yes','No'])].copy()
-if len(hist_imp) < 10:
-    st.warning("Too few historical fights after filtering to compute importance.")
+st.header("Correlation Matrix (Spider Variables)")
+if 'sim_features' in locals() and sim_features:
+    corr_data = spider_data[sim_features].dropna()
+    if len(corr_data) > 1:
+        corr = corr_data.corr()
+        fig_corr = px.imshow(corr, text_auto='.2f', aspect='auto', title="Correlation of Spider Features")
+        st.plotly_chart(fig_corr, use_container_width=True)
+    else:
+        st.warning("Not enough data for correlation matrix.")
 else:
-    hist_imp['Target'] = (hist_imp['Win?'] == 'Yes').astype(int)
-    feats = [c for c in numeric_features if c in hist_imp.columns]
+    st.info("Select variables in the spider chart to compute correlation.")
+
+# -----------------------------------------------
+# DECISION TREE (independent filters)
+# -----------------------------------------------
+st.header("Decision Tree Model (with adjustable depth/leaf)")
+tree_data = build_independent_filter(original_data.copy(), "tree")
+
+# Only historical fights
+tree_hist = tree_data[tree_data['Win?'].isin(['Yes','No'])].copy()
+if len(tree_hist) < 10:
+    st.warning("Not enough historical fights for decision tree.")
+else:
+    tree_hist['Target'] = (tree_hist['Win?'] == 'Yes').astype(int)
+
+    # Feature selection (same variables as spider, excluding absolute ratings)
+    tree_features = [c for c in numeric_features if c in tree_hist.columns and c not in abs_rating_cols]
+    if not tree_features:
+        st.warning("No features available for decision tree.")
+    else:
+        X = tree_hist[tree_features].fillna(tree_hist[tree_features].median())
+        y = tree_hist['Target']
+
+        col1, col2 = st.columns(2)
+        with col1:
+            max_depth = st.slider("Max Depth", 1, 10, 3, key="tree_depth")
+        with col2:
+            min_samples_leaf = st.slider("Min Samples Leaf", 1, 100, 5, key="tree_leaf")
+
+        if st.button("Train Decision Tree", key="train_tree"):
+            with st.spinner("Training..."):
+                dt = DecisionTreeClassifier(max_depth=max_depth, min_samples_leaf=min_samples_leaf, random_state=42)
+                dt.fit(X, y)
+
+                # Visualisation
+                if HAS_DTREEVIZ:
+                    viz = dtreeviz.model(
+                        dt, X, y,
+                        target_name='Win',
+                        feature_names=tree_features,
+                        class_names=['Loss', 'Win']
+                    )
+                    # Save to SVG and display
+                    svg = viz.view().save("tree.svg")
+                    st.image("tree.svg", use_column_width=True)
+                else:
+                    st.warning("dtreeviz not installed. Showing text tree instead.")
+                    from sklearn.tree import export_text
+                    tree_text = export_text(dt, feature_names=tree_features)
+                    st.text(tree_text)
+
+                # Win % for each leaf (simple text)
+                st.subheader("Leaf Win Percentages")
+                leaf_ids = dt.apply(X)
+                for leaf_id in np.unique(leaf_ids):
+                    mask_leaf = leaf_ids == leaf_id
+                    win_rate_leaf = y[mask_leaf].mean() * 100
+                    st.write(f"Leaf {leaf_id}: {mask_leaf.sum()} samples, Win rate = {win_rate_leaf:.1f}%")
+
+# -----------------------------------------------
+# LIGHTGBM (independent filters)
+# -----------------------------------------------
+st.header("LightGBM Model (with Brier score and probability)")
+lgbm_data = build_independent_filter(original_data.copy(), "lgbm")
+
+lgbm_hist = lgbm_data[lgbm_data['Win?'].isin(['Yes','No'])].copy()
+if len(lgbm_hist) < 10:
+    st.warning("Not enough historical fights for LightGBM.")
+else:
+    lgbm_hist['Target'] = (lgbm_hist['Win?'] == 'Yes').astype(int)
+
+    lgbm_features = [c for c in numeric_features if c in lgbm_hist.columns and c not in abs_rating_cols]
+    if not lgbm_features:
+        st.warning("No features available for LightGBM.")
+    else:
+        X_lgbm = lgbm_hist[lgbm_features].fillna(lgbm_hist[lgbm_features].median())
+        y_lgbm = lgbm_hist['Target']
+
+        if st.button("Train LightGBM (CV Brier)", key="train_lgbm"):
+            with st.spinner("Training LightGBM with 5‑fold CV..."):
+                model = lgb.LGBMClassifier(random_state=42, verbose=-1)
+                y_prob = cross_val_predict(model, X_lgbm, y_lgbm, cv=5, method='predict_proba')[:, 1]
+                bs = brier_score_loss(y_lgbm, y_prob)
+                st.metric("Cross‑Validated Brier Score", f"{bs:.4f}")
+
+                # Fit on full data for prediction
+                final_model = lgb.LGBMClassifier(random_state=42, verbose=-1)
+                final_model.fit(X_lgbm, y_lgbm)
+
+                # Win probability for selected fight (if any)
+                if st.session_state.get("selected_fight_row") is not None:
+                    f1_row = st.session_state.selected_fight_row
+                    if f1_row['FightID'] in lgbm_data['FightID'].values:
+                        vals = []
+                        for c in lgbm_features:
+                            val = f1_row.get(c, np.nan)
+                            if pd.isna(val):
+                                val = lgbm_hist[c].median()
+                            vals.append(val)
+                        try:
+                            prob = final_model.predict_proba(np.array([vals]))[0, 1]
+                            st.write(f"LightGBM win probability for **{f1_row['Fighter']}**: {prob:.1%}")
+                        except Exception as e:
+                            st.error(f"Prediction error: {e}")
+                    else:
+                        st.info("Selected fight not in the filtered dataset.")
+
+                # Permutation importance
+                st.subheader("Permutation Importance (LightGBM)")
+                with st.spinner("Computing permutation importance..."):
+                    perm_imp = permutation_importance(final_model, X_lgbm, y_lgbm, n_repeats=5, random_state=42, scoring='neg_brier_score')
+                    perm_df = pd.DataFrame({
+                        'Feature': lgbm_features,
+                        'Importance': perm_imp.importances_mean,
+                        'Std': perm_imp.importances_std
+                    }).sort_values('Importance', ascending=False).head(20)
+                    fig_perm = px.bar(perm_df, x='Importance', y='Feature', orientation='h',
+                                      error_x='Std', title="LightGBM Permutation Importance")
+                    st.plotly_chart(fig_perm, use_container_width=True)
+
+# -----------------------------------------------
+# FEATURE IMPORTANCE (bottom, full data, no absolute ratings)
+# -----------------------------------------------
+st.header("Top 20 Feature Importance (Full Data, No Absolute Ratings)")
+hist_imp_full = data[data['Win?'].isin(['Yes','No'])].copy()
+if len(hist_imp_full) < 10:
+    st.warning("Too few historical fights to compute importance.")
+else:
+    hist_imp_full['Target'] = (hist_imp_full['Win?'] == 'Yes').astype(int)
+    feats = [c for c in numeric_features if c in hist_imp_full.columns and c not in abs_rating_cols]
     if feats:
-        X_mi = hist_imp[feats].dropna()
+        X_mi = hist_imp_full[feats].dropna()
         if len(X_mi) >= 10:
             imputer = SimpleImputer(strategy='median')
             X_imp = imputer.fit_transform(X_mi)
-            y_mi = hist_imp.loc[X_mi.index, 'Target']
+            y_mi = hist_imp_full.loc[X_mi.index, 'Target']
             mi = mutual_info_classif(X_imp, y_mi, discrete_features=False, random_state=42)
             mi_df = pd.DataFrame({'Feature': feats, 'MI': mi}).sort_values('MI', ascending=False).head(20)
             fig_mi = px.bar(mi_df, x='MI', y='Feature', orientation='h',
                             title="Top 20 Mutual Information")
             st.plotly_chart(fig_mi, use_container_width=True, key="mi_plot")
+
+            if st.button("Compute Lasso Importance (all features)"):
+                with st.spinner("Fitting LassoCV..."):
+                    X_lasso = hist_imp_full[feats].copy()
+                    y_lasso = hist_imp_full['Target']
+                    imp = SimpleImputer(strategy='median')
+                    X_lasso_imp = imp.fit_transform(X_lasso)
+                    scaler_lasso = StandardScaler()
+                    X_lasso_scaled = scaler_lasso.fit_transform(X_lasso_imp)
+                    lasso = LogisticRegressionCV(
+                        penalty='l1', solver='saga', cv=5,
+                        scoring='neg_brier_score', max_iter=2000,
+                        Cs=10, n_jobs=-1, random_state=42
+                    )
+                    lasso.fit(X_lasso_scaled, y_lasso)
+                    coef = lasso.coef_.flatten()
+                    coef_df = pd.DataFrame({'Feature': feats, 'Coefficient': coef})
+                    coef_df = coef_df[coef_df['Coefficient'] != 0].sort_values('Coefficient', key=abs, ascending=False)
+                    st.subheader("Lasso Non‑Zero Coefficients")
+                    if len(coef_df) > 0:
+                        fig_lasso = px.bar(coef_df.head(30), x='Coefficient', y='Feature', orientation='h',
+                                           title="Lasso Coefficients")
+                        st.plotly_chart(fig_lasso, use_container_width=True, key="lasso_plot")
+                    else:
+                        st.write("Lasso eliminated all features.")
+
+            if st.button("Compute Random Forest Importance (all features)"):
+                with st.spinner("Training Random Forest..."):
+                    X_rf = hist_imp_full[feats].copy()
+                    y_rf = hist_imp_full['Target']
+                    imp = SimpleImputer(strategy='median')
+                    X_rf_imp = imp.fit_transform(X_rf)
+                    rf = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
+                    rf.fit(X_rf_imp, y_rf)
+                    rf_imp = pd.DataFrame({'Feature': feats, 'Importance': rf.feature_importances_}).sort_values('Importance', ascending=False).head(30)
+                    st.subheader("Random Forest Feature Importance (Gini)")
+                    fig_rf = px.bar(rf_imp, x='Importance', y='Feature', orientation='h',
+                                    title="Random Forest Feature Importance")
+                    st.plotly_chart(fig_rf, use_container_width=True, key="rf_plot")
         else:
             st.warning("Not enough complete rows for MI.")
-
-        if st.button("Compute Lasso Importance (all features)"):
-            with st.spinner("Fitting LassoCV..."):
-                X_lasso = hist_imp[feats].copy(); y_lasso = hist_imp['Target']
-                imp = SimpleImputer(strategy='median')
-                X_lasso_imp = imp.fit_transform(X_lasso)
-                scaler_lasso = StandardScaler()
-                X_lasso_scaled = scaler_lasso.fit_transform(X_lasso_imp)
-                lasso = LogisticRegressionCV(
-                    penalty='l1', solver='saga', cv=5,
-                    scoring='neg_brier_score', max_iter=2000,
-                    Cs=10, n_jobs=-1, random_state=42
-                )
-                lasso.fit(X_lasso_scaled, y_lasso)
-                coef = lasso.coef_.flatten()
-                coef_df = pd.DataFrame({'Feature': feats, 'Coefficient': coef})
-                coef_df = coef_df[coef_df['Coefficient'] != 0].sort_values('Coefficient', key=abs, ascending=False)
-                st.subheader("Lasso Non‑Zero Coefficients")
-                if len(coef_df) > 0:
-                    fig_lasso = px.bar(coef_df.head(30), x='Coefficient', y='Feature', orientation='h',
-                                       title="Lasso Coefficients")
-                    st.plotly_chart(fig_lasso, use_container_width=True, key="lasso_plot")
-                else:
-                    st.write("Lasso eliminated all features.")
-
-        if st.button("Compute Random Forest Importance (all features)"):
-            with st.spinner("Training Random Forest..."):
-                X_rf = hist_imp[feats].copy(); y_rf = hist_imp['Target']
-                imp = SimpleImputer(strategy='median')
-                X_rf_imp = imp.fit_transform(X_rf)
-                rf = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
-                rf.fit(X_rf_imp, y_rf)
-                rf_imp = pd.DataFrame({'Feature': feats, 'Importance': rf.feature_importances_}).sort_values('Importance', ascending=False).head(30)
-                st.subheader("Random Forest Feature Importance (Gini)")
-                fig_rf = px.bar(rf_imp, x='Importance', y='Feature', orientation='h',
-                                title="Random Forest Feature Importance")
-                st.plotly_chart(fig_rf, use_container_width=True, key="rf_plot")
     else:
-        st.warning("No numeric features.")
+        st.warning("No numeric features (excluding absolute ratings).")
