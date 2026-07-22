@@ -3,9 +3,10 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import matplotlib.pyplot as plt
 import gdown
 from sklearn.linear_model import LogisticRegressionCV
-from sklearn.tree import DecisionTreeClassifier, export_text
+from sklearn.tree import DecisionTreeClassifier, plot_tree
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.feature_selection import mutual_info_classif
@@ -172,7 +173,7 @@ else:
     st.info("No upcoming fights available.")
 
 # -----------------------------------------------
-# INDEPENDENT FILTER HELPER (with nested expanders & Win/Loss options)
+# INDEPENDENT FILTER HELPER (same as before)
 # -----------------------------------------------
 def build_independent_filter(df, key_prefix):
     with st.expander(f"{key_prefix} Filters", expanded=True):
@@ -361,7 +362,7 @@ def build_independent_filter(df, key_prefix):
     return df[mask].copy()
 
 # -----------------------------------------------
-# SPIDER CHART (independent filters)
+# SPIDER CHART (unchanged)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
@@ -453,7 +454,7 @@ else:
                         st.dataframe(top_n, use_container_width=True)
 
 # -----------------------------------------------
-# DECISION TREE (independent filters) – always text tree
+# DECISION TREE (graphical, using sklearn plot_tree)
 # -----------------------------------------------
 st.header("Decision Tree Model (with adjustable depth/leaf)")
 tree_data = build_independent_filter(original_data.copy(), "tree")
@@ -482,9 +483,11 @@ else:
                 dt = DecisionTreeClassifier(max_depth=max_depth, min_samples_leaf=min_samples_leaf, random_state=42)
                 dt.fit(X, y)
 
-                # Always use text tree (no external dependencies)
-                tree_text = export_text(dt, feature_names=tree_features)
-                st.text(tree_text)
+                # Graphical tree using matplotlib
+                fig, ax = plt.subplots(figsize=(20, 10))
+                plot_tree(dt, feature_names=tree_features, class_names=['Loss', 'Win'],
+                          filled=True, rounded=True, fontsize=10, ax=ax)
+                st.pyplot(fig)
 
                 # Leaf win percentages
                 st.subheader("Leaf Win Percentages")
@@ -495,7 +498,7 @@ else:
                     st.write(f"Leaf {leaf_id}: {mask_leaf.sum()} samples, Win rate = {win_rate_leaf:.1f}%")
 
 # -----------------------------------------------
-# FEATURE IMPORTANCE (bottom, full data, no absolute ratings)
+# FEATURE IMPORTANCE (bottom, unchanged)
 # -----------------------------------------------
 st.header("Top 20 Feature Importance (Full Data, No Absolute Ratings)")
 hist_imp_full = data[data['Win?'].isin(['Yes','No'])].copy()
