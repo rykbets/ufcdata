@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+import numpy as npimport streamlit as st
+import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
@@ -193,6 +195,11 @@ else:
 # INDEPENDENT FILTER HELPER
 # -----------------------------------------------
 def build_independent_filter(df, key_prefix):
+    """
+    Returns a filtered copy of df. Outcome filters are applied as an OR
+    across the two rows of a fight: a fight is kept if ANY row matches.
+    Non‑outcome filters remain strict AND per row.
+    """
     with st.expander(f"{key_prefix} Filters", expanded=True):
         # --- General ---
         with st.expander("General", expanded=True):
@@ -287,7 +294,11 @@ def build_independent_filter(df, key_prefix):
             new_wc = st.checkbox("New Weight Class", key=f"{key_prefix}_new_wc") if 'IsNewWeightClass' in df.columns else False
 
     # ===== BUILD MASK =====
-    mask = pd.Series(True, index=df.index)
+    # We'll first collect all non‑outcome conditions into mask_non_outcome.
+    # Outcome conditions are collected separately and then applied per fight as an OR.
+    mask_non_outcome = pd.Series(True, index=df.index)
+    outcome_mask_per_row = pd.Series(False, index=df.index)  # will accumulate OR across outcome filters
+    outcome_active = False
 
     def add_filter(condition, col_name=None):
         if condition is None:
@@ -296,27 +307,28 @@ def build_independent_filter(df, key_prefix):
             return condition | df[col_name].isna()
         return condition
 
-    if wc: mask &= df['WC'].isin(wc)
-    if stance: mask &= df['Stance'].isin(stance)
-    if country: mask &= df['Country'].isin(country)
-    if sched_rounds: mask &= df['ScheduledRounds'].isin(sched_rounds)
-    if title_fight != "All": mask &= df['Title'] == title_fight
-    if hometown_fighter: mask &= df['HometownFighter'].isin(hometown_fighter)
-    if opp_hometown: mask &= df['Opponent_Hometown'].isin(opp_hometown)
-    if event_country: mask &= df['EventCountry'].isin(event_country)
-    if new_wc and 'IsNewWeightClass' in df.columns: mask &= df['IsNewWeightClass'] == True
+    # ---- Apply non‑outcome filters ----
+    if wc: mask_non_outcome &= df['WC'].isin(wc)
+    if stance: mask_non_outcome &= df['Stance'].isin(stance)
+    if country: mask_non_outcome &= df['Country'].isin(country)
+    if sched_rounds: mask_non_outcome &= df['ScheduledRounds'].isin(sched_rounds)
+    if title_fight != "All": mask_non_outcome &= df['Title'] == title_fight
+    if hometown_fighter: mask_non_outcome &= df['HometownFighter'].isin(hometown_fighter)
+    if opp_hometown: mask_non_outcome &= df['Opponent_Hometown'].isin(opp_hometown)
+    if event_country: mask_non_outcome &= df['EventCountry'].isin(event_country)
+    if new_wc and 'IsNewWeightClass' in df.columns: mask_non_outcome &= df['IsNewWeightClass'] == True
     if prev_title != "All" and 'Prev1_Title' in df.columns:
-        mask &= add_filter(df['Prev1_Title'].str.strip().str.lower() == prev_title.lower(), 'Prev1_Title')
+        mask_non_outcome &= add_filter(df['Prev1_Title'].str.strip().str.lower() == prev_title.lower(), 'Prev1_Title')
     if opp_prev_title != "All" and 'Opponent_Prev1_Title' in df.columns:
-        mask &= add_filter(df['Opponent_Prev1_Title'].str.strip().str.lower() == opp_prev_title.lower(), 'Opponent_Prev1_Title')
+        mask_non_outcome &= add_filter(df['Opponent_Prev1_Title'].str.strip().str.lower() == opp_prev_title.lower(), 'Opponent_Prev1_Title')
 
-    # Numeric filters
+    # Numeric filters (non‑outcome)
     if 'FightNumber' in df.columns:
-        mask &= add_filter((df['FightNumber'] >= fn_min) & (df['FightNumber'] <= fn_max), 'FightNumber')
+        mask_non_outcome &= add_filter((df['FightNumber'] >= fn_min) & (df['FightNumber'] <= fn_max), 'FightNumber')
     if 'Opponent_FightNumber' in df.columns:
-        mask &= add_filter((df['Opponent_FightNumber'] >= ofn_min) & (df['Opponent_FightNumber'] <= ofn_max), 'Opponent_FightNumber')
+        mask_non_outcome &= add_filter((df['Opponent_FightNumber'] >= ofn_min) & (df['Opponent_FightNumber'] <= ofn_max), 'Opponent_FightNumber')
     if 'CareerWinPct_diff' in df.columns:
-        mask &= add_filter((df['CareerWinPct_diff'] >= cwp_min) & (df['CareerWinPct_diff'] <= cwp_max), 'CareerWinPct_diff')
+        mask_non_outcome &= add_filter((df['CareerWinPct_diff'] >= cwp_min) & (df['CareerWinPct_diff'] <= cwp_max), 'CareerWinPct_diff')
 
     for col, (cmin, cmax) in [
         ('Age', (age_min, age_max)), ('AgeDiff', (ad_min, ad_max)),
@@ -328,9 +340,17 @@ def build_independent_filter(df, key_prefix):
         ('PrevFighterOddsNum', (podds_min, podds_max))
     ]:
         if col in df.columns:
-            mask &= add_filter((df[col] >= cmin) & (df[col] <= cmax), col)
+            mask_non_outcome &= add_filter((df[col] >= cmin) & (df[col] <= cmax), col)
 
-    # Outcome filter helper – always keep NaN rows
+    # Ratings filters (non‑outcome)
+    if use_colley and 'ColleyDecayDiff' in df.columns:
+        mask_non_outcome &= add_filter((df['ColleyDecayDiff'] >= colley_range[0]) & (df['ColleyDecayDiff'] <= colley_range[1]), 'ColleyDecayDiff')
+    if use_massey and 'MasseyFinishDecayDiff' in df.columns:
+        mask_non_outcome &= add_filter((df['MasseyFinishDecayDiff'] >= massey_range[0]) & (df['MasseyFinishDecayDiff'] <= massey_range[1]), 'MasseyFinishDecayDiff')
+    if use_wmd and 'WeightedMasseyDecayDiff' in df.columns:
+        mask_non_outcome &= add_filter((df['WeightedMasseyDecayDiff'] >= wmd_range[0]) & (df['WeightedMasseyDecayDiff'] <= wmd_range[1]), 'WeightedMasseyDecayDiff')
+
+    # ---- Outcome filter helper (returns condition that keeps NaN as valid) ----
     def apply_outcome_filter(col, selected):
         if not selected or col not in df.columns:
             return None
@@ -342,15 +362,18 @@ def build_independent_filter(df, key_prefix):
         exact = [s for s in selected if s not in ("Win (any)", "Loss (any)")]
         if exact:
             cond |= df[col].isin(exact)
-        return cond | df[col].isna()
+        # Do NOT include NaN as valid here – we want to strictly test the outcome.
+        # Missing outcomes (NaN) will not satisfy the condition, which is correct.
+        return cond
 
-    # Fighter outcomes
+    # Accumulate outcome filters per row (any selection will activate outcome logic)
     for col, val in [(prev1_col, prev1), (prev2_col, prev2), (prev3_col, prev3),
                      (career1_col, career1), (career2_col, career2), (career3_col, career3)]:
         if val:
             c = apply_outcome_filter(col, val)
             if c is not None:
-                mask &= c
+                outcome_mask_per_row |= c
+                outcome_active = True
 
     # Opponent previous outcomes
     for shift, wlist in [(1, opp_prev1), (2, opp_prev2), (3, opp_prev3)]:
@@ -360,26 +383,33 @@ def build_independent_filter(df, key_prefix):
                 col_use = f'Opponent_Prev{shift}_Outcome_skipNC'
                 if col_use in df.columns:
                     c = apply_outcome_filter(col_use, wlist)
-                    if c is not None: mask &= c
+                    if c is not None:
+                        outcome_mask_per_row |= c
+                        outcome_active = True
             else:
                 c = apply_outcome_filter(col, wlist)
-                if c is not None: mask &= c
+                if c is not None:
+                    outcome_mask_per_row |= c
+                    outcome_active = True
 
     # Opponent career outcomes
     for col, val in [(opp_career1_col, opp_career1), (opp_career2_col, opp_career2), (opp_career3_col, opp_career3)]:
         if val and col in df.columns:
             c = apply_outcome_filter(col, val)
-            if c is not None: mask &= c
+            if c is not None:
+                outcome_mask_per_row |= c
+                outcome_active = True
 
-    # Ratings
-    if use_colley and 'ColleyDecayDiff' in df.columns:
-        mask &= add_filter((df['ColleyDecayDiff'] >= colley_range[0]) & (df['ColleyDecayDiff'] <= colley_range[1]), 'ColleyDecayDiff')
-    if use_massey and 'MasseyFinishDecayDiff' in df.columns:
-        mask &= add_filter((df['MasseyFinishDecayDiff'] >= massey_range[0]) & (df['MasseyFinishDecayDiff'] <= massey_range[1]), 'MasseyFinishDecayDiff')
-    if use_wmd and 'WeightedMasseyDecayDiff' in df.columns:
-        mask &= add_filter((df['WeightedMasseyDecayDiff'] >= wmd_range[0]) & (df['WeightedMasseyDecayDiff'] <= wmd_range[1]), 'WeightedMasseyDecayDiff')
+    # ---- Combine masks ----
+    if outcome_active:
+        # For each FightID, keep rows if at least one row satisfies the outcome condition.
+        # Also must satisfy the non‑outcome mask.
+        fight_outcome_ok = outcome_mask_per_row.groupby(df['FightID']).transform('any')
+        final_mask = mask_non_outcome & fight_outcome_ok
+    else:
+        final_mask = mask_non_outcome
 
-    return df[mask].copy()
+    return df[final_mask].copy()
 
 # -----------------------------------------------
 # SPIDER CHART (Similarity)
