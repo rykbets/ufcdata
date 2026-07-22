@@ -153,27 +153,41 @@ if not upcoming_display.empty:
             df_stats = pd.DataFrame(rows)
             st.dataframe(df_stats, use_container_width=True, hide_index=True)
 
+            # Top 5 Differentials – table format side by side
             st.subheader("Top 5 Differentials")
-            for fighter, row in [(f1['Fighter'], f1), (f2['Fighter'], f2)]:
-                diffs = {}
-                for c in row.index:
-                    if (c.endswith('_opp_diff') or (c.startswith('adj_') and c.endswith('_diff'))):
-                        val = row[c]
-                        if pd.notna(val): diffs[c] = val
-                top5 = sorted(diffs.items(), key=lambda x: x[1], reverse=True)[:5]
-                if top5:
-                    st.write(f"**{fighter}**")
-                    for col, val in top5:
-                        st.write(f"{col}: {val:+.2f}" if isinstance(val, float) else f"{col}: {val}")
+            diffs_f1 = {}
+            diffs_f2 = {}
+            for c in f1.index:
+                if (c.endswith('_opp_diff') or (c.startswith('adj_') and c.endswith('_diff'))):
+                    if pd.notna(f1[c]): diffs_f1[c] = f1[c]
+                    if pd.notna(f2[c]): diffs_f2[c] = f2[c]
+            top5_f1 = sorted(diffs_f1.items(), key=lambda x: x[1], reverse=True)[:5]
+            top5_f2 = sorted(diffs_f2.items(), key=lambda x: x[1], reverse=True)[:5]
+
+            colA, colB = st.columns(2)
+            with colA:
+                st.write(f"**{f1['Fighter']}**")
+                if top5_f1:
+                    df_f1 = pd.DataFrame(top5_f1, columns=["Stat", "Value"])
+                    df_f1["Value"] = df_f1["Value"].apply(lambda x: f"{x:+.2f}")
+                    st.dataframe(df_f1, hide_index=True, use_container_width=True)
                 else:
-                    st.write(f"**{fighter}**: No eligible differentials available.")
+                    st.write("No differentials available.")
+            with colB:
+                st.write(f"**{f2['Fighter']}**")
+                if top5_f2:
+                    df_f2 = pd.DataFrame(top5_f2, columns=["Stat", "Value"])
+                    df_f2["Value"] = df_f2["Value"].apply(lambda x: f"{x:+.2f}")
+                    st.dataframe(df_f2, hide_index=True, use_container_width=True)
+                else:
+                    st.write("No differentials available.")
         else:
             st.warning("Fight data incomplete (expected 2 rows).")
 else:
     st.info("No upcoming fights available.")
 
 # -----------------------------------------------
-# INDEPENDENT FILTER HELPER (FULLY FIXED)
+# INDEPENDENT FILTER HELPER (same as before)
 # -----------------------------------------------
 def build_independent_filter(df, key_prefix):
     with st.expander(f"{key_prefix} Filters", expanded=True):
@@ -348,7 +362,7 @@ def build_independent_filter(df, key_prefix):
                 c = apply_outcome_filter(col, wlist)
                 if c is not None: mask &= c
 
-    # Opponent career outcomes (using the col variables defined by skip_nc)
+    # Opponent career outcomes
     for col, val in [(opp_career1_col, opp_career1), (opp_career2_col, opp_career2), (opp_career3_col, opp_career3)]:
         if val and col in df.columns:
             c = apply_outcome_filter(col, val)
@@ -365,7 +379,7 @@ def build_independent_filter(df, key_prefix):
     return df[mask].copy()
 
 # -----------------------------------------------
-# SPIDER CHART (identical code, no changes)
+# SPIDER CHART (with one‑row win‑rate metrics)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
@@ -422,33 +436,35 @@ else:
                         top_n = sim_df.head(n_top)
                         count = len(top_n); avg_sim = top_n['Similarity'].mean(); total_sim = top_n['Similarity'].sum()
                         composite = avg_sim * (count ** 0.5) / 100
+
+                        # Row 1: Count, Avg Sim, Total Sim, Composite
                         col1, col2, col3, col4 = st.columns(4)
-                        col1.metric("Count (Top N)", count); col2.metric("Avg Similarity", f"{avg_sim:.1f}%")
-                        col3.metric("Total Similarity", f"{total_sim:.1f}"); col4.metric("Composite Score", f"{composite:.1f}")
+                        col1.metric("Count (Top N)", count)
+                        col2.metric("Avg Similarity", f"{avg_sim:.1f}%")
+                        col3.metric("Total Similarity", f"{total_sim:.1f}")
+                        col4.metric("Composite Score", f"{composite:.1f}")
 
+                        # Row 2: Win rates
                         high_sim_90 = top_n[top_n['Similarity'] >= 90]
-                        if len(high_sim_90) > 0:
-                            wins_90 = (high_sim_90['Win?'] == 'Yes').sum()
-                            win_rate_90 = wins_90 / len(high_sim_90) * 100
-                            weight_sum_wins = high_sim_90.loc[high_sim_90['Win?'] == 'Yes', 'Similarity'].sum()
-                            weight_sum_all = high_sim_90['Similarity'].sum()
-                            weighted_wr_90 = (weight_sum_wins / weight_sum_all) * 100 if weight_sum_all > 0 else 0.0
-                            st.metric("Win Rate (≥90% sim)", f"{win_rate_90:.1f}%", delta=f"{len(high_sim_90)} fights")
-                            st.metric("Weighted Win Rate (≥90% sim)", f"{weighted_wr_90:.1f}%")
-                        else:
-                            st.write("No historical fights with similarity ≥ 90% in the top selection.")
-
                         high_sim_80 = top_n[top_n['Similarity'] >= 80]
-                        if len(high_sim_80) > 0:
-                            wins_80 = (high_sim_80['Win?'] == 'Yes').sum()
-                            win_rate_80 = wins_80 / len(high_sim_80) * 100
-                            weight_sum_wins_80 = high_sim_80.loc[high_sim_80['Win?'] == 'Yes', 'Similarity'].sum()
-                            weight_sum_all_80 = high_sim_80['Similarity'].sum()
-                            weighted_wr_80 = (weight_sum_wins_80 / weight_sum_all_80) * 100 if weight_sum_all_80 > 0 else 0.0
-                            st.metric("Win Rate (≥80% sim)", f"{win_rate_80:.1f}%", delta=f"{len(high_sim_80)} fights")
-                            st.metric("Weighted Win Rate (≥80% sim)", f"{weighted_wr_80:.1f}%")
-                        else:
-                            st.write("No historical fights with similarity ≥ 80% in the top selection.")
+
+                        wins_90 = (high_sim_90['Win?'] == 'Yes').sum() if len(high_sim_90) > 0 else 0
+                        win_rate_90 = wins_90 / len(high_sim_90) * 100 if len(high_sim_90) > 0 else 0.0
+                        weight_sum_wins_90 = high_sim_90.loc[high_sim_90['Win?'] == 'Yes', 'Similarity'].sum() if wins_90 > 0 else 0.0
+                        weight_sum_all_90 = high_sim_90['Similarity'].sum() if len(high_sim_90) > 0 else 1
+                        weighted_wr_90 = (weight_sum_wins_90 / weight_sum_all_90) * 100 if weight_sum_all_90 > 0 else 0.0
+
+                        wins_80 = (high_sim_80['Win?'] == 'Yes').sum() if len(high_sim_80) > 0 else 0
+                        win_rate_80 = wins_80 / len(high_sim_80) * 100 if len(high_sim_80) > 0 else 0.0
+                        weight_sum_wins_80 = high_sim_80.loc[high_sim_80['Win?'] == 'Yes', 'Similarity'].sum() if wins_80 > 0 else 0.0
+                        weight_sum_all_80 = high_sim_80['Similarity'].sum() if len(high_sim_80) > 0 else 1
+                        weighted_wr_80 = (weight_sum_wins_80 / weight_sum_all_80) * 100 if weight_sum_all_80 > 0 else 0.0
+
+                        col5, col6, col7, col8 = st.columns(4)
+                        col5.metric("Win Rate (≥90%)", f"{win_rate_90:.1f}%", delta=f"{len(high_sim_90)} fights")
+                        col6.metric("Weighted Win Rate (≥90%)", f"{weighted_wr_90:.1f}%")
+                        col7.metric("Win Rate (≥80%)", f"{win_rate_80:.1f}%", delta=f"{len(high_sim_80)} fights")
+                        col8.metric("Weighted Win Rate (≥80%)", f"{weighted_wr_80:.1f}%")
 
                         fig_hist = px.histogram(sim_df, x='Similarity', nbins=20, title="Similarity Distribution (All)")
                         st.plotly_chart(fig_hist, use_container_width=True, key="sim_hist_chart")
@@ -457,10 +473,23 @@ else:
                         st.dataframe(top_n, use_container_width=True)
 
 # -----------------------------------------------
-# DECISION TREE (graphical, with win% labels + prediction)
+# DECISION TREE (with own fight selector, criterion, numerical samples)
 # -----------------------------------------------
 st.header("Decision Tree Model (with adjustable depth/leaf)")
 tree_data = build_independent_filter(original_data.copy(), "tree")
+
+# --- Own fight selector ---
+tree_upcoming = tree_data[tree_data['Win?'].isna() | (tree_data['Win?'] == '')]
+if not tree_upcoming.empty:
+    tree_upcoming_ids = sorted(tree_upcoming['FightID'].unique())
+    tree_selected_fight = st.selectbox("Select fight for tree prediction", tree_upcoming_ids, key="tree_fight_selector")
+    if tree_selected_fight:
+        tree_fight_rows = tree_upcoming[tree_upcoming['FightID'] == tree_selected_fight]
+        if len(tree_fight_rows) == 2:
+            st.write(f"Selected: **{tree_fight_rows.iloc[0]['Fighter']}** vs **{tree_fight_rows.iloc[1]['Fighter']}**")
+else:
+    st.info("No upcoming fights in filtered tree data.")
+    tree_selected_fight = None
 
 tree_hist = tree_data[tree_data['Win?'].isin(['Yes','No'])].copy()
 if len(tree_hist) < 10:
@@ -475,34 +504,46 @@ else:
         X = tree_hist[tree_features].fillna(tree_hist[tree_features].median())
         y = tree_hist['Target']
 
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
             max_depth = st.slider("Max Depth", 1, 10, 3, key="tree_depth")
         with col2:
             min_samples_leaf = st.slider("Min Samples Leaf", 1, 100, 5, key="tree_leaf")
+        with col3:
+            criterion = st.selectbox("Splitting Criterion", ["gini", "entropy", "log_loss"], index=0, key="tree_criterion")
 
         if st.button("Train Decision Tree", key="train_tree"):
             with st.spinner("Training..."):
-                dt = DecisionTreeClassifier(max_depth=max_depth, min_samples_leaf=min_samples_leaf, random_state=42)
+                dt = DecisionTreeClassifier(max_depth=max_depth, min_samples_leaf=min_samples_leaf,
+                                            criterion=criterion, random_state=42)
                 dt.fit(X, y)
 
+                # Graphical tree – numerical samples, not proportions
                 fig, ax = plt.subplots(figsize=(24, 12))
                 plot_tree(dt, feature_names=tree_features, class_names=['Loss', 'Win'],
-                          filled=True, rounded=True, fontsize=10, ax=ax, proportion=True)
+                          filled=True, rounded=True, fontsize=10, ax=ax)
                 st.pyplot(fig)
 
+                # Leaf win percentages as scrollable dataframe
                 st.subheader("Leaf Win Percentages")
                 leaf_ids = dt.apply(X)
+                leaf_stats = []
                 for leaf_id in np.unique(leaf_ids):
                     mask_leaf = leaf_ids == leaf_id
-                    win_rate_leaf = y[mask_leaf].mean() * 100
-                    st.write(f"Leaf {leaf_id}: {mask_leaf.sum()} samples, Win rate = {win_rate_leaf:.1f}%")
+                    leaf_stats.append({
+                        "Leaf": leaf_id,
+                        "Samples": mask_leaf.sum(),
+                        "Win Rate": f"{y[mask_leaf].mean() * 100:.1f}%"
+                    })
+                leaf_df = pd.DataFrame(leaf_stats)
+                st.dataframe(leaf_df, use_container_width=True, hide_index=True)
 
-                # Prediction for selected upcoming fight
+                # Prediction for the tree's own selected fight
                 st.subheader("Prediction for Selected Upcoming Fight")
-                if st.session_state.get("selected_fight_row") is not None:
-                    f1_row = st.session_state.selected_fight_row
-                    if f1_row['FightID'] in tree_data['FightID'].values:
+                if tree_selected_fight is not None:
+                    fight_rows = tree_upcoming[tree_upcoming['FightID'] == tree_selected_fight]
+                    if len(fight_rows) == 2:
+                        f1_row = fight_rows.iloc[0]
                         input_vals = []
                         for c in tree_features:
                             val = f1_row.get(c, np.nan)
@@ -516,10 +557,8 @@ else:
                             st.write(f"**{f1_row['Fighter']}** → leaf **{leaf}** with win probability **{prob:.1%}**")
                         except Exception as e:
                             st.error(f"Prediction error: {e}")
-                    else:
-                        st.info("Selected fight is not in the filtered data (check your tree filters).")
                 else:
-                    st.info("No fight selected. Choose a fight in the **Upcoming Fight Matchup** section above.")
+                    st.info("No fight selected for the tree. Choose a fight above.")
 
 # -----------------------------------------------
 # FEATURE IMPORTANCE (bottom, unchanged)
