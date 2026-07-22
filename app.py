@@ -379,7 +379,7 @@ def build_independent_filter(df, key_prefix):
     return df[mask].copy()
 
 # -----------------------------------------------
-# SPIDER CHART (MULTI‑METRIC – Euclidean, Manhattan, Chebyshev only)
+# SPIDER CHART (unchanged)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
@@ -402,7 +402,6 @@ else:
             st.warning("No numeric features for similarity.")
         else:
             selected_vars = st.multiselect("Select variables for similarity", sim_features, default=sim_features[:5], max_selections=8, key="spider_vars")
-            # --- Distance metric selector ---
             available_metrics = ["Euclidean", "Manhattan", "Chebyshev"]
             distance_metrics = st.multiselect("Distance metrics", available_metrics, default=["Euclidean"], key="spider_metrics")
             if not distance_metrics:
@@ -426,13 +425,7 @@ else:
                         up_scaled = scaler_sim.transform(up_vec)
                         hist_scaled = scaler_sim.transform(hist_sub)
 
-                        # Map display names to scipy metric names
-                        metric_map = {
-                            "Euclidean": "euclidean",
-                            "Manhattan": "cityblock",
-                            "Chebyshev": "chebyshev"
-                        }
-
+                        metric_map = {"Euclidean": "euclidean", "Manhattan": "cityblock", "Chebyshev": "chebyshev"}
                         metric_similarities = {}
                         for metric_display in distance_metrics:
                             metric = metric_map[metric_display]
@@ -441,10 +434,8 @@ else:
                             sim = 100 * (1 - dists / max_dist)
                             metric_similarities[metric_display] = sim
 
-                        # Combine metrics by averaging
                         combined_sim = sum(metric_similarities.values()) / len(metric_similarities)
 
-                        # Build dataframe
                         sim_df = spider_hist.loc[hist_sub.index, ['FightDate', 'Fighter', 'Opponent', 'Win?']].copy()
                         for metric_display in distance_metrics:
                             sim_df[f'Sim_{metric_display}'] = metric_similarities[metric_display].round(1)
@@ -468,7 +459,6 @@ else:
                         col3.metric("Total Similarity", f"{total_sim:.1f}")
                         col4.metric("Composite Score", f"{composite:.1f}")
 
-                        # Win rates
                         high_sim_90 = top_n[top_n['Similarity'] >= 90]
                         high_sim_80 = top_n[top_n['Similarity'] >= 80]
 
@@ -498,7 +488,7 @@ else:
                         st.dataframe(top_n[col_order], use_container_width=True)
 
 # -----------------------------------------------
-# DECISION TREE (unchanged)
+# DECISION TREE (with fixed fight selector display)
 # -----------------------------------------------
 st.header("Decision Tree Model (with adjustable depth/leaf)")
 tree_data = build_independent_filter(original_data.copy(), "tree")
@@ -511,6 +501,10 @@ if not tree_upcoming.empty:
         tree_fight_rows = tree_upcoming[tree_upcoming['FightID'] == tree_selected_fight]
         if len(tree_fight_rows) == 2:
             st.write(f"Selected: **{tree_fight_rows.iloc[0]['Fighter']}** vs **{tree_fight_rows.iloc[1]['Fighter']}**")
+        elif len(tree_fight_rows) == 1:
+            st.warning("Only one fighter row found for this fight; opponent data is missing.")
+        else:
+            st.warning("Unexpected number of rows for this fight.")
 else:
     st.info("No upcoming fights in filtered tree data.")
     tree_selected_fight = None
@@ -577,6 +571,8 @@ else:
                             st.write(f"**{f1_row['Fighter']}** → leaf **{leaf}** with win probability **{prob:.1%}**")
                         except Exception as e:
                             st.error(f"Prediction error: {e}")
+                    else:
+                        st.warning("Fight data incomplete for prediction.")
                 else:
                     st.info("No fight selected for the tree. Choose a fight above.")
 
