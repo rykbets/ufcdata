@@ -14,7 +14,7 @@ from sklearn.metrics import brier_score_loss
 from sklearn.model_selection import cross_val_predict
 from sklearn.inspection import permutation_importance
 from scipy.spatial.distance import cdist
-!pip install lightgbm
+pip install lightgbm
 # Optional imports – missing ones handled gracefully
 try:
     import lightgbm as lgb
