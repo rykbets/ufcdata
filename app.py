@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 import gdown
 from sklearn.linear_model import LogisticRegressionCV
@@ -70,6 +71,14 @@ numeric_features = [c for c in data.columns
 abs_rating_cols = [c for c in rating_raw_cols if not c.endswith('Diff')] + \
                   [c for c in rating_avg7_cols if not c.endswith('_diff')]
 
+# Session state
+for key, default in [
+    ('overall_wr', 0.0), ('recent_wr', 0.0), ('recent_count', 0),
+    ('selected_fight_row', None),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
+
 # -----------------------------------------------
 # PERFORMANCE SUMMARY
 # -----------------------------------------------
@@ -82,7 +91,7 @@ col1, col2, col3 = st.columns(3)
 col1.metric("Total Fights", total); col2.metric("Wins", wins); col3.metric("Win Rate", f"{win_rate:.1f}%")
 
 # -----------------------------------------------
-# LAST 20 FIGHTS
+# LAST 20 COMPLETED FIGHTS
 # -----------------------------------------------
 st.header("Last 20 Completed Fights")
 completed = data[data['Win?'].notna() & (data['Win?'].astype(str).str.strip() != '')]
@@ -90,8 +99,9 @@ last20 = completed.sort_values('FightDate', ascending=False).head(20)
 cols = ['FightDate','Fighter','Opponent','Win?','Method','AgeDiff','HeightDiff','ReachDiff','CareerWinPct_diff']
 cols = [c for c in cols if c in last20.columns]
 st.dataframe(last20[cols], use_container_width=True)
+
 # -----------------------------------------------
-# UPCOMING FIGHT MATCHUP (unchanged)
+# UPCOMING FIGHT MATCHUP
 # -----------------------------------------------
 st.header("Upcoming Fight Matchup")
 upcoming_display = original_data[original_data['Win?'].isna() | (original_data['Win?'] == '')]
@@ -106,6 +116,7 @@ if not upcoming_display.empty:
             fight_rows = fight_rows.sort_values('Fighter')
             f1 = fight_rows.iloc[0]
             f2 = fight_rows.iloc[1]
+            st.session_state.selected_fight_row = f1
             st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
 
             sections = {}
@@ -173,13 +184,13 @@ else:
     st.info("No upcoming fights available.")
 
 # -----------------------------------------------
-# INDEPENDENT FILTER HELPER (CORRECTED)
+# INDEPENDENT FILTER HELPER (PERMISSIVE FIXES)
 # -----------------------------------------------
 def build_independent_filter(df, key_prefix):
     """
     Returns filtered df.
     - Strict AND filters (general, physical, odds, ratings, new WC) – both rows must pass.
-    - Permissive filters (title, outcomes) are split into fighter‑side and opponent‑side.
+    - Permissive filters (title, outcomes, hometown) are split into fighter‑side and opponent‑side.
       For a row to contribute to keeping a fight, it must satisfy:
          (fighter‑side conditions) AND (opponent‑side conditions).
       A fight is kept if ANY row satisfies that combined mask.
@@ -293,8 +304,7 @@ def build_independent_filter(df, key_prefix):
     if country: mask_strict &= df['Country'].isin(country)
     if sched_rounds: mask_strict &= df['ScheduledRounds'].isin(sched_rounds)
     if title_fight != "All": mask_strict &= df['Title'] == title_fight
-    if hometown_fighter: mask_strict &= df['HometownFighter'].isin(hometown_fighter)
-    if opp_hometown: mask_strict &= df['Opponent_Hometown'].isin(opp_hometown)
+    # HometownFighter and Opponent_Hometown are now permissive, see below
     if event_country: mask_strict &= df['EventCountry'].isin(event_country)
     if new_wc and 'IsNewWeightClass' in df.columns: mask_strict &= df['IsNewWeightClass'] == True
 
@@ -352,6 +362,12 @@ def build_independent_filter(df, key_prefix):
     else:
         fighter_masks.append(pd.Series(True, index=df.index))
 
+    # HometownFighter (fighter‑side permissive)
+    if hometown_fighter and 'HometownFighter' in df.columns:
+        fighter_masks.append(df['HometownFighter'].isin(hometown_fighter))
+    else:
+        fighter_masks.append(pd.Series(True, index=df.index))
+
     # --- Opponent‑side per‑filter masks (AND across filters) ---
     opponent_masks = []
 
@@ -378,6 +394,12 @@ def build_independent_filter(df, key_prefix):
     else:
         opponent_masks.append(pd.Series(True, index=df.index))
 
+    # Opponent_Hometown (opponent‑side permissive)
+    if opp_hometown and 'Opponent_Hometown' in df.columns:
+        opponent_masks.append(df['Opponent_Hometown'].isin(opp_hometown))
+    else:
+        opponent_masks.append(pd.Series(True, index=df.index))
+
     # Combine: AND across all fighter masks, AND across all opponent masks
     fighter_mask = fighter_masks[0]
     for m in fighter_masks[1:]:
@@ -396,7 +418,7 @@ def build_independent_filter(df, key_prefix):
     return df[final_mask].copy()
 
 # -----------------------------------------------
-# SPIDER CHART (Similarity) + DECISION TREE
+# SPIDER CHART (Similarity) + SPIDER DECISION TREE
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
@@ -506,7 +528,7 @@ else:
                         col_order = ['FightDate','Fighter','Opponent','Win?'] + [f'Sim_{m}' for m in distance_metrics] + ['Similarity']
                         st.dataframe(top_n[col_order], use_container_width=True)
 
-                        # ========== DECISION TREE (SPIDER FILTERS) ==========
+                        # ========== SPIDER DECISION TREE ==========
                         st.subheader("Decision Tree from Similarity Filters")
 
                         spider_tree_hist = spider_hist.copy()
@@ -535,7 +557,7 @@ else:
                                                                        criterion=criterion_sp, random_state=42)
                                         dt_sp.fit(X_sp, y_sp)
 
-                                        # ---- Prediction ABOVE the tree ----
+                                        # Prediction first
                                         st.subheader("Prediction for Selected Upcoming Fight")
                                         fight_rows = spider_upcoming[spider_upcoming['FightID'] == selected_fight_spider]
                                         fight_rows = fight_rows.sort_values('Fighter')
@@ -557,7 +579,7 @@ else:
                                         else:
                                             st.warning("Fight data incomplete for prediction.")
 
-                                        # ---- Tree plot ----
+                                        # Tree plot
                                         fig_w = max(16, max_depth_sp * 5)
                                         fig_h = max(8,  max_depth_sp * 3)
                                         fig, ax = plt.subplots(figsize=(fig_w, fig_h))
@@ -586,7 +608,7 @@ else:
                                             text_obj.set_text('\n'.join(new_lines))
                                         st.pyplot(fig)
 
-                                        # ---- Leaf table ----
+                                        # Leaf table
                                         st.subheader("Leaf Win Percentages")
                                         leaf_ids = dt_sp.apply(X_sp)
                                         leaf_stats = []
