@@ -428,6 +428,7 @@ def build_independent_filter(df, key_prefix):
 st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
 spider_data = build_independent_filter(spider_data_full, "spider")
+st.write(f"DEBUG: {spider_data['FightID'].nunique()} fights pass spider filter")  # temporary
 
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
 spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
