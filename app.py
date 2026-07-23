@@ -428,9 +428,16 @@ def build_independent_filter(df, key_prefix):
 st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
 spider_data = build_independent_filter(spider_data_full, "spider")
-st.write(f"DEBUG: {spider_data['FightID'].nunique()} fights pass spider filter")  # temporary
 
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
+# Temporary debug
+target_fid = '2026-07-25 - Abubakar Vagaev vs Saygid Izagakhmaev'
+if target_fid in spider_upcoming['FightID'].values:
+    st.write("✅ Target fight IS in upcoming set")
+else:
+    st.write("❌ Target fight NOT in upcoming set")
+    st.write("Sample upcoming FightIDs:", spider_upcoming['FightID'].unique()[:10])
+
 spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
 
 if spider_upcoming.empty:
