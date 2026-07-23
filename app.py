@@ -84,12 +84,12 @@ col1.metric("Total Fights", total); col2.metric("Wins", wins); col3.metric("Win 
 # -----------------------------------------------
 # LAST 20 FIGHTS
 # -----------------------------------------------
-st.header("Last 20 Fights")
-last20 = data.sort_values('FightDate', ascending=False).head(20)
+st.header("Last 20 Completed Fights")
+completed = data[data['Win?'].notna() & (data['Win?'].astype(str).str.strip() != '')]
+last20 = completed.sort_values('FightDate', ascending=False).head(20)
 cols = ['FightDate','Fighter','Opponent','Win?','Method','AgeDiff','HeightDiff','ReachDiff','CareerWinPct_diff']
 cols = [c for c in cols if c in last20.columns]
 st.dataframe(last20[cols], use_container_width=True)
-
 # -----------------------------------------------
 # UPCOMING FIGHT MATCHUP (unchanged)
 # -----------------------------------------------
