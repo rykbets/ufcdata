@@ -189,8 +189,8 @@ else:
 def build_independent_filter(df, key_prefix):
     """
     Returns filtered df.
-    - Strict AND filters (general, physical, odds, ratings, new WC) – both rows must pass.
-    - Permissive filters (title, outcomes, hometown) are split into fighter‑side and opponent‑side.
+    - Strict AND filters (general, physical, odds, ratings, new WC, opponent fight number) – both rows must pass.
+    - Permissive filters (title, outcomes, hometown, fighter's own fight number) are split into fighter‑side and opponent‑side.
       For a row to contribute to keeping a fight, it must satisfy:
          (fighter‑side conditions) AND (opponent‑side conditions).
       A fight is kept if ANY row satisfies that combined mask.
@@ -304,14 +304,13 @@ def build_independent_filter(df, key_prefix):
     if country: mask_strict &= df['Country'].isin(country)
     if sched_rounds: mask_strict &= df['ScheduledRounds'].isin(sched_rounds)
     if title_fight != "All": mask_strict &= df['Title'] == title_fight
-    # HometownFighter and Opponent_Hometown are now permissive, see below
     if event_country: mask_strict &= df['EventCountry'].isin(event_country)
     if new_wc and 'IsNewWeightClass' in df.columns: mask_strict &= df['IsNewWeightClass'] == True
 
-    if 'FightNumber' in df.columns:
-        mask_strict &= add_strict((df['FightNumber'] >= fn_min) & (df['FightNumber'] <= fn_max), 'FightNumber')
+    # Opponent fight number stays strict
     if 'Opponent_FightNumber' in df.columns:
         mask_strict &= add_strict((df['Opponent_FightNumber'] >= ofn_min) & (df['Opponent_FightNumber'] <= ofn_max), 'Opponent_FightNumber')
+
     if 'CareerWinPct_diff' in df.columns:
         mask_strict &= add_strict((df['CareerWinPct_diff'] >= cwp_min) & (df['CareerWinPct_diff'] <= cwp_max), 'CareerWinPct_diff')
 
@@ -350,6 +349,12 @@ def build_independent_filter(df, key_prefix):
 
     # --- Fighter‑side per‑filter masks (AND across filters) ---
     fighter_masks = []
+    # Fighter's own fight number (permissive – keep fight if ANY row matches)
+    if 'FightNumber' in df.columns:
+        fighter_masks.append((df['FightNumber'] >= fn_min) & (df['FightNumber'] <= fn_max))
+    else:
+        fighter_masks.append(pd.Series(True, index=df.index))
+
     fighter_masks.append(outcome_cond(prev1_col, prev1))
     fighter_masks.append(outcome_cond(prev2_col, prev2))
     fighter_masks.append(outcome_cond(prev3_col, prev3))
