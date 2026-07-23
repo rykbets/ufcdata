@@ -189,8 +189,9 @@ else:
 def build_independent_filter(df, key_prefix):
     """
     Returns filtered df.
-    - Strict AND filters (general, physical, odds, ratings, new WC, opponent fight number) – both rows must pass.
-    - Permissive filters (title, outcomes, hometown, fighter's own fight number) are split into fighter‑side and opponent‑side.
+    - Strict AND filters (general, physical, odds, ratings, new WC) – both rows must pass.
+    - Permissive filters (title, outcomes, hometown, fighter's own fight number, opponent fight number) 
+      are split into fighter‑side and opponent‑side.
       For a row to contribute to keeping a fight, it must satisfy:
          (fighter‑side conditions) AND (opponent‑side conditions).
       A fight is kept if ANY row satisfies that combined mask.
@@ -307,10 +308,7 @@ def build_independent_filter(df, key_prefix):
     if event_country: mask_strict &= df['EventCountry'].isin(event_country)
     if new_wc and 'IsNewWeightClass' in df.columns: mask_strict &= df['IsNewWeightClass'] == True
 
-    # Opponent fight number stays strict
-    if 'Opponent_FightNumber' in df.columns:
-        mask_strict &= add_strict((df['Opponent_FightNumber'] >= ofn_min) & (df['Opponent_FightNumber'] <= ofn_max), 'Opponent_FightNumber')
-
+    # Note: Opponent_FightNumber moved to permissive (see below)
     if 'CareerWinPct_diff' in df.columns:
         mask_strict &= add_strict((df['CareerWinPct_diff'] >= cwp_min) & (df['CareerWinPct_diff'] <= cwp_max), 'CareerWinPct_diff')
 
@@ -349,7 +347,7 @@ def build_independent_filter(df, key_prefix):
 
     # --- Fighter‑side per‑filter masks (AND across filters) ---
     fighter_masks = []
-    # Fighter's own fight number (permissive – keep fight if ANY row matches)
+    # Fighter's own fight number (permissive)
     if 'FightNumber' in df.columns:
         fighter_masks.append((df['FightNumber'] >= fn_min) & (df['FightNumber'] <= fn_max))
     else:
@@ -375,6 +373,12 @@ def build_independent_filter(df, key_prefix):
 
     # --- Opponent‑side per‑filter masks (AND across filters) ---
     opponent_masks = []
+
+    # Opponent's fight number (permissive) – NEW
+    if 'Opponent_FightNumber' in df.columns:
+        opponent_masks.append((df['Opponent_FightNumber'] >= ofn_min) & (df['Opponent_FightNumber'] <= ofn_max))
+    else:
+        opponent_masks.append(pd.Series(True, index=df.index))
 
     def opponent_outcome_cond(shift, wlist):
         col = f'Opponent_Prev{shift}_Outcome_raw'
@@ -430,7 +434,6 @@ spider_data_full = original_data.copy()
 spider_data = build_independent_filter(spider_data_full, "spider")
 
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
-
 spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
 
 if spider_upcoming.empty:
