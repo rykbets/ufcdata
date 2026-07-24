@@ -1,7 +1,5 @@
 import streamlit as st
 import pandas as pd
-import streamlit as st
-import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
@@ -76,7 +74,7 @@ abs_rating_cols = [c for c in rating_raw_cols if not c.endswith('Diff')] + \
 # Session state
 for key, default in [
     ('overall_wr', 0.0), ('recent_wr', 0.0), ('recent_count', 0),
-    ('selected_fight_row', None),
+    ('selected_fight_row', None), ('auto_selected_vars', None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -314,7 +312,6 @@ def build_independent_filter(df, key_prefix):
     if event_country: mask_strict &= df['EventCountry'].isin(event_country)
     if new_wc and 'IsNewWeightClass' in df.columns: mask_strict &= df['IsNewWeightClass'] == True
 
-    # Note: Opponent_FightNumber moved to permissive (see below)
     if 'CareerWinPct_diff' in df.columns:
         mask_strict &= add_strict((df['CareerWinPct_diff'] >= cwp_min) & (df['CareerWinPct_diff'] <= cwp_max), 'CareerWinPct_diff')
 
@@ -340,7 +337,7 @@ def build_independent_filter(df, key_prefix):
     # ---- Helper to build OR mask for a single filter ----
     def outcome_cond(col, selected):
         if not selected or col not in df.columns:
-            return pd.Series(True, index=df.index)  # no restriction
+            return pd.Series(True, index=df.index)
         cond = pd.Series(False, index=df.index)
         if "Win (any)" in selected:
             cond |= df[col].str.startswith('Win', na=False)
@@ -353,7 +350,6 @@ def build_independent_filter(df, key_prefix):
 
     # --- Fighter‑side per‑filter masks (AND across filters) ---
     fighter_masks = []
-    # Fighter's own fight number (permissive)
     if 'FightNumber' in df.columns:
         fighter_masks.append((df['FightNumber'] >= fn_min) & (df['FightNumber'] <= fn_max))
     else:
@@ -371,7 +367,6 @@ def build_independent_filter(df, key_prefix):
     else:
         fighter_masks.append(pd.Series(True, index=df.index))
 
-    # HometownFighter (fighter‑side permissive)
     if hometown_fighter and 'HometownFighter' in df.columns:
         fighter_masks.append(df['HometownFighter'].isin(hometown_fighter))
     else:
@@ -379,8 +374,6 @@ def build_independent_filter(df, key_prefix):
 
     # --- Opponent‑side per‑filter masks (AND across filters) ---
     opponent_masks = []
-
-    # Opponent's fight number (permissive)
     if 'Opponent_FightNumber' in df.columns:
         opponent_masks.append((df['Opponent_FightNumber'] >= ofn_min) & (df['Opponent_FightNumber'] <= ofn_max))
     else:
@@ -409,41 +402,37 @@ def build_independent_filter(df, key_prefix):
     else:
         opponent_masks.append(pd.Series(True, index=df.index))
 
-    # Opponent_Hometown (opponent‑side permissive)
     if opp_hometown and 'Opponent_Hometown' in df.columns:
         opponent_masks.append(df['Opponent_Hometown'].isin(opp_hometown))
     else:
         opponent_masks.append(pd.Series(True, index=df.index))
 
-    # Combine: AND across all fighter masks, AND across all opponent masks
+    # Combine
     fighter_mask = fighter_masks[0]
     for m in fighter_masks[1:]:
         fighter_mask &= m
-
     opponent_mask = opponent_masks[0]
     for m in opponent_masks[1:]:
         opponent_mask &= m
 
     row_permissive = fighter_mask & opponent_mask
-
-    # Fight survives if any row satisfies the permissive mask
     fight_ok = row_permissive.groupby(df['FightID']).transform('any')
     final_mask = mask_strict & fight_ok
 
     return df[final_mask].copy()
 
 # -----------------------------------------------
-# SPIDER CHART (Similarity) + AUTO‑SELECT SLIDERS + FILTERED STATS
+# SPIDER CHART (Similarity) + AUTO‑SELECT + FILTERED STATS + TREE
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
 spider_data = build_independent_filter(spider_data_full, "spider")
 
 # ----- Filtered performance summary -----
-spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
+spider_hist_all = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
 filtered_total = len(spider_data)
-filtered_wins = (spider_hist['Win?'] == 'Yes').sum()
-filtered_wr = filtered_wins / len(spider_hist) * 100 if len(spider_hist) > 0 else 0.0
+filtered_wins = (spider_hist_all['Win?'] == 'Yes').sum()
+filtered_wr = filtered_wins / len(spider_hist_all) * 100 if len(spider_hist_all) > 0 else 0.0
 st.subheader("Filtered Performance Summary")
 col_f1, col_f2, col_f3 = st.columns(3)
 col_f1.metric("Total Fights (filtered)", filtered_total)
@@ -473,12 +462,15 @@ else:
             top_n_f1 = c_slider1.slider("Top N (Fighter 1)", 0, 10, 0, key="top_n_f1")
             top_n_f2 = c_slider2.slider("Top N (Fighter 2)", 0, 10, 0, key="top_n_f2")
 
-            default_vars = sim_features[:5]  # fallback
-            # Compute default list if sliders are active and a fight is selected later
-            # We'll handle defaults after selecting the fight.
+            default_vars = sim_features[:5]
 
-            selected_vars = st.multiselect("Select variables for similarity", sim_features,
-                                           default=default_vars, max_selections=8, key="spider_vars")
+            selected_vars = st.multiselect(
+                "Select variables for similarity",
+                sim_features,
+                default=default_vars,
+                max_selections=8,
+                key="spider_vars"
+            )
 
             available_metrics = ["Euclidean", "Manhattan", "Chebyshev"]
             distance_metrics = st.multiselect("Distance metrics", available_metrics,
@@ -503,30 +495,23 @@ else:
 
                         # Auto‑select similarity variables based on top N differentials
                         if top_n_f1 > 0 or top_n_f2 > 0:
-                            # Find columns that are _opp_diff and have values
                             diff_cols = [c for c in f1.index if c.endswith('_opp_diff')]
-                            # Compute absolute values for each fighter
                             f1_diffs = {c: abs(f1[c]) for c in diff_cols if pd.notna(f1[c])}
                             f2_diffs = {c: abs(f2[c]) for c in diff_cols if pd.notna(f2[c])}
-                            # Get top N for each
                             top_f1 = sorted(f1_diffs, key=f1_diffs.get, reverse=True)[:top_n_f1]
                             top_f2 = sorted(f2_diffs, key=f2_diffs.get, reverse=True)[:top_n_f2]
-                            # Union, preserving only those that are in sim_features
                             auto_vars = list(set(top_f1 + top_f2).intersection(sim_features))
                             if auto_vars:
-                                # Update the multiselect default (only if the user hasn't manually changed it yet)
-                                # Since we can't dynamically change the default, we'll use session state to keep the selection
-                                if 'spider_vars' not in st.session_state or st.session_state.spider_vars == default_vars:
-                                    st.session_state.spider_vars = auto_vars
-                                # Re‑compute hist_sub with the new selection
-                                hist_sub = spider_hist[st.session_state.spider_vars].dropna()
+                                st.session_state.auto_selected_vars = auto_vars
                             else:
-                                st.warning("No matching differentials found, using previous selection.")
+                                st.session_state.auto_selected_vars = None
+
+                            # Update the multiselect's value if we have new auto selection
+                            if st.session_state.auto_selected_vars:
+                                # To reflect change, we rerun the script by calling st.rerun()
+                                st.rerun()
 
                         st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
-
-                        # Update the multiselect if auto_vars changed
-                        # The similarity calculation uses selected_vars (from the widget) already; proceed.
 
                         up_vals = [float(f1.get(var, 0.0)) for var in selected_vars]
                         up_vec = np.array([up_vals], dtype=np.float64)
