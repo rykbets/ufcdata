@@ -456,62 +456,59 @@ else:
         if not sim_features:
             st.warning("No numeric features for similarity.")
         else:
-            # ---- Auto-select similarity sliders ----
-            st.write("**Auto‑select top differentials for similarity**")
-            c_slider1, c_slider2 = st.columns(2)
-            top_n_f1 = c_slider1.slider("Top N (Fighter 1)", 0, 10, 0, key="top_n_f1")
-            top_n_f2 = c_slider2.slider("Top N (Fighter 2)", 0, 10, 0, key="top_n_f2")
+            # ---- Fight selector first ----
+            up_ids = spider_upcoming['FightID'].unique()
+            selected_fight_spider = st.selectbox("Choose an upcoming fight for similarity",
+                                                up_ids, key="spider_fight_select")
 
-            default_vars = sim_features[:5]
+            # ---- Auto-select sliders and multiselect after fight selection ----
+            if selected_fight_spider:
+                fight_rows = spider_upcoming[spider_upcoming['FightID'] == selected_fight_spider]
+                fight_rows = fight_rows.sort_values('Fighter')
+                f1 = fight_rows.iloc[0]
+                f2 = fight_rows.iloc[1]
 
-            selected_vars = st.multiselect(
-                "Select variables for similarity",
-                sim_features,
-                default=default_vars,
-                max_selections=8,
-                key="spider_vars"
-            )
+                st.write("**Auto‑select top differentials for similarity**")
+                c_slider1, c_slider2 = st.columns(2)
+                top_n_f1 = c_slider1.slider("Top N (Fighter 1)", 0, 10, 0, key="top_n_f1")
+                top_n_f2 = c_slider2.slider("Top N (Fighter 2)", 0, 10, 0, key="top_n_f2")
 
-            available_metrics = ["Euclidean", "Manhattan", "Chebyshev"]
-            distance_metrics = st.multiselect("Distance metrics", available_metrics,
-                                             default=["Euclidean"], key="spider_metrics")
-            if not distance_metrics:
-                st.warning("Please select at least one distance metric.")
-            elif selected_vars:
-                hist_sub = spider_hist[selected_vars].dropna()
-                if len(hist_sub) < 2:
-                    st.warning("Not enough historical data.")
-                else:
-                    scaler_sim = StandardScaler()
-                    scaler_sim.fit(hist_sub)
-                    up_ids = spider_upcoming['FightID'].unique()
-                    selected_fight_spider = st.selectbox("Choose an upcoming fight for similarity",
-                                                        up_ids, key="spider_fight_select")
-                    if selected_fight_spider:
-                        fight_rows = spider_upcoming[spider_upcoming['FightID'] == selected_fight_spider]
-                        fight_rows = fight_rows.sort_values('Fighter')
-                        f1 = fight_rows.iloc[0]
-                        f2 = fight_rows.iloc[1]
+                # Compute auto_selected_vars based on top differentials
+                if top_n_f1 > 0 or top_n_f2 > 0:
+                    diff_cols = [c for c in f1.index if c.endswith('_opp_diff')]
+                    f1_diffs = {c: abs(f1[c]) for c in diff_cols if pd.notna(f1[c])}
+                    f2_diffs = {c: abs(f2[c]) for c in diff_cols if pd.notna(f2[c])}
+                    top_f1 = sorted(f1_diffs, key=f1_diffs.get, reverse=True)[:top_n_f1]
+                    top_f2 = sorted(f2_diffs, key=f2_diffs.get, reverse=True)[:top_n_f2]
+                    auto_vars = list(set(top_f1 + top_f2).intersection(sim_features))
+                    if auto_vars:
+                        st.session_state.auto_selected_vars = auto_vars
+                    else:
+                        st.session_state.auto_selected_vars = None
 
-                        # Auto‑select similarity variables based on top N differentials
-                        if top_n_f1 > 0 or top_n_f2 > 0:
-                            diff_cols = [c for c in f1.index if c.endswith('_opp_diff')]
-                            f1_diffs = {c: abs(f1[c]) for c in diff_cols if pd.notna(f1[c])}
-                            f2_diffs = {c: abs(f2[c]) for c in diff_cols if pd.notna(f2[c])}
-                            top_f1 = sorted(f1_diffs, key=f1_diffs.get, reverse=True)[:top_n_f1]
-                            top_f2 = sorted(f2_diffs, key=f2_diffs.get, reverse=True)[:top_n_f2]
-                            auto_vars = list(set(top_f1 + top_f2).intersection(sim_features))
-                            if auto_vars:
-                                st.session_state.auto_selected_vars = auto_vars
-                            else:
-                                st.session_state.auto_selected_vars = None
+                # Multiselect with dynamic value from auto_selected_vars
+                selected_vars = st.multiselect(
+                    "Select variables for similarity",
+                    sim_features,
+                    default=sim_features[:5],   # only used on first load
+                    value=st.session_state.auto_selected_vars if st.session_state.auto_selected_vars is not None else sim_features[:5],
+                    max_selections=8,
+                    key="spider_vars"
+                )
 
-                            # Update the multiselect's value if we have new auto selection
-                            if st.session_state.auto_selected_vars:
-                                # To reflect change, we rerun the script by calling st.rerun()
-                                st.rerun()
-
-                        st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
+                # Proceed only if at least one metric selected
+                available_metrics = ["Euclidean", "Manhattan", "Chebyshev"]
+                distance_metrics = st.multiselect("Distance metrics", available_metrics,
+                                                 default=["Euclidean"], key="spider_metrics")
+                if not distance_metrics:
+                    st.warning("Please select at least one distance metric.")
+                elif selected_vars:
+                    hist_sub = spider_hist[selected_vars].dropna()
+                    if len(hist_sub) < 2:
+                        st.warning("Not enough historical data.")
+                    else:
+                        scaler_sim = StandardScaler()
+                        scaler_sim.fit(hist_sub)
 
                         up_vals = [float(f1.get(var, 0.0)) for var in selected_vars]
                         up_vec = np.array([up_vals], dtype=np.float64)
@@ -611,8 +608,6 @@ else:
 
                                         # Prediction first
                                         st.subheader("Prediction for Selected Upcoming Fight")
-                                        fight_rows = spider_upcoming[spider_upcoming['FightID'] == selected_fight_spider]
-                                        fight_rows = fight_rows.sort_values('Fighter')
                                         if len(fight_rows) == 2:
                                             f1_row = fight_rows.iloc[0]
                                             input_vals = []
