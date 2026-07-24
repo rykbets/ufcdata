@@ -80,19 +80,9 @@ for key, default in [
         st.session_state[key] = default
 
 # -----------------------------------------------
-# PERFORMANCE SUMMARY (unfiltered)
+# LAST 20 COMPLETED FIGHTS (unchanged)
 # -----------------------------------------------
 st.title("UFC Pre‑Fight Performance Dashboard")
-st.header("Overall Performance Summary")
-total = len(data)
-wins = (data['Win?'] == 'Yes').sum()
-win_rate = wins / total * 100 if total > 0 else 0
-col1, col2, col3 = st.columns(3)
-col1.metric("Total Fights", total); col2.metric("Wins", wins); col3.metric("Win Rate", f"{win_rate:.1f}%")
-
-# -----------------------------------------------
-# LAST 20 COMPLETED FIGHTS
-# -----------------------------------------------
 st.header("Last 20 Completed Fights")
 completed = data[data['Win?'].notna() & (data['Win?'].astype(str).str.strip() != '')]
 last20 = completed.sort_values('FightDate', ascending=False).head(20)
@@ -185,7 +175,7 @@ else:
     st.info("No upcoming fights available.")
 
 # -----------------------------------------------
-# INDEPENDENT FILTER HELPER (PERMISSIVE FIXES)
+# INDEPENDENT FILTER HELPER (unchanged)
 # -----------------------------------------------
 def build_independent_filter(df, key_prefix):
     """
@@ -428,11 +418,11 @@ st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
 spider_data = build_independent_filter(spider_data_full, "spider")
 
-# ----- Filtered performance summary (moved inline next to total matches) -----
+# ----- Pre‑compute filtered historical summary (for inline display) -----
 spider_hist_all = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
-filtered_total = len(spider_data)
 filtered_wins = (spider_hist_all['Win?'] == 'Yes').sum()
-filtered_wr = filtered_wins / len(spider_hist_all) * 100 if len(spider_hist_all) > 0 else 0.0
+filtered_total_h = len(spider_hist_all)
+filtered_wr = filtered_wins / filtered_total_h * 100 if filtered_total_h > 0 else 0.0
 # ----------------------------------------------------------------------------
 
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
@@ -451,7 +441,6 @@ else:
         if not sim_features:
             st.warning("No numeric features for similarity.")
         else:
-            # ---- Fight selector first ----
             up_ids = spider_upcoming['FightID'].unique()
             if 'prev_spider_fight' not in st.session_state:
                 st.session_state.prev_spider_fight = None
@@ -536,7 +525,7 @@ else:
                         sim_df = sim_df.sort_values('Similarity', ascending=False)
 
                         total_hist_count = len(sim_df)
-                        # Show total matches + wins/winrate side by side
+                        # Display the three inline metrics
                         cm1, cm2, cm3 = st.columns(3)
                         cm1.metric("Total historical fights matching filters", total_hist_count)
                         cm2.metric("Wins (filtered)", filtered_wins)
@@ -677,7 +666,7 @@ else:
 # FEATURE IMPORTANCE (uses spider filtered data)
 # -----------------------------------------------
 st.header("Feature Importance (based on Spider Filters)")
-hist_imp_full = spider_hist.copy()   # already filtered, only completed fights
+hist_imp_full = spider_hist.copy()
 if len(hist_imp_full) < 10:
     st.warning("Too few historical fights to compute importance (apply broader filters).")
 else:
