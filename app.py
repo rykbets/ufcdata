@@ -458,10 +458,20 @@ else:
         else:
             # ---- Fight selector first ----
             up_ids = spider_upcoming['FightID'].unique()
+            # Track previously selected fight to detect changes
+            if 'prev_spider_fight' not in st.session_state:
+                st.session_state.prev_spider_fight = None
+
             selected_fight_spider = st.selectbox("Choose an upcoming fight for similarity",
                                                 up_ids, key="spider_fight_select")
 
-            # ---- Auto-select sliders and multiselect after fight selection ----
+            # ---- Auto‑select sliders and similarity variables ----
+            fight_changed = selected_fight_spider != st.session_state.prev_spider_fight
+            if fight_changed:
+                st.session_state.prev_spider_fight = selected_fight_spider
+                # Reset auto‑selection; new fight will recompute
+                st.session_state.auto_selected_vars = None
+
             if selected_fight_spider:
                 fight_rows = spider_upcoming[spider_upcoming['FightID'] == selected_fight_spider]
                 fight_rows = fight_rows.sort_values('Fighter')
@@ -474,25 +484,34 @@ else:
                 top_n_f2 = c_slider2.slider("Top N (Fighter 2)", 0, 10, 0, key="top_n_f2")
 
                 # Compute auto_selected_vars based on top differentials
-                if top_n_f1 > 0 or top_n_f2 > 0:
-                    diff_cols = [c for c in f1.index if c.endswith('_opp_diff')]
-                    f1_diffs = {c: abs(f1[c]) for c in diff_cols if pd.notna(f1[c])}
-                    f2_diffs = {c: abs(f2[c]) for c in diff_cols if pd.notna(f2[c])}
-                    top_f1 = sorted(f1_diffs, key=f1_diffs.get, reverse=True)[:top_n_f1]
-                    top_f2 = sorted(f2_diffs, key=f2_diffs.get, reverse=True)[:top_n_f2]
-                    auto_vars = list(set(top_f1 + top_f2).intersection(sim_features))
-                    if auto_vars:
-                        st.session_state.auto_selected_vars = auto_vars
-                    else:
-                        st.session_state.auto_selected_vars = None
+                if fight_changed or (st.session_state.auto_selected_vars is None and (top_n_f1 > 0 or top_n_f2 > 0)):
+                    if top_n_f1 > 0 or top_n_f2 > 0:
+                        diff_cols = [c for c in f1.index if c.endswith('_opp_diff')]
+                        f1_diffs = {c: abs(f1[c]) for c in diff_cols if pd.notna(f1[c])}
+                        f2_diffs = {c: abs(f2[c]) for c in diff_cols if pd.notna(f2[c])}
+                        top_f1 = sorted(f1_diffs, key=f1_diffs.get, reverse=True)[:top_n_f1]
+                        top_f2 = sorted(f2_diffs, key=f2_diffs.get, reverse=True)[:top_n_f2]
+                        auto_vars = list(set(top_f1 + top_f2).intersection(sim_features))
+                        if auto_vars:
+                            st.session_state.auto_selected_vars = auto_vars
+                        else:
+                            st.session_state.auto_selected_vars = None
 
-                # Multiselect with dynamic value from auto_selected_vars
+                # Ensure spider_vars is initialised in session state
+                if 'spider_vars' not in st.session_state:
+                    st.session_state.spider_vars = sim_features[:5]
+
+                # When fight changes, update the widget's value
+                if fight_changed:
+                    if st.session_state.auto_selected_vars is not None:
+                        st.session_state.spider_vars = st.session_state.auto_selected_vars
+                    else:
+                        st.session_state.spider_vars = sim_features[:5]
+
+                # Multiselect uses session state directly (no default or value parameter)
                 selected_vars = st.multiselect(
                     "Select variables for similarity",
                     sim_features,
-                    default=sim_features[:5],   # only used on first load
-                    value=st.session_state.auto_selected_vars if st.session_state.auto_selected_vars is not None else sim_features[:5],
-                    max_selections=8,
                     key="spider_vars"
                 )
 
