@@ -91,7 +91,7 @@ cols = [c for c in cols if c in last20.columns]
 st.dataframe(last20[cols], use_container_width=True)
 
 # -----------------------------------------------
-# UPCOMING FIGHT MATCHUP
+# UPCOMING FIGHT MATCHUP (unchanged)
 # -----------------------------------------------
 st.header("Upcoming Fight Matchup")
 upcoming_display = original_data[original_data['Win?'].isna() | (original_data['Win?'] == '')]
@@ -175,12 +175,13 @@ else:
     st.info("No upcoming fights available.")
 
 # -----------------------------------------------
-# INDEPENDENT FILTER HELPER – now returns masks as well
+# INDEPENDENT FILTER HELPER (country now permissive, returns masks)
 # -----------------------------------------------
 def build_independent_filter(df, key_prefix):
     """
-    Returns (filtered_df, fighter_mask_series, opponent_mask_series).
-    The masks are boolean Series aligned to the original df index.
+    Returns (filtered_df, fighter_mask, opponent_mask).
+    - Country filter moved to fighter‑side permissive.
+    - All other logic unchanged.
     """
     with st.expander(f"{key_prefix} Filters", expanded=True):
         # --- General ---
@@ -291,10 +292,7 @@ def build_independent_filter(df, key_prefix):
     # --- Strict AND filters (both rows must satisfy) ---
     if wc: mask_strict &= df['WC'].isin(wc)
     if stance: mask_strict &= df['Stance'].isin(stance)
-    if country and 'Country' in df.columns:
-        fighter_masks.append(df['Country'].isin(country))
-    else:
-        fighter_masks.append(pd.Series(True, index=df.index))
+    # Country is now permissive – see below
     if sched_rounds: mask_strict &= df['ScheduledRounds'].isin(sched_rounds)
     if title_fight != "All": mask_strict &= df['Title'] == title_fight
     if event_country: mask_strict &= df['EventCountry'].isin(event_country)
@@ -360,6 +358,12 @@ def build_independent_filter(df, key_prefix):
     else:
         fighter_masks.append(pd.Series(True, index=df.index))
 
+    # *** Country (permissive) ***
+    if country and 'Country' in df.columns:
+        fighter_masks.append(df['Country'].isin(country))
+    else:
+        fighter_masks.append(pd.Series(True, index=df.index))
+
     # --- Opponent‑side per‑filter masks (AND across filters) ---
     opponent_masks = []
     if 'Opponent_FightNumber' in df.columns:
@@ -420,7 +424,6 @@ spider_data, fighter_mask_spider, opponent_mask_spider = build_independent_filte
 spider_hist_all = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
 total_completed_fights = spider_hist_all['FightID'].nunique()
 
-# Use the fighter mask directly on original_data (only completed rows)
 original_completed = original_data[original_data['Win?'].isin(['Yes','No'])]
 fighter_rows = original_completed[fighter_mask_spider.loc[original_completed.index]]
 total_wins = (fighter_rows['Win?'] == 'Yes').sum()
