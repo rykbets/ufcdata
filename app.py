@@ -80,7 +80,7 @@ for key, default in [
         st.session_state[key] = default
 
 # -----------------------------------------------
-# LAST 20 COMPLETED FIGHTS (unchanged)
+# LAST 20 COMPLETED FIGHTS
 # -----------------------------------------------
 st.title("UFC Pre‑Fight Performance Dashboard")
 st.header("Last 20 Completed Fights")
@@ -91,7 +91,7 @@ cols = [c for c in cols if c in last20.columns]
 st.dataframe(last20[cols], use_container_width=True)
 
 # -----------------------------------------------
-# UPCOMING FIGHT MATCHUP (unchanged)
+# UPCOMING FIGHT MATCHUP
 # -----------------------------------------------
 st.header("Upcoming Fight Matchup")
 upcoming_display = original_data[original_data['Win?'].isna() | (original_data['Win?'] == '')]
@@ -424,11 +424,7 @@ spider_data, fighter_mask_spider, opponent_mask_spider = build_independent_filte
 spider_hist_all = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
 total_completed_fights = spider_hist_all['FightID'].nunique()
 
-# Use the already‑filtered spider_data (respects strict filters) + fighter mask
 fighter_rows = spider_hist_all[fighter_mask_spider.loc[spider_hist_all.index]]
-total_wins = (fighter_rows['Win?'] == 'Yes').sum()
-total_fights_fside = len(fighter_rows)
-filtered_wr = total_wins / total_fights_fside * 100 if total_fights_fside > 0 else 0.0
 total_wins = (fighter_rows['Win?'] == 'Yes').sum()
 total_fights_fside = len(fighter_rows)
 filtered_wr = total_wins / total_fights_fside * 100 if total_fights_fside > 0 else 0.0
@@ -468,6 +464,14 @@ else:
                 fight_rows = fight_rows.sort_values('Fighter')
                 f1 = fight_rows.iloc[0]
                 f2 = fight_rows.iloc[1]
+
+                # ---- Show which fighter matches the fighter‑side filters ----
+                mask_f = fighter_mask_spider.loc[fight_rows.index]
+                match_info = []
+                for i, row in fight_rows.iterrows():
+                    match_info.append(f"{row['Fighter']}: {'Yes' if mask_f.loc[i] else 'No'}")
+                st.write("**Matches fighter filters:**  " + "  |  ".join(match_info))
+                # ---------------------------------------------------------------
 
                 st.write("**Auto‑select top differentials for similarity**")
                 c_slider1, c_slider2 = st.columns(2)
