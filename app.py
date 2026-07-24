@@ -568,14 +568,8 @@ else:
                         col3.metric("Total Similarity", f"{total_sim:.1f}")
                         col4.metric("Composite Score", f"{composite:.1f}")
 
-                        high_sim_90 = top_n[top_n['Similarity'] >= 90]
                         high_sim_80 = top_n[top_n['Similarity'] >= 80]
-
-                        wins_90 = (high_sim_90['Win?'] == 'Yes').sum() if len(high_sim_90) > 0 else 0
-                        win_rate_90 = wins_90 / len(high_sim_90) * 100 if len(high_sim_90) > 0 else 0.0
-                        weight_sum_wins_90 = high_sim_90.loc[high_sim_90['Win?'] == 'Yes', 'Similarity'].sum() if wins_90 > 0 else 0.0
-                        weight_sum_all_90 = high_sim_90['Similarity'].sum() if len(high_sim_90) > 0 else 1
-                        weighted_wr_90 = (weight_sum_wins_90 / weight_sum_all_90) * 100 if weight_sum_all_90 > 0 else 0.0
+                        high_sim_60 = top_n[top_n['Similarity'] >= 60]
 
                         wins_80 = (high_sim_80['Win?'] == 'Yes').sum() if len(high_sim_80) > 0 else 0
                         win_rate_80 = wins_80 / len(high_sim_80) * 100 if len(high_sim_80) > 0 else 0.0
@@ -583,11 +577,17 @@ else:
                         weight_sum_all_80 = high_sim_80['Similarity'].sum() if len(high_sim_80) > 0 else 1
                         weighted_wr_80 = (weight_sum_wins_80 / weight_sum_all_80) * 100 if weight_sum_all_80 > 0 else 0.0
 
+                        wins_60 = (high_sim_60['Win?'] == 'Yes').sum() if len(high_sim_60) > 0 else 0
+                        win_rate_60 = wins_60 / len(high_sim_60) * 100 if len(high_sim_60) > 0 else 0.0
+                        weight_sum_wins_60 = high_sim_60.loc[high_sim_60['Win?'] == 'Yes', 'Similarity'].sum() if wins_60 > 0 else 0.0
+                        weight_sum_all_60 = high_sim_60['Similarity'].sum() if len(high_sim_60) > 0 else 1
+                        weighted_wr_60 = (weight_sum_wins_60 / weight_sum_all_60) * 100 if weight_sum_all_60 > 0 else 0.0
+
                         col5, col6, col7, col8 = st.columns(4)
-                        col5.metric("Win Rate (≥90%)", f"{win_rate_90:.1f}%", delta=f"{len(high_sim_90)} fights")
-                        col6.metric("Weighted Win Rate (≥90%)", f"{weighted_wr_90:.1f}%")
-                        col7.metric("Win Rate (≥80%)", f"{win_rate_80:.1f}%", delta=f"{len(high_sim_80)} fights")
-                        col8.metric("Weighted Win Rate (≥80%)", f"{weighted_wr_80:.1f}%")
+                        col5.metric("Win Rate (≥90%)", f"{win_rate_80:.1f}%", delta=f"{len(high_sim_80)} fights")
+                        col6.metric("Weighted Win Rate (≥90%)", f"{weighted_wr_80:.1f}%")
+                        col7.metric("Win Rate (≥80%)", f"{win_rate_60:.1f}%", delta=f"{len(high_sim_60)} fights")
+                        col8.metric("Weighted Win Rate (≥80%)", f"{weighted_wr_60:.1f}%")
 
                         fig_hist = px.histogram(sim_df, x='Similarity', nbins=20, title="Similarity Distribution (Combined)")
                         st.plotly_chart(fig_hist, use_container_width=True, key="sim_hist_chart")
