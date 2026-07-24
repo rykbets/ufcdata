@@ -291,7 +291,10 @@ def build_independent_filter(df, key_prefix):
     # --- Strict AND filters (both rows must satisfy) ---
     if wc: mask_strict &= df['WC'].isin(wc)
     if stance: mask_strict &= df['Stance'].isin(stance)
-    if country: mask_strict &= df['Country'].isin(country)
+    if country and 'Country' in df.columns:
+        fighter_masks.append(df['Country'].isin(country))
+    else:
+        fighter_masks.append(pd.Series(True, index=df.index))
     if sched_rounds: mask_strict &= df['ScheduledRounds'].isin(sched_rounds)
     if title_fight != "All": mask_strict &= df['Title'] == title_fight
     if event_country: mask_strict &= df['EventCountry'].isin(event_country)
