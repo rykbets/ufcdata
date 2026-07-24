@@ -424,8 +424,11 @@ spider_data, fighter_mask_spider, opponent_mask_spider = build_independent_filte
 spider_hist_all = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
 total_completed_fights = spider_hist_all['FightID'].nunique()
 
-original_completed = original_data[original_data['Win?'].isin(['Yes','No'])]
-fighter_rows = original_completed[fighter_mask_spider.loc[original_completed.index]]
+# Use the already‑filtered spider_data (respects strict filters) + fighter mask
+fighter_rows = spider_hist_all[fighter_mask_spider.loc[spider_hist_all.index]]
+total_wins = (fighter_rows['Win?'] == 'Yes').sum()
+total_fights_fside = len(fighter_rows)
+filtered_wr = total_wins / total_fights_fside * 100 if total_fights_fside > 0 else 0.0
 total_wins = (fighter_rows['Win?'] == 'Yes').sum()
 total_fights_fside = len(fighter_rows)
 filtered_wr = total_wins / total_fights_fside * 100 if total_fights_fside > 0 else 0.0
