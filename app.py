@@ -443,6 +443,10 @@ col_f3.metric("Win Rate (filtered)", f"{filtered_wr:.1f}%")
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
 spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
 
+# Initialise session state for manual selections
+if 'manual_spider_vars' not in st.session_state:
+    st.session_state.manual_spider_vars = []
+
 if spider_upcoming.empty:
     st.write("No upcoming fights for similarity.")
 else:
@@ -458,19 +462,18 @@ else:
         else:
             # ---- Fight selector first ----
             up_ids = spider_upcoming['FightID'].unique()
-            # Track previously selected fight to detect changes
             if 'prev_spider_fight' not in st.session_state:
                 st.session_state.prev_spider_fight = None
 
             selected_fight_spider = st.selectbox("Choose an upcoming fight for similarity",
                                                 up_ids, key="spider_fight_select")
 
-            # ---- Auto‑select sliders and similarity variables ----
             fight_changed = selected_fight_spider != st.session_state.prev_spider_fight
             if fight_changed:
                 st.session_state.prev_spider_fight = selected_fight_spider
-                # Reset auto‑selection; new fight will recompute
-                st.session_state.auto_selected_vars = None
+                # Reset auto variables and manual selection for the new fight
+                st.session_state.auto_vars = None
+                st.session_state.manual_spider_vars = []
 
             if selected_fight_spider:
                 fight_rows = spider_upcoming[spider_upcoming['FightID'] == selected_fight_spider]
@@ -484,52 +487,49 @@ else:
                 top_n_f2 = c_slider2.slider("Top N (Fighter 2)", 0, 10, 0, key="top_n_f2")
 
                 # Compute auto_selected_vars based on top differentials
-                if fight_changed or (st.session_state.auto_selected_vars is None and (top_n_f1 > 0 or top_n_f2 > 0)):
-                    if top_n_f1 > 0 or top_n_f2 > 0:
-                        diff_cols = [c for c in f1.index if c.endswith('_opp_diff')]
-                        f1_diffs = {c: abs(f1[c]) for c in diff_cols if pd.notna(f1[c])}
-                        f2_diffs = {c: abs(f2[c]) for c in diff_cols if pd.notna(f2[c])}
-                        top_f1 = sorted(f1_diffs, key=f1_diffs.get, reverse=True)[:top_n_f1]
-                        top_f2 = sorted(f2_diffs, key=f2_diffs.get, reverse=True)[:top_n_f2]
-                        auto_vars = list(set(top_f1 + top_f2).intersection(sim_features))
-                        if auto_vars:
-                            st.session_state.auto_selected_vars = auto_vars
-                        else:
-                            st.session_state.auto_selected_vars = None
+                if top_n_f1 > 0 or top_n_f2 > 0:
+                    diff_cols = [c for c in f1.index if c.endswith('_opp_diff')]
+                    f1_diffs = {c: abs(f1[c]) for c in diff_cols if pd.notna(f1[c])}
+                    f2_diffs = {c: abs(f2[c]) for c in diff_cols if pd.notna(f2[c])}
+                    top_f1 = sorted(f1_diffs, key=f1_diffs.get, reverse=True)[:top_n_f1]
+                    top_f2 = sorted(f2_diffs, key=f2_diffs.get, reverse=True)[:top_n_f2]
+                    auto_vars = list(set(top_f1 + top_f2).intersection(sim_features))
+                    st.session_state.auto_vars = auto_vars if auto_vars else None
+                else:
+                    st.session_state.auto_vars = None
 
-                # Ensure spider_vars is initialised in session state
-                if 'spider_vars' not in st.session_state:
-                    st.session_state.spider_vars = sim_features[:5]
-
-                # When fight changes, update the widget's value
-                if fight_changed:
-                    if st.session_state.auto_selected_vars is not None:
-                        st.session_state.spider_vars = st.session_state.auto_selected_vars
-                    else:
-                        st.session_state.spider_vars = sim_features[:5]
-
-                # Multiselect uses session state directly (no default or value parameter)
-                selected_vars = st.multiselect(
-                    "Select variables for similarity",
+                # Manual variable selector (optional)
+                st.write("**Optional: manually add variables**")
+                st.multiselect(
+                    "Select additional variables",
                     sim_features,
-                    key="spider_vars"
+                    key="manual_spider_vars"
                 )
 
-                # Proceed only if at least one metric selected
+                # Combine auto + manual selections
+                auto_list = st.session_state.auto_vars if st.session_state.auto_vars else []
+                manual_list = st.session_state.manual_spider_vars
+                combined = list(set(auto_list + manual_list).intersection(sim_features))
+
+                # Fallback to first 5 variables if nothing selected at all
+                if not combined:
+                    combined = sim_features[:5]
+
+                # Proceed only if at least one metric chosen
                 available_metrics = ["Euclidean", "Manhattan", "Chebyshev"]
                 distance_metrics = st.multiselect("Distance metrics", available_metrics,
                                                  default=["Euclidean"], key="spider_metrics")
                 if not distance_metrics:
                     st.warning("Please select at least one distance metric.")
-                elif selected_vars:
-                    hist_sub = spider_hist[selected_vars].dropna()
+                else:
+                    hist_sub = spider_hist[combined].dropna()
                     if len(hist_sub) < 2:
                         st.warning("Not enough historical data.")
                     else:
                         scaler_sim = StandardScaler()
                         scaler_sim.fit(hist_sub)
 
-                        up_vals = [float(f1.get(var, 0.0)) for var in selected_vars]
+                        up_vals = [float(f1.get(var, 0.0)) for var in combined]
                         up_vec = np.array([up_vals], dtype=np.float64)
                         up_scaled = scaler_sim.transform(up_vec)
                         hist_scaled = scaler_sim.transform(hist_sub)
