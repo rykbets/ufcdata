@@ -80,6 +80,111 @@ for key, default in [
         st.session_state[key] = default
 
 # -----------------------------------------------
+# PERFORMANCE SUMMARY (unfiltered)
+# -----------------------------------------------
+st.title("UFC Pre‑Fight Performance Dashboard")
+st.header("Overall Performance Summary")
+total = len(data)
+wins = (data['Win?'] == 'Yes').sum()
+win_rate = wins / total * 100 if total > 0 else 0
+col1, col2, col3 = st.columns(3)
+col1.metric("Total Fights", total); col2.metric("Wins", wins); col3.metric("Win Rate", f"{win_rate:.1f}%")
+
+# -----------------------------------------------
+# LAST 20 COMPLETED FIGHTS
+# -----------------------------------------------
+st.header("Last 20 Completed Fights")
+completed = data[data['Win?'].notna() & (data['Win?'].astype(str).str.strip() != '')]
+last20 = completed.sort_values('FightDate', ascending=False).head(20)
+cols = ['FightDate','Fighter','Opponent','Win?','Method','AgeDiff','HeightDiff','ReachDiff','CareerWinPct_diff']
+cols = [c for c in cols if c in last20.columns]
+st.dataframe(last20[cols], use_container_width=True)
+
+# -----------------------------------------------
+# UPCOMING FIGHT MATCHUP
+# -----------------------------------------------
+st.header("Upcoming Fight Matchup")
+upcoming_display = original_data[original_data['Win?'].isna() | (original_data['Win?'] == '')]
+st.write(f"**All upcoming fights:** {len(upcoming_display['FightID'].unique())}")
+
+if not upcoming_display.empty:
+    upcoming_ids = sorted(upcoming_display['FightID'].unique())
+    selected_fight = st.selectbox("Choose an upcoming fight", upcoming_ids, key="upcoming_select")
+    if selected_fight:
+        fight_rows = upcoming_display[upcoming_display['FightID'] == selected_fight]
+        if len(fight_rows) == 2:
+            fight_rows = fight_rows.sort_values('Fighter')
+            f1 = fight_rows.iloc[0]
+            f2 = fight_rows.iloc[1]
+            st.session_state.selected_fight_row = f1
+            st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
+
+            sections = {}
+            identity_cols = ['WC','Title','ScheduledRounds','Stance','Country','HometownFighter','EventCountry']
+            sections["Identity"] = [c for c in identity_cols if c in f1.index]
+            physical_cols = ['Age','Height','Reach','AgeDiff','HeightDiff','ReachDiff']
+            sections["Physical"] = [c for c in physical_cols if c in f1.index]
+            fight_hist_cols = ['FightNumber','DaysSincePrev','Avg3DaysGap','Prev7WinPct','CareerWinPct',
+                               'DaysSincePrev_diff','Avg3DaysGap_diff','CareerWinPct_diff','FightNumber_diff']
+            sections["Fight History"] = [c for c in fight_hist_cols if c in f1.index]
+            sections["Normalized Simple Stats (diff)"] = [c for c in f1.index if c.startswith('adj_') and c.endswith('_diff')]
+            odds_cols = ['FighterOddsNum','PrevFighterOddsNum']
+            sections["Odds"] = [c for c in odds_cols if c in f1.index]
+            sections["Ratings (Raw)"] = [c for c in f1.index if ('Colley' in c or 'Massey' in c) and 'avg7' not in c]
+            sections["Ratings (7‑Fight Avg)"] = [c for c in f1.index if 'avg7' in c]
+            sections["Striking & Grappling Final Differentials"] = [c for c in f1.index if c.endswith('_opp_diff')]
+            sections["Outcomes"] = [c for c in f1.index if 'Outcome' in c]
+            other_cols = ['Prev1_Title','IsNewWeightClass','PrevFighterOddsNum']
+            sections["Other"] = [c for c in other_cols if c in f1.index]
+
+            rows = []
+            for sec_name, cols in sections.items():
+                if not cols: continue
+                rows.append({"Stat": f"--- {sec_name} ---", f1['Fighter']: "", f2['Fighter']: ""})
+                for c in cols:
+                    val1 = f1[c]; val2 = f2[c]
+                    def fmt(v):
+                        if isinstance(v, (int,float)) and pd.notna(v): return f"{v:.2f}"
+                        elif pd.isna(v): return ""
+                        else: return str(v)
+                    rows.append({"Stat": c, f1['Fighter']: fmt(val1), f2['Fighter']: fmt(val2)})
+            df_stats = pd.DataFrame(rows)
+            st.dataframe(df_stats, use_container_width=True, hide_index=True)
+
+            # Top 10 Differentials
+            st.subheader("Top 10 Differentials")
+            diffs_f1 = {}
+            diffs_f2 = {}
+            for c in f1.index:
+                if (c.endswith('_opp_diff') or (c.startswith('adj_') and c.endswith('_diff'))):
+                    if pd.notna(f1[c]): diffs_f1[c] = f1[c]
+                    if pd.notna(f2[c]): diffs_f2[c] = f2[c]
+            top10_f1 = sorted(diffs_f1.items(), key=lambda x: x[1], reverse=True)[:10]
+            top10_f2 = sorted(diffs_f2.items(), key=lambda x: x[1], reverse=True)[:10]
+
+            colA, colB = st.columns(2)
+            with colA:
+                st.write(f"**{f1['Fighter']}**")
+                if top10_f1:
+                    df_f1 = pd.DataFrame(top10_f1, columns=["Stat", "Value"])
+                    df_f1["Value"] = df_f1["Value"].apply(lambda x: f"{x:+.2f}")
+                    st.dataframe(df_f1, hide_index=True, use_container_width=True)
+                else:
+                    st.write("No differentials available.")
+            with colB:
+                st.write(f"**{f2['Fighter']}**")
+                if top10_f2:
+                    df_f2 = pd.DataFrame(top10_f2, columns=["Stat", "Value"])
+                    df_f2["Value"] = df_f2["Value"].apply(lambda x: f"{x:+.2f}")
+                    st.dataframe(df_f2, hide_index=True, use_container_width=True)
+                else:
+                    st.write("No differentials available.")
+        else:
+            st.warning("Fight data incomplete (expected 2 rows).")
+else:
+    st.info("No upcoming fights available.")
+
+# -----------------------------------------------
 # INDEPENDENT FILTER HELPER (PERMISSIVE FIXES)
 # -----------------------------------------------
 def build_independent_filter(df, key_prefix):
@@ -317,125 +422,21 @@ def build_independent_filter(df, key_prefix):
     return df[final_mask].copy()
 
 # -----------------------------------------------
-# GLOBAL SPIDER FILTERS (placed at top)
-# -----------------------------------------------
-st.title("UFC Pre‑Fight Performance Dashboard")
-st.header("Filters (apply to Summary, Similarity & Feature Importance)")
-spider_data = build_independent_filter(original_data.copy(), "spider")
-
-# -----------------------------------------------
-# OVERALL PERFORMANCE SUMMARY (filtered)
-# -----------------------------------------------
-st.header("Overall Performance Summary (Filtered)")
-total_f = len(spider_data)
-wins_f = (spider_data['Win?'] == 'Yes').sum()
-win_rate_f = wins_f / total_f * 100 if total_f > 0 else 0
-col1, col2, col3 = st.columns(3)
-col1.metric("Total Fights (filtered)", total_f)
-col2.metric("Wins (filtered)", wins_f)
-col3.metric("Win Rate (filtered)", f"{win_rate_f:.1f}%")
-
-# -----------------------------------------------
-# LAST 20 COMPLETED FIGHTS (unchanged, from full data)
-# -----------------------------------------------
-st.header("Last 20 Completed Fights")
-completed = data[data['Win?'].notna() & (data['Win?'].astype(str).str.strip() != '')]
-last20 = completed.sort_values('FightDate', ascending=False).head(20)
-cols = ['FightDate','Fighter','Opponent','Win?','Method','AgeDiff','HeightDiff','ReachDiff','CareerWinPct_diff']
-cols = [c for c in cols if c in last20.columns]
-st.dataframe(last20[cols], use_container_width=True)
-
-# -----------------------------------------------
-# UPCOMING FIGHT MATCHUP
-# -----------------------------------------------
-st.header("Upcoming Fight Matchup")
-upcoming_display = original_data[original_data['Win?'].isna() | (original_data['Win?'] == '')]
-st.write(f"**All upcoming fights:** {len(upcoming_display['FightID'].unique())}")
-
-if not upcoming_display.empty:
-    upcoming_ids = sorted(upcoming_display['FightID'].unique())
-    selected_fight = st.selectbox("Choose an upcoming fight", upcoming_ids, key="upcoming_select")
-    if selected_fight:
-        fight_rows = upcoming_display[upcoming_display['FightID'] == selected_fight]
-        if len(fight_rows) == 2:
-            fight_rows = fight_rows.sort_values('Fighter')
-            f1 = fight_rows.iloc[0]
-            f2 = fight_rows.iloc[1]
-            st.session_state.selected_fight_row = f1
-            st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
-
-            sections = {}
-            identity_cols = ['WC','Title','ScheduledRounds','Stance','Country','HometownFighter','EventCountry']
-            sections["Identity"] = [c for c in identity_cols if c in f1.index]
-            physical_cols = ['Age','Height','Reach','AgeDiff','HeightDiff','ReachDiff']
-            sections["Physical"] = [c for c in physical_cols if c in f1.index]
-            fight_hist_cols = ['FightNumber','DaysSincePrev','Avg3DaysGap','Prev7WinPct','CareerWinPct',
-                               'DaysSincePrev_diff','Avg3DaysGap_diff','CareerWinPct_diff','FightNumber_diff']
-            sections["Fight History"] = [c for c in fight_hist_cols if c in f1.index]
-            sections["Normalized Simple Stats (diff)"] = [c for c in f1.index if c.startswith('adj_') and c.endswith('_diff')]
-            odds_cols = ['FighterOddsNum','PrevFighterOddsNum']
-            sections["Odds"] = [c for c in odds_cols if c in f1.index]
-            sections["Ratings (Raw)"] = [c for c in f1.index if ('Colley' in c or 'Massey' in c) and 'avg7' not in c]
-            sections["Ratings (7‑Fight Avg)"] = [c for c in f1.index if 'avg7' in c]
-            sections["Striking & Grappling Final Differentials"] = [c for c in f1.index if c.endswith('_opp_diff')]
-            sections["Outcomes"] = [c for c in f1.index if 'Outcome' in c]
-            other_cols = ['Prev1_Title','IsNewWeightClass','PrevFighterOddsNum']
-            sections["Other"] = [c for c in other_cols if c in f1.index]
-
-            rows = []
-            for sec_name, cols in sections.items():
-                if not cols: continue
-                rows.append({"Stat": f"--- {sec_name} ---", f1['Fighter']: "", f2['Fighter']: ""})
-                for c in cols:
-                    val1 = f1[c]; val2 = f2[c]
-                    def fmt(v):
-                        if isinstance(v, (int,float)) and pd.notna(v): return f"{v:.2f}"
-                        elif pd.isna(v): return ""
-                        else: return str(v)
-                    rows.append({"Stat": c, f1['Fighter']: fmt(val1), f2['Fighter']: fmt(val2)})
-            df_stats = pd.DataFrame(rows)
-            st.dataframe(df_stats, use_container_width=True, hide_index=True)
-
-            # Top 10 Differentials
-            st.subheader("Top 10 Differentials")
-            diffs_f1 = {}
-            diffs_f2 = {}
-            for c in f1.index:
-                if (c.endswith('_opp_diff') or (c.startswith('adj_') and c.endswith('_diff'))):
-                    if pd.notna(f1[c]): diffs_f1[c] = f1[c]
-                    if pd.notna(f2[c]): diffs_f2[c] = f2[c]
-            top10_f1 = sorted(diffs_f1.items(), key=lambda x: x[1], reverse=True)[:10]
-            top10_f2 = sorted(diffs_f2.items(), key=lambda x: x[1], reverse=True)[:10]
-
-            colA, colB = st.columns(2)
-            with colA:
-                st.write(f"**{f1['Fighter']}**")
-                if top10_f1:
-                    df_f1 = pd.DataFrame(top10_f1, columns=["Stat", "Value"])
-                    df_f1["Value"] = df_f1["Value"].apply(lambda x: f"{x:+.2f}")
-                    st.dataframe(df_f1, hide_index=True, use_container_width=True)
-                else:
-                    st.write("No differentials available.")
-            with colB:
-                st.write(f"**{f2['Fighter']}**")
-                if top10_f2:
-                    df_f2 = pd.DataFrame(top10_f2, columns=["Stat", "Value"])
-                    df_f2["Value"] = df_f2["Value"].apply(lambda x: f"{x:+.2f}")
-                    st.dataframe(df_f2, hide_index=True, use_container_width=True)
-                else:
-                    st.write("No differentials available.")
-        else:
-            st.warning("Fight data incomplete (expected 2 rows).")
-else:
-    st.info("No upcoming fights available.")
-
-# -----------------------------------------------
 # SPIDER CHART (Similarity) + AUTO‑SELECT + FILTERED STATS + TREE
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
-# We reuse spider_data from the top filter – no need to rebuild.
-spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
+spider_data_full = original_data.copy()
+spider_data = build_independent_filter(spider_data_full, "spider")
+
+# ----- Filtered performance summary (moved inline next to total matches) -----
+spider_hist_all = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
+filtered_total = len(spider_data)
+filtered_wins = (spider_hist_all['Win?'] == 'Yes').sum()
+filtered_wr = filtered_wins / len(spider_hist_all) * 100 if len(spider_hist_all) > 0 else 0.0
+# ----------------------------------------------------------------------------
+
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
+spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
 
 if spider_upcoming.empty:
     st.write("No upcoming fights for similarity.")
@@ -535,7 +536,11 @@ else:
                         sim_df = sim_df.sort_values('Similarity', ascending=False)
 
                         total_hist_count = len(sim_df)
-                        st.metric("Total historical fights matching filters", total_hist_count)
+                        # Show total matches + wins/winrate side by side
+                        cm1, cm2, cm3 = st.columns(3)
+                        cm1.metric("Total historical fights matching filters", total_hist_count)
+                        cm2.metric("Wins (filtered)", filtered_wins)
+                        cm3.metric("Win Rate (filtered)", f"{filtered_wr:.1f}%")
 
                         st.subheader("Similarity Metrics (Top N)")
                         n_top = st.slider("Number of top similar fights", 5, 100, 50, step=5, key="spider_top_n")
