@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pdimport streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -80,10 +81,10 @@ for key, default in [
         st.session_state[key] = default
 
 # -----------------------------------------------
-# PERFORMANCE SUMMARY
+# PERFORMANCE SUMMARY (unfiltered)
 # -----------------------------------------------
 st.title("UFC Pre‑Fight Performance Dashboard")
-st.header("Performance Summary")
+st.header("Overall Performance Summary")
 total = len(data)
 wins = (data['Win?'] == 'Yes').sum()
 win_rate = wins / total * 100 if total > 0 else 0
@@ -151,29 +152,30 @@ if not upcoming_display.empty:
             df_stats = pd.DataFrame(rows)
             st.dataframe(df_stats, use_container_width=True, hide_index=True)
 
-            st.subheader("Top 5 Differentials")
+            # Top 10 Differentials
+            st.subheader("Top 10 Differentials")
             diffs_f1 = {}
             diffs_f2 = {}
             for c in f1.index:
                 if (c.endswith('_opp_diff') or (c.startswith('adj_') and c.endswith('_diff'))):
                     if pd.notna(f1[c]): diffs_f1[c] = f1[c]
                     if pd.notna(f2[c]): diffs_f2[c] = f2[c]
-            top5_f1 = sorted(diffs_f1.items(), key=lambda x: x[1], reverse=True)[:5]
-            top5_f2 = sorted(diffs_f2.items(), key=lambda x: x[1], reverse=True)[:5]
+            top10_f1 = sorted(diffs_f1.items(), key=lambda x: x[1], reverse=True)[:10]
+            top10_f2 = sorted(diffs_f2.items(), key=lambda x: x[1], reverse=True)[:10]
 
             colA, colB = st.columns(2)
             with colA:
                 st.write(f"**{f1['Fighter']}**")
-                if top5_f1:
-                    df_f1 = pd.DataFrame(top5_f1, columns=["Stat", "Value"])
+                if top10_f1:
+                    df_f1 = pd.DataFrame(top10_f1, columns=["Stat", "Value"])
                     df_f1["Value"] = df_f1["Value"].apply(lambda x: f"{x:+.2f}")
                     st.dataframe(df_f1, hide_index=True, use_container_width=True)
                 else:
                     st.write("No differentials available.")
             with colB:
                 st.write(f"**{f2['Fighter']}**")
-                if top5_f2:
-                    df_f2 = pd.DataFrame(top5_f2, columns=["Stat", "Value"])
+                if top10_f2:
+                    df_f2 = pd.DataFrame(top10_f2, columns=["Stat", "Value"])
                     df_f2["Value"] = df_f2["Value"].apply(lambda x: f"{x:+.2f}")
                     st.dataframe(df_f2, hide_index=True, use_container_width=True)
                 else:
@@ -190,7 +192,7 @@ def build_independent_filter(df, key_prefix):
     """
     Returns filtered df.
     - Strict AND filters (general, physical, odds, ratings, new WC) – both rows must pass.
-    - Permissive filters (title, outcomes, hometown, fighter's own fight number, opponent fight number) 
+    - Permissive filters (title, outcomes, hometown, fighter's own fight number, opponent fight number)
       are split into fighter‑side and opponent‑side.
       For a row to contribute to keeping a fight, it must satisfy:
          (fighter‑side conditions) AND (opponent‑side conditions).
@@ -237,7 +239,7 @@ def build_independent_filter(df, key_prefix):
             odds_min, odds_max = st.slider("Fighter Odds", int(df['FighterOddsNum'].min()), int(df['FighterOddsNum'].max()), (int(df['FighterOddsNum'].min()), int(df['FighterOddsNum'].max())), step=10, key=f"{key_prefix}_odds") if 'FighterOddsNum' in df.columns else (-1000,1000)
             podds_min, podds_max = st.slider("Prev Fighter Odds", int(df['PrevFighterOddsNum'].min()), int(df['PrevFighterOddsNum'].max()), (int(df['PrevFighterOddsNum'].min()), int(df['PrevFighterOddsNum'].max())), step=10, key=f"{key_prefix}_podds") if 'PrevFighterOddsNum' in df.columns else (-1000,1000)
 
-        # --- Previous Outcomes ---
+        # --- Previous Outcomes (two columns) ---
         with st.expander("Previous Outcomes", expanded=False):
             skip_nc = st.checkbox("Skip NC outcomes", key=f"{key_prefix}_skip_nc")
             if skip_nc:
@@ -255,18 +257,21 @@ def build_independent_filter(df, key_prefix):
             outcome_options_raw = all_outcomes_raw + ["Win (any)", "Loss (any)"]
             outcome_options_career = all_outcomes_career + ["Win (any)", "Loss (any)"]
 
-            prev1 = st.multiselect("Prev Fight 1", outcome_options_raw, key=f"{key_prefix}_prev1")
-            prev2 = st.multiselect("Prev Fight 2", outcome_options_raw, key=f"{key_prefix}_prev2")
-            prev3 = st.multiselect("Prev Fight 3", outcome_options_raw, key=f"{key_prefix}_prev3")
-            opp_prev1 = st.multiselect("Opp Prev 1", outcome_options_raw, key=f"{key_prefix}_opp_prev1")
-            opp_prev2 = st.multiselect("Opp Prev 2", outcome_options_raw, key=f"{key_prefix}_opp_prev2")
-            opp_prev3 = st.multiselect("Opp Prev 3", outcome_options_raw, key=f"{key_prefix}_opp_prev3")
-            career1 = st.multiselect("Career F1", outcome_options_career, key=f"{key_prefix}_career1")
-            career2 = st.multiselect("Career F2", outcome_options_career, key=f"{key_prefix}_career2")
-            career3 = st.multiselect("Career F3", outcome_options_career, key=f"{key_prefix}_career3")
-            opp_career1 = st.multiselect("Opp Career F1", outcome_options_career, key=f"{key_prefix}_opp_career1")
-            opp_career2 = st.multiselect("Opp Career F2", outcome_options_career, key=f"{key_prefix}_opp_career2")
-            opp_career3 = st.multiselect("Opp Career F3", outcome_options_career, key=f"{key_prefix}_opp_career3")
+            col_f, col_o = st.columns(2)
+            with col_f:
+                prev1 = st.multiselect("Prev Fight 1", outcome_options_raw, key=f"{key_prefix}_prev1")
+                prev2 = st.multiselect("Prev Fight 2", outcome_options_raw, key=f"{key_prefix}_prev2")
+                prev3 = st.multiselect("Prev Fight 3", outcome_options_raw, key=f"{key_prefix}_prev3")
+                career1 = st.multiselect("Career F1", outcome_options_career, key=f"{key_prefix}_career1")
+                career2 = st.multiselect("Career F2", outcome_options_career, key=f"{key_prefix}_career2")
+                career3 = st.multiselect("Career F3", outcome_options_career, key=f"{key_prefix}_career3")
+            with col_o:
+                opp_prev1 = st.multiselect("Opp Prev 1", outcome_options_raw, key=f"{key_prefix}_opp_prev1")
+                opp_prev2 = st.multiselect("Opp Prev 2", outcome_options_raw, key=f"{key_prefix}_opp_prev2")
+                opp_prev3 = st.multiselect("Opp Prev 3", outcome_options_raw, key=f"{key_prefix}_opp_prev3")
+                opp_career1 = st.multiselect("Opp Career F1", outcome_options_career, key=f"{key_prefix}_opp_career1")
+                opp_career2 = st.multiselect("Opp Career F2", outcome_options_career, key=f"{key_prefix}_opp_career2")
+                opp_career3 = st.multiselect("Opp Career F3", outcome_options_career, key=f"{key_prefix}_opp_career3")
 
         # --- Ratings ---
         with st.expander("Ratings", expanded=False):
@@ -374,7 +379,7 @@ def build_independent_filter(df, key_prefix):
     # --- Opponent‑side per‑filter masks (AND across filters) ---
     opponent_masks = []
 
-    # Opponent's fight number (permissive) – NEW
+    # Opponent's fight number (permissive)
     if 'Opponent_FightNumber' in df.columns:
         opponent_masks.append((df['Opponent_FightNumber'] >= ofn_min) & (df['Opponent_FightNumber'] <= ofn_max))
     else:
@@ -427,11 +432,23 @@ def build_independent_filter(df, key_prefix):
     return df[final_mask].copy()
 
 # -----------------------------------------------
-# SPIDER CHART (Similarity) + SPIDER DECISION TREE
+# SPIDER CHART (Similarity) + AUTO‑SELECT SLIDERS + FILTERED STATS
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
 spider_data = build_independent_filter(spider_data_full, "spider")
+
+# ----- Filtered performance summary -----
+spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
+filtered_total = len(spider_data)
+filtered_wins = (spider_hist['Win?'] == 'Yes').sum()
+filtered_wr = filtered_wins / len(spider_hist) * 100 if len(spider_hist) > 0 else 0.0
+st.subheader("Filtered Performance Summary")
+col_f1, col_f2, col_f3 = st.columns(3)
+col_f1.metric("Total Fights (filtered)", filtered_total)
+col_f2.metric("Wins (filtered)", filtered_wins)
+col_f3.metric("Win Rate (filtered)", f"{filtered_wr:.1f}%")
+# ------------------------------------------
 
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
 spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
@@ -449,9 +466,22 @@ else:
         if not sim_features:
             st.warning("No numeric features for similarity.")
         else:
-            selected_vars = st.multiselect("Select variables for similarity", sim_features, default=sim_features[:5], max_selections=8, key="spider_vars")
+            # ---- Auto-select similarity sliders ----
+            st.write("**Auto‑select top differentials for similarity**")
+            c_slider1, c_slider2 = st.columns(2)
+            top_n_f1 = c_slider1.slider("Top N (Fighter 1)", 0, 10, 0, key="top_n_f1")
+            top_n_f2 = c_slider2.slider("Top N (Fighter 2)", 0, 10, 0, key="top_n_f2")
+
+            default_vars = sim_features[:5]  # fallback
+            # Compute default list if sliders are active and a fight is selected later
+            # We'll handle defaults after selecting the fight.
+
+            selected_vars = st.multiselect("Select variables for similarity", sim_features,
+                                           default=default_vars, max_selections=8, key="spider_vars")
+
             available_metrics = ["Euclidean", "Manhattan", "Chebyshev"]
-            distance_metrics = st.multiselect("Distance metrics", available_metrics, default=["Euclidean"], key="spider_metrics")
+            distance_metrics = st.multiselect("Distance metrics", available_metrics,
+                                             default=["Euclidean"], key="spider_metrics")
             if not distance_metrics:
                 st.warning("Please select at least one distance metric.")
             elif selected_vars:
@@ -462,13 +492,40 @@ else:
                     scaler_sim = StandardScaler()
                     scaler_sim.fit(hist_sub)
                     up_ids = spider_upcoming['FightID'].unique()
-                    selected_fight_spider = st.selectbox("Choose an upcoming fight for similarity", up_ids, key="spider_fight_select")
+                    selected_fight_spider = st.selectbox("Choose an upcoming fight for similarity",
+                                                        up_ids, key="spider_fight_select")
                     if selected_fight_spider:
                         fight_rows = spider_upcoming[spider_upcoming['FightID'] == selected_fight_spider]
                         fight_rows = fight_rows.sort_values('Fighter')
                         f1 = fight_rows.iloc[0]
                         f2 = fight_rows.iloc[1]
+
+                        # Auto‑select similarity variables based on top N differentials
+                        if top_n_f1 > 0 or top_n_f2 > 0:
+                            # Find columns that are _opp_diff and have values
+                            diff_cols = [c for c in f1.index if c.endswith('_opp_diff')]
+                            # Compute absolute values for each fighter
+                            f1_diffs = {c: abs(f1[c]) for c in diff_cols if pd.notna(f1[c])}
+                            f2_diffs = {c: abs(f2[c]) for c in diff_cols if pd.notna(f2[c])}
+                            # Get top N for each
+                            top_f1 = sorted(f1_diffs, key=f1_diffs.get, reverse=True)[:top_n_f1]
+                            top_f2 = sorted(f2_diffs, key=f2_diffs.get, reverse=True)[:top_n_f2]
+                            # Union, preserving only those that are in sim_features
+                            auto_vars = list(set(top_f1 + top_f2).intersection(sim_features))
+                            if auto_vars:
+                                # Update the multiselect default (only if the user hasn't manually changed it yet)
+                                # Since we can't dynamically change the default, we'll use session state to keep the selection
+                                if 'spider_vars' not in st.session_state or st.session_state.spider_vars == default_vars:
+                                    st.session_state.spider_vars = auto_vars
+                                # Re‑compute hist_sub with the new selection
+                                hist_sub = spider_hist[st.session_state.spider_vars].dropna()
+                            else:
+                                st.warning("No matching differentials found, using previous selection.")
+
                         st.write(f"### {f1['Fighter']} vs {f2['Fighter']}")
+
+                        # Update the multiselect if auto_vars changed
+                        # The similarity calculation uses selected_vars (from the widget) already; proceed.
 
                         up_vals = [float(f1.get(var, 0.0)) for var in selected_vars]
                         up_vec = np.array([up_vals], dtype=np.float64)
@@ -632,12 +689,12 @@ else:
                                         st.dataframe(leaf_df, use_container_width=True, hide_index=True)
 
 # -----------------------------------------------
-# FEATURE IMPORTANCE
+# FEATURE IMPORTANCE (uses spider filtered data)
 # -----------------------------------------------
-st.header("Top 20 Feature Importance (Full Data, No Absolute Ratings)")
-hist_imp_full = data[data['Win?'].isin(['Yes','No'])].copy()
+st.header("Feature Importance (based on Spider Filters)")
+hist_imp_full = spider_hist.copy()   # already filtered, only completed fights
 if len(hist_imp_full) < 10:
-    st.warning("Too few historical fights to compute importance.")
+    st.warning("Too few historical fights to compute importance (apply broader filters).")
 else:
     hist_imp_full['Target'] = (hist_imp_full['Win?'] == 'Yes').astype(int)
     feats = [c for c in numeric_features if c in hist_imp_full.columns and c not in abs_rating_cols]
@@ -650,10 +707,10 @@ else:
             mi = mutual_info_classif(X_imp, y_mi, discrete_features=False, random_state=42)
             mi_df = pd.DataFrame({'Feature': feats, 'MI': mi}).sort_values('MI', ascending=False).head(20)
             fig_mi = px.bar(mi_df, x='MI', y='Feature', orientation='h',
-                            title="Top 20 Mutual Information")
+                            title="Top 20 Mutual Information (filtered)")
             st.plotly_chart(fig_mi, use_container_width=True, key="mi_plot")
 
-            if st.button("Compute Lasso Importance (all features)"):
+            if st.button("Compute Lasso Importance (filtered)"):
                 with st.spinner("Fitting LassoCV..."):
                     X_lasso = hist_imp_full[feats].copy()
                     y_lasso = hist_imp_full['Target']
@@ -670,15 +727,15 @@ else:
                     coef = lasso.coef_.flatten()
                     coef_df = pd.DataFrame({'Feature': feats, 'Coefficient': coef})
                     coef_df = coef_df[coef_df['Coefficient'] != 0].sort_values('Coefficient', key=abs, ascending=False)
-                    st.subheader("Lasso Non‑Zero Coefficients")
+                    st.subheader("Lasso Non‑Zero Coefficients (filtered)")
                     if len(coef_df) > 0:
                         fig_lasso = px.bar(coef_df.head(30), x='Coefficient', y='Feature', orientation='h',
-                                           title="Lasso Coefficients")
+                                           title="Lasso Coefficients (filtered)")
                         st.plotly_chart(fig_lasso, use_container_width=True, key="lasso_plot")
                     else:
                         st.write("Lasso eliminated all features.")
 
-            if st.button("Compute Random Forest Importance (all features)"):
+            if st.button("Compute Random Forest Importance (filtered)"):
                 with st.spinner("Training Random Forest..."):
                     X_rf = hist_imp_full[feats].copy()
                     y_rf = hist_imp_full['Target']
@@ -687,9 +744,9 @@ else:
                     rf = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
                     rf.fit(X_rf_imp, y_rf)
                     rf_imp = pd.DataFrame({'Feature': feats, 'Importance': rf.feature_importances_}).sort_values('Importance', ascending=False).head(30)
-                    st.subheader("Random Forest Feature Importance (Gini)")
+                    st.subheader("Random Forest Feature Importance (filtered)")
                     fig_rf = px.bar(rf_imp, x='Importance', y='Feature', orientation='h',
-                                    title="Random Forest Feature Importance")
+                                    title="Random Forest Feature Importance (filtered)")
                     st.plotly_chart(fig_rf, use_container_width=True, key="rf_plot")
         else:
             st.warning("Not enough complete rows for MI.")
