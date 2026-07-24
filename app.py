@@ -420,9 +420,8 @@ spider_data = build_independent_filter(spider_data_full, "spider")
 
 # ----- Pre‑compute filtered historical summary (for inline display) -----
 spider_hist_all = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
-filtered_wins = (spider_hist_all['Win?'] == 'Yes').sum()
-filtered_total_h = len(spider_hist_all)
-filtered_wr = filtered_wins / filtered_total_h * 100 if filtered_total_h > 0 else 0.0
+total_completed_fights = spider_hist_all['FightID'].nunique()
+total_fighters = spider_hist_all['Fighter'].nunique()
 # ----------------------------------------------------------------------------
 
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
@@ -528,8 +527,8 @@ else:
                         # Display the three inline metrics
                         cm1, cm2, cm3 = st.columns(3)
                         cm1.metric("Total historical fights matching filters", total_hist_count)
-                        cm2.metric("Wins (filtered)", filtered_wins)
-                        cm3.metric("Win Rate (filtered)", f"{filtered_wr:.1f}%")
+                        cm2.metric("Total Completed Fights", total_completed_fights)
+                        cm3.metric("Total Fighters", total_fighters)
 
                         st.subheader("Similarity Metrics (Top N)")
                         n_top = st.slider("Number of top similar fights", 5, 100, 50, step=5, key="spider_top_n")
