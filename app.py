@@ -175,7 +175,7 @@ else:
     st.info("No upcoming fights available.")
 
 # -----------------------------------------------
-# INDEPENDENT FILTER HELPER (unchanged)
+# INDEPENDENT FILTER HELPER (PERMISSIVE FIXES)
 # -----------------------------------------------
 def build_independent_filter(df, key_prefix):
     """
@@ -421,9 +421,36 @@ spider_data = build_independent_filter(spider_data_full, "spider")
 # ----- Pre‑compute filtered historical summary (for inline display) -----
 spider_hist_all = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
 total_completed_fights = spider_hist_all['FightID'].nunique()
-total_wins = (spider_hist_all['Win?'] == 'Yes').sum()
-total_losses = (spider_hist_all['Win?'] == 'No').sum()
-filtered_wr = total_wins / (total_wins + total_losses) * 100 if (total_wins + total_losses) > 0 else 0.0
+
+# Determine whether any fighter‑side outcome or title condition is active
+fighter_conds_active = any([
+    prev1, prev2, prev3, career1, career2, career3,
+    (prev_title != "All")
+])
+if fighter_conds_active:
+    # Re‑create the fighter‑side mask (same logic as in the filter)
+    f_masks = []
+    f_masks.append(outcome_cond(prev1_col, prev1))
+    f_masks.append(outcome_cond(prev2_col, prev2))
+    f_masks.append(outcome_cond(prev3_col, prev3))
+    f_masks.append(outcome_cond(career1_col, career1))
+    f_masks.append(outcome_cond(career2_col, career2))
+    f_masks.append(outcome_cond(career3_col, career3))
+    if prev_title != "All" and 'Prev1_Title' in spider_hist_all.columns:
+        f_masks.append(spider_hist_all['Prev1_Title'].str.strip().str.lower() == prev_title.lower())
+    fighter_mask = f_masks[0]
+    for m in f_masks[1:]:
+        fighter_mask &= m
+    fighter_rows = spider_hist_all[fighter_mask]
+    total_wins = (fighter_rows['Win?'] == 'Yes').sum()
+    total_fights_fside = len(fighter_rows)
+    filtered_wr = total_wins / total_fights_fside * 100 if total_fights_fside > 0 else 0.0
+else:
+    # Fallback: symmetric win rate (50%)
+    total_wins = (spider_hist_all['Win?'] == 'Yes').sum()
+    total_losses = (spider_hist_all['Win?'] == 'No').sum()
+    filtered_wr = total_wins / (total_wins + total_losses) * 100 if (total_wins + total_losses) > 0 else 0.0
+
 # ----------------------------------------------------------------------------
 
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
@@ -526,11 +553,10 @@ else:
                         sim_df = sim_df.sort_values('Similarity', ascending=False)
 
                         total_hist_count = len(sim_df)
-                        # Display the three inline metrics
-                        cm1, cm2, cm3 = st.columns(3)
-                        cm1.metric("Total historical fights matching filters", total_hist_count)
-                        cm2.metric("Total Completed Fights", total_completed_fights)
-                        cm3.metric("Win Rate (filtered)", f"{filtered_wr:.1f}%")
+                        # Display the two inline metrics
+                        cm1, cm2 = st.columns(2)
+                        cm1.metric("Total Completed Fights", total_completed_fights)
+                        cm2.metric("Win Rate (filtered)", f"{filtered_wr:.1f}%")
 
                         st.subheader("Similarity Metrics (Top N)")
                         n_top = st.slider("Number of top similar fights", 5, 100, 50, step=5, key="spider_top_n")
