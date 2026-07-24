@@ -584,10 +584,10 @@ else:
                         weighted_wr_60 = (weight_sum_wins_60 / weight_sum_all_60) * 100 if weight_sum_all_60 > 0 else 0.0
 
                         col5, col6, col7, col8 = st.columns(4)
-                        col5.metric("Win Rate (≥90%)", f"{win_rate_80:.1f}%", delta=f"{len(high_sim_80)} fights")
-                        col6.metric("Weighted Win Rate (≥90%)", f"{weighted_wr_80:.1f}%")
-                        col7.metric("Win Rate (≥80%)", f"{win_rate_60:.1f}%", delta=f"{len(high_sim_60)} fights")
-                        col8.metric("Weighted Win Rate (≥80%)", f"{weighted_wr_60:.1f}%")
+                        col5.metric("Win Rate (≥80%)", f"{win_rate_80:.1f}%", delta=f"{len(high_sim_80)} fights")
+                        col6.metric("Weighted Win Rate (≥80%)", f"{weighted_wr_80:.1f}%")
+                        col7.metric("Win Rate (≥60%)", f"{win_rate_60:.1f}%", delta=f"{len(high_sim_60)} fights")
+                        col8.metric("Weighted Win Rate (≥60%)", f"{weighted_wr_60:.1f}%")
 
                         fig_hist = px.histogram(sim_df, x='Similarity', nbins=20, title="Similarity Distribution (Combined)")
                         st.plotly_chart(fig_hist, use_container_width=True, key="sim_hist_chart")
