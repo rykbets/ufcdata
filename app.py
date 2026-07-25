@@ -409,7 +409,7 @@ def build_independent_filter(df, key_prefix):
         opponent_mask &= m
 
     row_permissive = fighter_mask & opponent_mask
-    fight_ok = row_permissive.groupby(df['FightID']).transform('any')
+    fight_ok = row_permissive.groupby(df['FightID']).transform('all')
     final_mask = mask_strict & fight_ok
 
     return df[final_mask].copy(), fighter_mask, opponent_mask
