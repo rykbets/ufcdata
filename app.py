@@ -728,56 +728,66 @@ if len(hist_imp_full) < 10:
 else:
     hist_imp_full['Target'] = (hist_imp_full['Win?'] == 'Yes').astype(int)
     feats = [c for c in numeric_features if c in hist_imp_full.columns and c not in abs_rating_cols]
-    if feats:
-        X_mi = hist_imp_full[feats].dropna()
-        if len(X_mi) >= 10:
-            imputer = SimpleImputer(strategy='median')
-            X_imp = imputer.fit_transform(X_mi)
-            y_mi = hist_imp_full.loc[X_mi.index, 'Target']
-            mi = mutual_info_classif(X_imp, y_mi, discrete_features=False, random_state=42)
-            mi_df = pd.DataFrame({'Feature': feats, 'MI': mi}).sort_values('MI', ascending=False).head(20)
-            fig_mi = px.bar(mi_df, x='MI', y='Feature', orientation='h',
-                            title="Top 20 Mutual Information (filtered)")
-            st.plotly_chart(fig_mi, use_container_width=True, key="mi_plot")
+    if not feats:
+        st.warning("No numeric features (excluding absolute ratings).")
+    else:
+        # Keep features that are at least 20% present (so most rows are usable)
+        missing_frac = hist_imp_full[feats].isna().mean()
+        keep_features = missing_frac[missing_frac <= 0.8].index.tolist()
+        if not keep_features:
+            st.warning("All features are too sparse – try broadening filters.")
+        else:
+            X = hist_imp_full[keep_features].copy()
+            y = hist_imp_full['Target']
 
-            if st.button("Compute Lasso Importance (filtered)"):
-                with st.spinner("Fitting LassoCV..."):
-                    X_lasso = hist_imp_full[feats].copy()
-                    y_lasso = hist_imp_full['Target']
-                    imp = SimpleImputer(strategy='median')
-                    X_lasso_imp = imp.fit_transform(X_lasso)
-                    scaler_lasso = StandardScaler()
-                    X_lasso_scaled = scaler_lasso.fit_transform(X_lasso_imp)
-                    lasso = LogisticRegressionCV(
-                        penalty='l1', solver='saga', cv=5,
-                        scoring='neg_brier_score', max_iter=2000,
-                        Cs=10, n_jobs=-1, random_state=42
-                    )
-                    lasso.fit(X_lasso_scaled, y_lasso)
-                    coef = lasso.coef_.flatten()
-                    coef_df = pd.DataFrame({'Feature': feats, 'Coefficient': coef})
-                    coef_df = coef_df[coef_df['Coefficient'] != 0].sort_values('Coefficient', key=abs, ascending=False)
-                    st.subheader("Lasso Non‑Zero Coefficients (filtered)")
-                    if len(coef_df) > 0:
-                        fig_lasso = px.bar(coef_df.head(30), x='Coefficient', y='Feature', orientation='h',
-                                           title="Lasso Coefficients (filtered)")
-                        st.plotly_chart(fig_lasso, use_container_width=True, key="lasso_plot")
-                    else:
-                        st.write("Lasso eliminated all features.")
+            # Impute missing values with median – no rows are dropped
+            imp = SimpleImputer(strategy='median')
+            X_imp = imp.fit_transform(X)
 
-            if st.button("Compute Random Forest Importance (filtered)"):
-                with st.spinner("Training Random Forest..."):
-                    X_rf = hist_imp_full[feats].copy()
-                    y_rf = hist_imp_full['Target']
-                    imp = SimpleImputer(strategy='median')
-                    X_rf_imp = imp.fit_transform(X_rf)
-                    rf = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
-                    rf.fit(X_rf_imp, y_rf)
-                    rf_imp = pd.DataFrame({'Feature': feats, 'Importance': rf.feature_importances_}).sort_values('Importance', ascending=False).head(30)
-                    st.subheader("Random Forest Feature Importance (filtered)")
-                    fig_rf = px.bar(rf_imp, x='Importance', y='Feature', orientation='h',
-                                    title="Random Forest Feature Importance (filtered)")
-                    st.plotly_chart(fig_rf, use_container_width=True, key="rf_plot")
+            # Only require 5 rows now
+            if len(y) < 5:
+                st.warning("Not enough rows to compute importance (apply broader filters).")
+            else:
+                mi = mutual_info_classif(X_imp, y, discrete_features=False, random_state=42)
+                mi_df = pd.DataFrame({'Feature': keep_features, 'MI': mi}).sort_values('MI', ascending=False).head(20)
+                fig_mi = px.bar(mi_df, x='MI', y='Feature', orientation='h',
+                                title="Top 20 Mutual Information (filtered)")
+                st.plotly_chart(fig_mi, use_container_width=True, key="mi_plot")
+
+                if st.button("Compute Lasso Importance (filtered)"):
+                    with st.spinner("Fitting LassoCV..."):
+                        X_lasso = X.copy()
+                        scaler_lasso = StandardScaler()
+                        X_lasso_scaled = scaler_lasso.fit_transform(X_imp)
+                        lasso = LogisticRegressionCV(
+                            penalty='l1', solver='saga', cv=5,
+                            scoring='neg_brier_score', max_iter=2000,
+                            Cs=10, n_jobs=-1, random_state=42
+                        )
+                        lasso.fit(X_lasso_scaled, y)
+                        coef = lasso.coef_.flatten()
+                        coef_df = pd.DataFrame({'Feature': keep_features, 'Coefficient': coef})
+                        coef_df = coef_df[coef_df['Coefficient'] != 0].sort_values('Coefficient', key=abs, ascending=False)
+                        st.subheader("Lasso Non‑Zero Coefficients (filtered)")
+                        if len(coef_df) > 0:
+                            fig_lasso = px.bar(coef_df.head(30), x='Coefficient', y='Feature', orientation='h',
+                                               title="Lasso Coefficients (filtered)")
+                            st.plotly_chart(fig_lasso, use_container_width=True, key="lasso_plot")
+                        else:
+                            st.write("Lasso eliminated all features.")
+
+                if st.button("Compute Random Forest Importance (filtered)"):
+                    with st.spinner("Training Random Forest..."):
+                        X_rf = X.copy()
+                        imp_rf = SimpleImputer(strategy='median')
+                        X_rf_imp = imp_rf.fit_transform(X_rf)
+                        rf = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
+                        rf.fit(X_rf_imp, y)
+                        rf_imp = pd.DataFrame({'Feature': keep_features, 'Importance': rf.feature_importances_}).sort_values('Importance', ascending=False).head(30)
+                        st.subheader("Random Forest Feature Importance (filtered)")
+                        fig_rf = px.bar(rf_imp, x='Importance', y='Feature', orientation='h',
+                                        title="Random Forest Feature Importance (filtered)")
+                        st.plotly_chart(fig_rf, use_container_width=True, key="rf_plot")
         else:
             st.warning("Not enough complete rows for MI.")
     else:
