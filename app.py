@@ -481,7 +481,7 @@ else:
 
                 # ---- Auto‑selection logic: differentials → feature importance → manual only ----
                 if top_n_f1 > 0 or top_n_f2 > 0:
-                    # Differential-based auto selection (current logic)
+                    # Differential-based auto selection
                     diff_cols = [c for c in f1.index if c.endswith('_opp_diff')]
                     f1_diffs = {c: abs(f1[c]) for c in diff_cols if pd.notna(f1[c])}
                     f2_diffs = {c: abs(f2[c]) for c in diff_cols if pd.notna(f2[c])}
@@ -494,7 +494,6 @@ else:
                     top_n_mi = st.slider("Top N by Feature Importance", 0, 10, 0,
                                         help="Select top variables by mutual information with win/loss")
                     if top_n_mi > 0:
-                        # Compute MI on the filtered historical data
                         @st.cache_data
                         def compute_mi_ranking(df_hist, features):
                             # Only completed fights
@@ -505,21 +504,21 @@ else:
                             if not available:
                                 return pd.Series(dtype=float)
 
-                            # Drop features that are >50% missing (to avoid massive row loss)
+                            # Allow up to 80% missing (relaxed from 50%)
                             missing_frac = tmp[available].isna().mean()
-                            keep_features = missing_frac[missing_frac <= 0.5].index.tolist()
+                            keep_features = missing_frac[missing_frac <= 0.8].index.tolist()
                             if not keep_features:
                                 return pd.Series(dtype=float)
 
-                            X = tmp[keep_features].dropna()
-                            y = y.loc[X.index]
-
-                            # If too few rows, return empty
-                            if len(X) < 5:   # relaxed from 10 to 5
-                                return pd.Series(dtype=float)
-
+                            # Impute missing values with median first – no rows are dropped
+                            X = tmp[keep_features].copy()
                             imp = SimpleImputer(strategy='median')
                             X_imp = imp.fit_transform(X)
+
+                            # Target must align with the same index
+                            if len(y) < 5:
+                                return pd.Series(dtype=float)
+
                             mi = mutual_info_classif(X_imp, y, discrete_features=False, random_state=42)
                             return pd.Series(mi, index=keep_features).sort_values(ascending=False)
 
@@ -530,6 +529,8 @@ else:
                         else:
                             mi_vars = mi_series.head(top_n_mi).index.tolist()
                             st.session_state.auto_vars = mi_vars
+                    else:
+                        st.session_state.auto_vars = None
                 # ------------------------------------------------------------------------
 
                 st.write("**Optional: manually add variables**")
@@ -629,7 +630,7 @@ else:
                             col_order = ['FightDate','Fighter','Opponent','Win?'] + [f'Sim_{m}' for m in distance_metrics] + ['Similarity']
                             st.dataframe(top_n[col_order], use_container_width=True)
 
-                # ========== SPIDER DECISION TREE (unchanged) ==========
+                # ========== SPIDER DECISION TREE ==========
                 st.subheader("Decision Tree from Similarity Filters")
 
                 spider_tree_hist = spider_hist.copy()
@@ -719,7 +720,7 @@ else:
                                 st.dataframe(leaf_df, use_container_width=True, hide_index=True)
 
 # -----------------------------------------------
-# FEATURE IMPORTANCE (uses spider filtered data)
+# FEATURE IMPORTANCE (uses spider filtered data) – now imputes
 # -----------------------------------------------
 st.header("Feature Importance (based on Spider Filters)")
 hist_imp_full = spider_hist.copy()
@@ -744,7 +745,6 @@ else:
             imp = SimpleImputer(strategy='median')
             X_imp = imp.fit_transform(X)
 
-            # Only require 5 rows now
             if len(y) < 5:
                 st.warning("Not enough rows to compute importance (apply broader filters).")
             else:
@@ -788,7 +788,3 @@ else:
                         fig_rf = px.bar(rf_imp, x='Importance', y='Feature', orientation='h',
                                         title="Random Forest Feature Importance (filtered)")
                         st.plotly_chart(fig_rf, use_container_width=True, key="rf_plot")
-        else:
-            st.warning("Not enough complete rows for MI.")
-    else:
-        st.warning("No numeric features (excluding absolute ratings).")
