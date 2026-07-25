@@ -409,7 +409,7 @@ def build_independent_filter(df, key_prefix):
         opponent_mask &= m
 
     row_permissive = fighter_mask & opponent_mask
-    fight_ok = row_permissive.groupby(df['FightID']).transform('all')
+    fight_ok = row_permissive.groupby(df['FightID']).transform('any')
     final_mask = mask_strict & fight_ok
 
     return df[final_mask].copy(), fighter_mask, opponent_mask
@@ -420,6 +420,12 @@ def build_independent_filter(df, key_prefix):
 st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
 spider_data, fighter_mask_spider, opponent_mask_spider = build_independent_filter(spider_data_full, "spider")
+
+# ----- Strict per‑row mask for upcoming fights only -----
+row_perm_strict = fighter_mask_spider & opponent_mask_spider
+strict_fight_ok = row_perm_strict.groupby(spider_data['FightID']).transform('all')
+strict_fight_ids = spider_data.loc[strict_fight_ok, 'FightID'].unique()
+# ----------------------------------------------------------
 
 # ----- Pre‑compute filtered historical summary (for inline display) -----
 spider_hist_all = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
@@ -440,6 +446,11 @@ else:
     fight_counts = spider_upcoming.groupby('FightID').size()
     complete_ids = fight_counts[fight_counts == 2].index
     spider_upcoming = spider_upcoming[spider_upcoming['FightID'].isin(complete_ids)]
+
+    # ---- Apply strict per‑row condition to upcoming fights only ----
+    spider_upcoming = spider_upcoming[spider_upcoming['FightID'].isin(strict_fight_ids)]
+    # ---------------------------------------------------------------
+
     if spider_upcoming.empty:
         st.warning("No upcoming fight has both fighters after similarity filters.")
     else:
@@ -447,7 +458,7 @@ else:
         if not sim_features:
             st.warning("No numeric features for similarity.")
         else:
-            up_ids = spider_upcoming['FightID'].unique()
+            up_ids = sorted(spider_upcoming['FightID'].unique())
             if 'prev_spider_fight' not in st.session_state:
                 st.session_state.prev_spider_fight = None
 
