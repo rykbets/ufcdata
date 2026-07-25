@@ -176,13 +176,15 @@ else:
     st.info("No upcoming fights available.")
 
 # -----------------------------------------------
-# INDEPENDENT FILTER HELPER (country now permissive, returns masks)
+# INDEPENDENT FILTER HELPER (permutation matching)
 # -----------------------------------------------
 def build_independent_filter(df, key_prefix):
     """
     Returns (filtered_df, fighter_mask, opponent_mask).
-    - Country filter moved to fighter‑side permissive.
-    - All other logic unchanged.
+    - filtered_df contains only fights where BOTH rows pass strict AND filters
+      AND the fighter/opponent side filters match the two rows in either permutation.
+    - fighter_mask: per-row True if row passes fighter-side filters.
+    - opponent_mask: per-row True if row passes opponent-side filters.
     """
     with st.expander(f"{key_prefix} Filters", expanded=True):
         # --- General ---
@@ -293,7 +295,6 @@ def build_independent_filter(df, key_prefix):
     # --- Strict AND filters (both rows must satisfy) ---
     if wc: mask_strict &= df['WC'].isin(wc)
     if stance: mask_strict &= df['Stance'].isin(stance)
-    # Country is now permissive – see below
     if sched_rounds: mask_strict &= df['ScheduledRounds'].isin(sched_rounds)
     if title_fight != "All": mask_strict &= df['Title'] == title_fight
     if event_country: mask_strict &= df['EventCountry'].isin(event_country)
@@ -359,7 +360,6 @@ def build_independent_filter(df, key_prefix):
     else:
         fighter_masks.append(pd.Series(True, index=df.index))
 
-    # *** Country (permissive) ***
     if country and 'Country' in df.columns:
         fighter_masks.append(df['Country'].isin(country))
     else:
@@ -400,7 +400,7 @@ def build_independent_filter(df, key_prefix):
     else:
         opponent_masks.append(pd.Series(True, index=df.index))
 
-    # Combine
+    # Combine per‑side masks
     fighter_mask = fighter_masks[0]
     for m in fighter_masks[1:]:
         fighter_mask &= m
@@ -408,11 +408,29 @@ def build_independent_filter(df, key_prefix):
     for m in opponent_masks[1:]:
         opponent_mask &= m
 
-    row_permissive = fighter_mask & opponent_mask
-    fight_ok = row_permissive.groupby(df['FightID']).transform('any')
-    final_mask = mask_strict & fight_ok
+    # ================================
+    # PERMUTATION CHECK (NEW)
+    # ================================
+    def check_permutation(group):
+        # group has exactly two rows (one fight)
+        idx = group.index.tolist()
+        if len(idx) != 2:
+            return pd.Series(False, index=group.index)
+        i1, i2 = idx[0], idx[1]
+        # Permutation 1: i1 passes fighter mask, i2 passes opponent mask
+        perm1 = fighter_mask.loc[i1] and opponent_mask.loc[i2]
+        # Permutation 2: i2 passes fighter mask, i1 passes opponent mask
+        perm2 = fighter_mask.loc[i2] and opponent_mask.loc[i1]
+        keep = perm1 or perm2
+        return pd.Series([keep, keep], index=group.index)
 
-    return df[final_mask].copy(), fighter_mask, opponent_mask
+    perm_ok = df.groupby('FightID', group_keys=False).apply(check_permutation)
+    # Some fights may have been excluded because not exactly 2 rows -> perm_ok will be False for them.
+
+    final_mask = mask_strict & perm_ok.reindex(df.index, fill_value=False)
+
+    filtered_df = df[final_mask].copy()
+    return filtered_df, fighter_mask, opponent_mask
 
 # -----------------------------------------------
 # SPIDER CHART (Similarity) + AUTO‑SELECT + FILTERED STATS + TREE
@@ -421,16 +439,7 @@ st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
 spider_data, fighter_mask_spider, opponent_mask_spider = build_independent_filter(spider_data_full, "spider")
 
-# ----- Strict per‑row mask for upcoming fights only -----
-fighter_aligned = fighter_mask_spider.loc[spider_data.index]
-opponent_aligned = opponent_mask_spider.loc[spider_data.index]
-row_perm_strict = fighter_aligned & opponent_aligned
-strict_fight_ok = row_perm_strict.groupby(spider_data['FightID']).transform('all')
-strict_fight_ids = spider_data.loc[strict_fight_ok, 'FightID'].unique()
-# ----------------------------------------------------------
-# ----------------------------------------------------------
-
-# ----- Pre‑compute filtered historical summary (for inline display) -----
+# ---- Pre‑compute filtered historical summary (for inline display) ----
 spider_hist_all = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
 total_completed_fights = spider_hist_all['FightID'].nunique()
 
@@ -438,7 +447,6 @@ fighter_rows = spider_hist_all[fighter_mask_spider.loc[spider_hist_all.index]]
 total_wins = (fighter_rows['Win?'] == 'Yes').sum()
 total_fights_fside = len(fighter_rows)
 filtered_wr = total_wins / total_fights_fside * 100 if total_fights_fside > 0 else 0.0
-# ----------------------------------------------------------------------------
 
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
 spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
@@ -449,8 +457,6 @@ else:
     fight_counts = spider_upcoming.groupby('FightID').size()
     complete_ids = fight_counts[fight_counts == 2].index
     spider_upcoming = spider_upcoming[spider_upcoming['FightID'].isin(complete_ids)]
-
-    # ---------------------------------------------------------------
 
     if spider_upcoming.empty:
         st.warning("No upcoming fight has both fighters after similarity filters.")
@@ -484,7 +490,6 @@ else:
                 for i, row in fight_rows.iterrows():
                     match_info.append(f"{row['Fighter']}: {'Yes' if mask_f.loc[i] else 'No'}")
                 st.write("**Matches fighter filters:**  " + "  |  ".join(match_info))
-                # ---------------------------------------------------------------
 
                 st.write("**Auto‑select top differentials for similarity**")
                 c_slider1, c_slider2 = st.columns(2)
@@ -516,7 +521,7 @@ else:
                             if not available:
                                 return pd.Series(dtype=float)
 
-                            # Allow up to 80% missing (relaxed from 50%)
+                            # Allow up to 80% missing
                             missing_frac = tmp[available].isna().mean()
                             keep_features = missing_frac[missing_frac <= 0.8].index.tolist()
                             if not keep_features:
@@ -527,7 +532,6 @@ else:
                             imp = SimpleImputer(strategy='median')
                             X_imp = imp.fit_transform(X)
 
-                            # Target must align with the same index
                             if len(y) < 5:
                                 return pd.Series(dtype=float)
 
@@ -543,7 +547,6 @@ else:
                             st.session_state.auto_vars = mi_vars
                     else:
                         st.session_state.auto_vars = None
-                # ------------------------------------------------------------------------
 
                 st.write("**Optional: manually add variables**")
                 st.multiselect(
