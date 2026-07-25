@@ -497,28 +497,39 @@ else:
                         # Compute MI on the filtered historical data
                         @st.cache_data
                         def compute_mi_ranking(df_hist, features):
-                            # Only keep rows where the target is known (Win? is Yes/No)
+                            # Only completed fights
                             tmp = df_hist[df_hist['Win?'].isin(['Yes','No'])].copy()
-                            # Target must be 0/1
                             y = (tmp['Win?'] == 'Yes').astype(int)
-                            # Features: only the columns in 'features' that are present and numeric
-                            X = tmp[features].select_dtypes(include=[np.number])
-                            # Drop rows where all features are NaN
-                            X = X.dropna()
-                            y = y.loc[X.index]
-                            # If no data left, return an empty series
-                            if len(X) == 0:
+                            # Keep only numeric columns that exist
+                            available = [c for c in features if c in tmp.columns and np.issubdtype(tmp[c].dtype, np.number)]
+                            if not available:
                                 return pd.Series(dtype=float)
+
+                            # Drop features that are >50% missing (to avoid massive row loss)
+                            missing_frac = tmp[available].isna().mean()
+                            keep_features = missing_frac[missing_frac <= 0.5].index.tolist()
+                            if not keep_features:
+                                return pd.Series(dtype=float)
+
+                            X = tmp[keep_features].dropna()
+                            y = y.loc[X.index]
+
+                            # If too few rows, return empty
+                            if len(X) < 5:   # relaxed from 10 to 5
+                                return pd.Series(dtype=float)
+
                             imp = SimpleImputer(strategy='median')
                             X_imp = imp.fit_transform(X)
                             mi = mutual_info_classif(X_imp, y, discrete_features=False, random_state=42)
-                            return pd.Series(mi, index=X.columns).sort_values(ascending=False)
+                            return pd.Series(mi, index=keep_features).sort_values(ascending=False)
 
                         mi_series = compute_mi_ranking(spider_hist, sim_features)
-                        mi_vars = mi_series.head(top_n_mi).index.tolist()
-                        st.session_state.auto_vars = mi_vars
-                    else:
-                        st.session_state.auto_vars = None
+                        if mi_series.empty:
+                            st.warning("Not enough complete data for feature importance. Try broadening filters or using fewer variables.")
+                            st.session_state.auto_vars = None
+                        else:
+                            mi_vars = mi_series.head(top_n_mi).index.tolist()
+                            st.session_state.auto_vars = mi_vars
                 # ------------------------------------------------------------------------
 
                 st.write("**Optional: manually add variables**")
