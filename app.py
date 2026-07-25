@@ -176,15 +176,15 @@ else:
     st.info("No upcoming fights available.")
 
 # -----------------------------------------------
-# INDEPENDENT FILTER HELPER (permutation matching)
+# INDEPENDENT FILTER HELPER (permutation matching + deduplication)
 # -----------------------------------------------
 def build_independent_filter(df, key_prefix):
     """
     Returns (filtered_df, fighter_mask, opponent_mask).
-    - filtered_df contains only fights where BOTH rows pass strict AND filters
-      AND the fighter/opponent side filters match the two rows in either permutation.
-    - fighter_mask: per-row True if row passes fighter-side filters.
-    - opponent_mask: per-row True if row passes opponent-side filters.
+    - filtered_df contains exactly ONE row per historical fight, chosen as the row
+      that satisfies the fighter‑side filters in the valid permutation.
+    - fighter_mask: per-row True if row passes fighter‑side filters.
+    - opponent_mask: per-row True if row passes opponent‑side filters.
     """
     with st.expander(f"{key_prefix} Filters", expanded=True):
         # --- General ---
@@ -408,24 +408,31 @@ def build_independent_filter(df, key_prefix):
     for m in opponent_masks[1:]:
         opponent_mask &= m
 
-    # ================================
-    # PERMUTATION CHECK (NEW)
-    # ================================
-    def check_permutation(group):
+    # ==========================================
+    # PERMUTATION CHECK + DEDUPLICATION (NEW)
+    # ==========================================
+    def get_selected_row_mask(group):
         # group has exactly two rows (one fight)
         idx = group.index.tolist()
         if len(idx) != 2:
+            # Incomplete fight – drop entirely
             return pd.Series(False, index=group.index)
         i1, i2 = idx[0], idx[1]
-        # Permutation 1: i1 passes fighter mask, i2 passes opponent mask
         perm1 = fighter_mask.loc[i1] and opponent_mask.loc[i2]
-        # Permutation 2: i2 passes fighter mask, i1 passes opponent mask
         perm2 = fighter_mask.loc[i2] and opponent_mask.loc[i1]
-        keep = perm1 or perm2
-        return pd.Series([keep, keep], index=group.index)
 
-    perm_ok = df.groupby('FightID', group_keys=False).apply(check_permutation)
-    # Some fights may have been excluded because not exactly 2 rows -> perm_ok will be False for them.
+        if perm1:
+            # Keep row i1 as the "fighter" side
+            return pd.Series([True, False], index=group.index)
+        elif perm2:
+            # Keep row i2 as the "fighter" side
+            return pd.Series([False, True], index=group.index)
+        else:
+            # No valid permutation → drop both
+            return pd.Series([False, False], index=group.index)
+
+    # Build per-row mask that selects exactly one row per valid fight
+    perm_ok = df.groupby('FightID', group_keys=False).apply(get_selected_row_mask)
 
     final_mask = mask_strict & perm_ok.reindex(df.index, fill_value=False)
 
@@ -441,7 +448,7 @@ spider_data, fighter_mask_spider, opponent_mask_spider = build_independent_filte
 
 # ---- Pre‑compute filtered historical summary (for inline display) ----
 spider_hist_all = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
-total_completed_fights = spider_hist_all['FightID'].nunique()
+total_completed_fights = spider_hist_all['FightID'].nunique()   # now equal to number of rows because deduplicated
 
 fighter_rows = spider_hist_all[fighter_mask_spider.loc[spider_hist_all.index]]
 total_wins = (fighter_rows['Win?'] == 'Yes').sum()
@@ -516,18 +523,15 @@ else:
                             # Only completed fights
                             tmp = df_hist[df_hist['Win?'].isin(['Yes','No'])].copy()
                             y = (tmp['Win?'] == 'Yes').astype(int)
-                            # Keep only numeric columns that exist
                             available = [c for c in features if c in tmp.columns and np.issubdtype(tmp[c].dtype, np.number)]
                             if not available:
                                 return pd.Series(dtype=float)
 
-                            # Allow up to 80% missing
                             missing_frac = tmp[available].isna().mean()
                             keep_features = missing_frac[missing_frac <= 0.8].index.tolist()
                             if not keep_features:
                                 return pd.Series(dtype=float)
 
-                            # Impute missing values with median first – no rows are dropped
                             X = tmp[keep_features].copy()
                             imp = SimpleImputer(strategy='median')
                             X_imp = imp.fit_transform(X)
@@ -559,7 +563,6 @@ else:
                 manual_list = st.session_state.manual_spider_vars
                 combined = list(set(auto_list + manual_list).intersection(sim_features))
 
-                # If no variables at all, warn and skip similarity
                 if not combined:
                     st.warning("No similarity variables selected. Either set the sliders > 0, use feature importance, or add variables manually.")
                 else:
@@ -747,7 +750,6 @@ else:
     if not feats:
         st.warning("No numeric features (excluding absolute ratings).")
     else:
-        # Keep features that are at least 20% present (so most rows are usable)
         missing_frac = hist_imp_full[feats].isna().mean()
         keep_features = missing_frac[missing_frac <= 0.8].index.tolist()
         if not keep_features:
@@ -756,7 +758,6 @@ else:
             X = hist_imp_full[keep_features].copy()
             y = hist_imp_full['Target']
 
-            # Impute missing values with median – no rows are dropped
             imp = SimpleImputer(strategy='median')
             X_imp = imp.fit_transform(X)
 
@@ -771,7 +772,6 @@ else:
 
                 if st.button("Compute Lasso Importance (filtered)"):
                     with st.spinner("Fitting LassoCV..."):
-                        X_lasso = X.copy()
                         scaler_lasso = StandardScaler()
                         X_lasso_scaled = scaler_lasso.fit_transform(X_imp)
                         lasso = LogisticRegressionCV(
