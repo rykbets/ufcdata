@@ -183,52 +183,33 @@ def apply_spider_filters(df, params):
     """
     Apply strict AND filters first, then permutation check on the subset.
     Returns (filtered_df, fighter_mask, opponent_mask).
-    `params` is a dict with all filter values.
+    The fighter_mask and opponent_mask are built from the row's OWN columns.
     """
-    # Extract params
+    # --- Unpack strict (shared) filter values ---
     wc = params['wc']
     stance = params['stance']
-    country = params['country']
     event_country = params['event_country']
     sched_rounds = params['sched_rounds']
     title_fight = params['title_fight']
-    hometown_fighter = params['hometown_fighter']
-    opp_hometown = params['opp_hometown']
-
-    fn_min = params['fn_min']; fn_max = params['fn_max']
-    ofn_min = params['ofn_min']; ofn_max = params['ofn_max']
-    cwp_min = params['cwp_min']; cwp_max = params['cwp_max']
-
-    age_min = params['age_min']; age_max = params['age_max']
-    ad_min = params['ad_min']; ad_max = params['ad_max']
-    hd_min = params['hd_min']; hd_max = params['hd_max']
-    rd_min = params['rd_min']; rd_max = params['rd_max']
-    days_min = params['days_min']; days_max = params['days_max']
-    ddiff_min = params['ddiff_min']; ddiff_max = params['ddiff_max']
-    avg3_min = params['avg3_min']; avg3_max = params['avg3_max']
-
-    odds_min = params['odds_min']; odds_max = params['odds_max']
-    podds_min = params['podds_min']; podds_max = params['podds_max']
-
-    skip_nc = params['skip_nc']
-    prev1_col = params['prev1_col']; prev2_col = params['prev2_col']; prev3_col = params['prev3_col']
-    career1_col = params['career1_col']; career2_col = params['career2_col']; career3_col = params['career3_col']
-    opp_career1_col = params['opp_career1_col']; opp_career2_col = params['opp_career2_col']; opp_career3_col = params['opp_career3_col']
-
-    prev1 = params['prev1']; prev2 = params['prev2']; prev3 = params['prev3']
-    career1 = params['career1']; career2 = params['career2']; career3 = params['career3']
-    opp_prev1 = params['opp_prev1']; opp_prev2 = params['opp_prev2']; opp_prev3 = params['opp_prev3']
-    opp_career1 = params['opp_career1']; opp_career2 = params['opp_career2']; opp_career3 = params['opp_career3']
-
-    prev_title = params['prev_title']
-    opp_prev_title = params['opp_prev_title']
     new_wc = params['new_wc']
+
+    age_min, age_max = params['age_min'], params['age_max']
+    ad_min, ad_max = params['ad_min'], params['ad_max']
+    hd_min, hd_max = params['hd_min'], params['hd_max']
+    rd_min, rd_max = params['rd_min'], params['rd_max']
+    days_min, days_max = params['days_min'], params['days_max']
+    ddiff_min, ddiff_max = params['ddiff_min'], params['ddiff_max']
+    avg3_min, avg3_max = params['avg3_min'], params['avg3_max']
+    cwp_min, cwp_max = params['cwp_min'], params['cwp_max']
+
+    odds_min, odds_max = params['odds_min'], params['odds_max']
+    podds_min, podds_max = params['podds_min'], params['podds_max']
 
     use_colley = params['use_colley']; colley_range = params.get('colley_range', None)
     use_massey = params['use_massey']; massey_range = params.get('massey_range', None)
     use_wmd = params['use_wmd']; wmd_range = params.get('wmd_range', None)
 
-    # ----- Build strict mask (both rows must satisfy) -----
+    # --- Build strict mask (both rows must satisfy) ---
     mask_strict = pd.Series(True, index=df.index)
 
     def add_strict(condition, col_name=None):
@@ -271,93 +252,108 @@ def apply_spider_filters(df, params):
     fight_ok = mask_strict.groupby(df['FightID']).transform('all')
     df_strict = df[fight_ok].copy()
 
-    # ---- Helper to build OR mask for a single filter ----
-    def outcome_cond(col, selected):
-        if not selected or col not in df_strict.columns:
-            return pd.Series(True, index=df_strict.index)
-        cond = pd.Series(False, index=df_strict.index)
-        if "Win (any)" in selected:
-            cond |= df_strict[col].str.startswith('Win', na=False)
-        if "Loss (any)" in selected:
-            cond |= df_strict[col].str.startswith('Loss', na=False)
-        exact = [s for s in selected if s not in ("Win (any)", "Loss (any)")]
-        if exact:
-            cond |= df_strict[col].isin(exact)
-        return cond
+    # ==================================================================
+    # NEW: Build identical masks for both sides using row's OWN columns
+    # ==================================================================
+    def build_side_mask(data_side, side_params):
+        """Return a boolean Series based on each row's own attributes."""
+        fn_min, fn_max = side_params['fn_min'], side_params['fn_max']
+        prev_title = side_params['prev_title']
+        hometown = side_params.get('hometown', [])
+        country_side = side_params.get('country', [])
+        skip_nc = side_params['skip_nc']
 
-    # --- Fighter‑side masks ---
-    fighter_masks = []
-    if 'FightNumber' in df_strict.columns:
-        fighter_masks.append((df_strict['FightNumber'] >= fn_min) & (df_strict['FightNumber'] <= fn_max))
-    else:
-        fighter_masks.append(pd.Series(True, index=df_strict.index))
-
-    fighter_masks.append(outcome_cond(prev1_col, prev1))
-    fighter_masks.append(outcome_cond(prev2_col, prev2))
-    fighter_masks.append(outcome_cond(prev3_col, prev3))
-    fighter_masks.append(outcome_cond(career1_col, career1))
-    fighter_masks.append(outcome_cond(career2_col, career2))
-    fighter_masks.append(outcome_cond(career3_col, career3))
-
-    if prev_title != "All" and 'Prev1_Title' in df_strict.columns:
-        fighter_masks.append(df_strict['Prev1_Title'].str.strip().str.lower() == prev_title.lower())
-    else:
-        fighter_masks.append(pd.Series(True, index=df_strict.index))
-
-    if hometown_fighter and 'HometownFighter' in df_strict.columns:
-        fighter_masks.append(df_strict['HometownFighter'].isin(hometown_fighter))
-    else:
-        fighter_masks.append(pd.Series(True, index=df_strict.index))
-
-    if country and 'Country' in df_strict.columns:
-        fighter_masks.append(df_strict['Country'].isin(country))
-    else:
-        fighter_masks.append(pd.Series(True, index=df_strict.index))
-
-    # Combine fighter mask
-    fighter_mask = fighter_masks[0]
-    for m in fighter_masks[1:]:
-        fighter_mask &= m
-
-    # --- Opponent‑side masks ---
-    opponent_masks = []
-    if 'Opponent_FightNumber' in df_strict.columns:
-        opponent_masks.append((df_strict['Opponent_FightNumber'] >= ofn_min) & (df_strict['Opponent_FightNumber'] <= ofn_max))
-    else:
-        opponent_masks.append(pd.Series(True, index=df_strict.index))
-
-    def opponent_outcome_cond(shift, wlist):
-        col = f'Opponent_Prev{shift}_Outcome_raw'
-        if not wlist or col not in df_strict.columns:
-            return pd.Series(True, index=df_strict.index)
+        # Columns depend on skip_nc flag
         if skip_nc:
-            col_use = f'Opponent_Prev{shift}_Outcome_skipNC'
-            if col_use in df_strict.columns:
-                return outcome_cond(col_use, wlist)
-        return outcome_cond(col, wlist)
+            prev1_col = 'Prev1_Outcome_skipNC'
+            prev2_col = 'Prev2_Outcome_skipNC'
+            prev3_col = 'Prev3_Outcome_skipNC'
+            career1_col = 'Career1_Outcome_skipNC'
+            career2_col = 'Career2_Outcome_skipNC'
+            career3_col = 'Career3_Outcome_skipNC'
+        else:
+            prev1_col = 'Prev1_Outcome_raw'
+            prev2_col = 'Prev2_Outcome_raw'
+            prev3_col = 'Prev3_Outcome_raw'
+            career1_col = 'Career1_Outcome_raw'
+            career2_col = 'Career2_Outcome_raw'
+            career3_col = 'Career3_Outcome_raw'
 
-    opponent_masks.append(opponent_outcome_cond(1, opp_prev1))
-    opponent_masks.append(opponent_outcome_cond(2, opp_prev2))
-    opponent_masks.append(opponent_outcome_cond(3, opp_prev3))
-    opponent_masks.append(outcome_cond(opp_career1_col, opp_career1))
-    opponent_masks.append(outcome_cond(opp_career2_col, opp_career2))
-    opponent_masks.append(outcome_cond(opp_career3_col, opp_career3))
+        masks = []
+        # FightNumber
+        if 'FightNumber' in data_side.columns:
+            masks.append((data_side['FightNumber'] >= fn_min) & (data_side['FightNumber'] <= fn_max))
+        else:
+            masks.append(pd.Series(True, index=data_side.index))
 
-    if opp_prev_title != "All" and 'Opponent_Prev1_Title' in df_strict.columns:
-        opponent_masks.append(df_strict['Opponent_Prev1_Title'].str.strip().str.lower() == opp_prev_title.lower())
-    else:
-        opponent_masks.append(pd.Series(True, index=df_strict.index))
+        # Outcome helper (uses row's own outcome columns)
+        def outcome_cond(col, selected):
+            if not selected or col not in data_side.columns:
+                return pd.Series(True, index=data_side.index)
+            cond = pd.Series(False, index=data_side.index)
+            if "Win (any)" in selected:
+                cond |= data_side[col].str.startswith('Win', na=False)
+            if "Loss (any)" in selected:
+                cond |= data_side[col].str.startswith('Loss', na=False)
+            exact = [s for s in selected if s not in ("Win (any)", "Loss (any)")]
+            if exact:
+                cond |= data_side[col].isin(exact)
+            return cond
 
-    if opp_hometown and 'Opponent_Hometown' in df_strict.columns:
-        opponent_masks.append(df_strict['Opponent_Hometown'].isin(opp_hometown))
-    else:
-        opponent_masks.append(pd.Series(True, index=df_strict.index))
+        masks.append(outcome_cond(prev1_col, side_params.get('prev1', [])))
+        masks.append(outcome_cond(prev2_col, side_params.get('prev2', [])))
+        masks.append(outcome_cond(prev3_col, side_params.get('prev3', [])))
+        masks.append(outcome_cond(career1_col, side_params.get('career1', [])))
+        masks.append(outcome_cond(career2_col, side_params.get('career2', [])))
+        masks.append(outcome_cond(career3_col, side_params.get('career3', [])))
 
-    opponent_mask = opponent_masks[0]
-    for m in opponent_masks[1:]:
-        opponent_mask &= m
+        # Prev title
+        if prev_title != "All" and 'Prev1_Title' in data_side.columns:
+            masks.append(data_side['Prev1_Title'].str.strip().str.lower() == prev_title.lower())
+        else:
+            masks.append(pd.Series(True, index=data_side.index))
 
-    # ----- Permutation check on the already‑filtered subset -----
+        # Hometown
+        if hometown and 'HometownFighter' in data_side.columns:
+            masks.append(data_side['HometownFighter'].isin(hometown))
+        else:
+            masks.append(pd.Series(True, index=data_side.index))
+
+        # Country
+        if country_side and 'Country' in data_side.columns:
+            masks.append(data_side['Country'].isin(country_side))
+        else:
+            masks.append(pd.Series(True, index=data_side.index))
+
+        mask = masks[0]
+        for m in masks[1:]:
+            mask &= m
+        return mask
+
+    # Extract side‑specific parameters
+    fighter_params = {
+        'fn_min': params['fn_min'], 'fn_max': params['fn_max'],
+        'prev_title': params['prev_title'],
+        'hometown': params['hometown_fighter'],
+        'country': params['fighter_country'],
+        'skip_nc': params['skip_nc'],
+        'prev1': params['prev1'], 'prev2': params['prev2'], 'prev3': params['prev3'],
+        'career1': params['career1'], 'career2': params['career2'], 'career3': params['career3']
+    }
+    opponent_params = {
+        'fn_min': params['ofn_min'], 'fn_max': params['ofn_max'],
+        'prev_title': params['opp_prev_title'],
+        'hometown': params['opp_hometown'],
+        'country': params['opponent_country'],
+        'skip_nc': params['skip_nc'],
+        'prev1': params['opp_prev1'], 'prev2': params['opp_prev2'], 'prev3': params['opp_prev3'],
+        'career1': params['opp_career1'], 'career2': params['opp_career2'], 'career3': params['opp_career3']
+    }
+
+    fighter_mask = build_side_mask(df_strict, fighter_params)
+    opponent_mask = build_side_mask(df_strict, opponent_params)
+
+    # ----- Permutation check (unchanged) -----
     def check_permutation(group):
         idx = group.index.tolist()
         if len(idx) != 2:
@@ -375,7 +371,7 @@ def apply_spider_filters(df, params):
     return filtered_df, fighter_mask, opponent_mask
 
 # -----------------------------------------------
-# SPIDER SECTION (lightweight UI + cached processing)
+# SPIDER SECTION (UI + cached processing)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 
@@ -386,26 +382,30 @@ with st.expander("Spider Filters", expanded=True):
         with col1:
             wc = st.multiselect("Weight Class", sorted(original_data['WC'].dropna().unique()), key="spider_wc")
             stance = st.multiselect("Stance", sorted(original_data['Stance'].dropna().unique()), key="spider_stance")
-            country = st.multiselect("Country", sorted(original_data['Country'].dropna().unique()), key="spider_country")
             event_country = st.multiselect("Event Country", sorted(original_data['EventCountry'].dropna().unique()), key="spider_event")
         with col2:
             sched_rounds = st.multiselect("Scheduled Rounds", sorted(original_data['ScheduledRounds'].dropna().unique()), key="spider_sched")
             title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"], key="spider_title")
-            hometown_fighter = st.multiselect("Hometown (Fighter)", sorted(original_data['HometownFighter'].dropna().unique()), key="spider_hometown")
-            opp_hometown = st.multiselect("Opponent Hometown", sorted(original_data['Opponent_Hometown'].dropna().unique()), key="spider_opp_hometown")
+            new_wc = st.checkbox("New Weight Class", key="spider_new_wc")
 
-    # ---- Fight Numbers & Win% ----
-    with st.expander("Fight Numbers & Career Win%", expanded=False):
-        col1, col2 = st.columns(2)
-        with col1:
-            fn_min = st.number_input("Min Fight #", value=1, min_value=1, max_value=int(original_data['FightNumber'].max()), key="spider_fn_min")
-            fn_max = st.number_input("Max Fight #", value=int(original_data['FightNumber'].max()), key="spider_fn_max")
-        with col2:
-            ofn_min = st.number_input("Opp Min Fight #", value=1, key="spider_ofn_min")
-            ofn_max = st.number_input("Opp Max Fight #", value=int(original_data['Opponent_FightNumber'].max()), key="spider_ofn_max")
-        cwp_min, cwp_max = st.slider("Career Win % Diff", -100, 100, (-100, 100), step=5, key="spider_cwp")
+    # ---- Fighter‑side & Opponent‑side filters (side by side) ----
+    colF, colO = st.columns(2)
+    with colF:
+        st.write("**Fighter‑Side Filters**")
+        fighter_country = st.multiselect("Fighter Country", sorted(original_data['Country'].dropna().unique()), key="spider_fighter_country")
+        hometown_fighter = st.multiselect("Hometown", sorted(original_data['HometownFighter'].dropna().unique()), key="spider_hometown")
+        fn_min = st.number_input("Fighter Min Fight #", value=1, min_value=1, max_value=int(original_data['FightNumber'].max()), key="spider_fn_min")
+        fn_max = st.number_input("Fighter Max Fight #", value=int(original_data['FightNumber'].max()), key="spider_fn_max")
+        prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
+    with colO:
+        st.write("**Opponent‑Side Filters**")
+        opponent_country = st.multiselect("Opponent Country", sorted(original_data['Country'].dropna().unique()), key="spider_opponent_country")
+        opp_hometown = st.multiselect("Opponent Hometown", sorted(original_data['HometownFighter'].dropna().unique()), key="spider_opp_hometown")
+        ofn_min = st.number_input("Opponent Min Fight #", value=1, key="spider_ofn_min")
+        ofn_max = st.number_input("Opponent Max Fight #", value=int(original_data['FightNumber'].max()), key="spider_ofn_max")
+        opp_prev_title = st.selectbox("Opponent Prev Fight Title?", ["All", "Yes", "No"], key="spider_opp_prev_title")
 
-    # ---- Physical & Days ----
+    # ---- Physical & Days (shared) ----
     with st.expander("Physical & Days", expanded=False):
         age_min, age_max = st.slider("Age", int(original_data['Age'].min()), int(original_data['Age'].max()), (int(original_data['Age'].min()), int(original_data['Age'].max())), key="spider_age")
         ad_min, ad_max = st.slider("Age Diff", int(original_data['AgeDiff'].min()), int(original_data['AgeDiff'].max()), (int(original_data['AgeDiff'].min()), int(original_data['AgeDiff'].max())), key="spider_age_diff")
@@ -414,23 +414,22 @@ with st.expander("Spider Filters", expanded=True):
         days_min, days_max = st.slider("Days Since Prev", int(original_data['DaysSincePrev'].min()), int(original_data['DaysSincePrev'].max()), (int(original_data['DaysSincePrev'].min()), int(original_data['DaysSincePrev'].max())), key="spider_days")
         ddiff_min, ddiff_max = st.slider("Days Since Prev Diff", int(original_data['DaysSincePrev_diff'].min()), int(original_data['DaysSincePrev_diff'].max()), (int(original_data['DaysSincePrev_diff'].min()), int(original_data['DaysSincePrev_diff'].max())), key="spider_ddiff")
         avg3_min, avg3_max = st.slider("Avg3DaysGap Diff", int(original_data['Avg3DaysGap_diff'].min()), int(original_data['Avg3DaysGap_diff'].max()), (int(original_data['Avg3DaysGap_diff'].min()), int(original_data['Avg3DaysGap_diff'].max())), key="spider_avg3")
+        cwp_min, cwp_max = st.slider("Career Win % Diff", -100, 100, (-100, 100), step=5, key="spider_cwp")
 
     # ---- Odds ----
     with st.expander("Odds", expanded=False):
         odds_min, odds_max = st.slider("Fighter Odds", int(original_data['FighterOddsNum'].min()), int(original_data['FighterOddsNum'].max()), (int(original_data['FighterOddsNum'].min()), int(original_data['FighterOddsNum'].max())), step=10, key="spider_odds")
         podds_min, podds_max = st.slider("Prev Fighter Odds", int(original_data['PrevFighterOddsNum'].min()), int(original_data['PrevFighterOddsNum'].max()), (int(original_data['PrevFighterOddsNum'].min()), int(original_data['PrevFighterOddsNum'].max())), step=10, key="spider_podds")
 
-    # ---- Previous Outcomes ----
+    # ---- Previous Outcomes (side by side) ----
     with st.expander("Previous Outcomes", expanded=False):
         skip_nc = st.checkbox("Skip NC outcomes", key="spider_skip_nc")
         if skip_nc:
             prev1_col = 'Prev1_Outcome_skipNC'; prev2_col = 'Prev2_Outcome_skipNC'; prev3_col = 'Prev3_Outcome_skipNC'
             career1_col = 'Career1_Outcome_skipNC'; career2_col = 'Career2_Outcome_skipNC'; career3_col = 'Career3_Outcome_skipNC'
-            opp_career1_col = 'Opponent_Career1_Outcome_skipNC'; opp_career2_col = 'Opponent_Career2_Outcome_skipNC'; opp_career3_col = 'Opponent_Career3_Outcome_skipNC'
         else:
             prev1_col = 'Prev1_Outcome_raw'; prev2_col = 'Prev2_Outcome_raw'; prev3_col = 'Prev3_Outcome_raw'
             career1_col = 'Career1_Outcome_raw'; career2_col = 'Career2_Outcome_raw'; career3_col = 'Career3_Outcome_raw'
-            opp_career1_col = 'Opponent_Career1_Outcome_raw'; opp_career2_col = 'Opponent_Career2_Outcome_raw'; opp_career3_col = 'Opponent_Career3_Outcome_raw'
 
         all_outcomes_raw = sorted(original_data[prev1_col].dropna().unique())
         all_outcomes_career = sorted(original_data[career1_col].dropna().unique())
@@ -439,6 +438,7 @@ with st.expander("Spider Filters", expanded=True):
 
         col_f, col_o = st.columns(2)
         with col_f:
+            st.write("**Fighter Outcomes**")
             prev1 = st.multiselect("Prev Fight 1", outcome_options_raw, key="spider_prev1")
             prev2 = st.multiselect("Prev Fight 2", outcome_options_raw, key="spider_prev2")
             prev3 = st.multiselect("Prev Fight 3", outcome_options_raw, key="spider_prev3")
@@ -446,9 +446,10 @@ with st.expander("Spider Filters", expanded=True):
             career2 = st.multiselect("Career F2", outcome_options_career, key="spider_career2")
             career3 = st.multiselect("Career F3", outcome_options_career, key="spider_career3")
         with col_o:
-            opp_prev1 = st.multiselect("Opp Prev 1", outcome_options_raw, key="spider_opp_prev1")
-            opp_prev2 = st.multiselect("Opp Prev 2", outcome_options_raw, key="spider_opp_prev2")
-            opp_prev3 = st.multiselect("Opp Prev 3", outcome_options_raw, key="spider_opp_prev3")
+            st.write("**Opponent Outcomes**")
+            opp_prev1 = st.multiselect("Opp Prev Fight 1", outcome_options_raw, key="spider_opp_prev1")
+            opp_prev2 = st.multiselect("Opp Prev Fight 2", outcome_options_raw, key="spider_opp_prev2")
+            opp_prev3 = st.multiselect("Opp Prev Fight 3", outcome_options_raw, key="spider_opp_prev3")
             opp_career1 = st.multiselect("Opp Career F1", outcome_options_career, key="spider_opp_career1")
             opp_career2 = st.multiselect("Opp Career F2", outcome_options_career, key="spider_opp_career2")
             opp_career3 = st.multiselect("Opp Career F3", outcome_options_career, key="spider_opp_career3")
@@ -473,53 +474,43 @@ with st.expander("Spider Filters", expanded=True):
             min_wmd, max_wmd = get_diff_range(original_data, 'WeightedMasseyDecayDiff')
             wmd_range = st.slider("WeightedMasseyDecayDiff range", min_wmd, max_wmd, (min_wmd, max_wmd), step=0.01, key="spider_wmd")
 
-    # ---- Other ----
-    with st.expander("Other", expanded=False):
-        prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_prev_title")
-        opp_prev_title = st.selectbox("Opp Prev Fight Was Title?", ["All", "Yes", "No"], key="spider_opp_prev_title")
-        new_wc = st.checkbox("New Weight Class", key="spider_new_wc")
-
 # ----- Pack all filter values into a dict for caching -----
 filter_params = {
-    'wc': wc, 'stance': stance, 'country': country, 'event_country': event_country,
-    'sched_rounds': sched_rounds, 'title_fight': title_fight,
+    'wc': wc, 'stance': stance, 'event_country': event_country,
+    'sched_rounds': sched_rounds, 'title_fight': title_fight, 'new_wc': new_wc,
+    'fighter_country': fighter_country, 'opponent_country': opponent_country,
     'hometown_fighter': hometown_fighter, 'opp_hometown': opp_hometown,
     'fn_min': fn_min, 'fn_max': fn_max, 'ofn_min': ofn_min, 'ofn_max': ofn_max,
-    'cwp_min': cwp_min, 'cwp_max': cwp_max,
+    'prev_title': prev_title, 'opp_prev_title': opp_prev_title,
     'age_min': age_min, 'age_max': age_max, 'ad_min': ad_min, 'ad_max': ad_max,
     'hd_min': hd_min, 'hd_max': hd_max, 'rd_min': rd_min, 'rd_max': rd_max,
     'days_min': days_min, 'days_max': days_max,
     'ddiff_min': ddiff_min, 'ddiff_max': ddiff_max,
     'avg3_min': avg3_min, 'avg3_max': avg3_max,
+    'cwp_min': cwp_min, 'cwp_max': cwp_max,
     'odds_min': odds_min, 'odds_max': odds_max,
     'podds_min': podds_min, 'podds_max': podds_max,
     'skip_nc': skip_nc,
-    'prev1_col': prev1_col, 'prev2_col': prev2_col, 'prev3_col': prev3_col,
-    'career1_col': career1_col, 'career2_col': career2_col, 'career3_col': career3_col,
-    'opp_career1_col': opp_career1_col, 'opp_career2_col': opp_career2_col, 'opp_career3_col': opp_career3_col,
     'prev1': prev1, 'prev2': prev2, 'prev3': prev3,
     'career1': career1, 'career2': career2, 'career3': career3,
     'opp_prev1': opp_prev1, 'opp_prev2': opp_prev2, 'opp_prev3': opp_prev3,
     'opp_career1': opp_career1, 'opp_career2': opp_career2, 'opp_career3': opp_career3,
-    'prev_title': prev_title, 'opp_prev_title': opp_prev_title, 'new_wc': new_wc,
     'use_colley': use_colley, 'colley_range': colley_range,
     'use_massey': use_massey, 'massey_range': massey_range,
     'use_wmd': use_wmd, 'wmd_range': wmd_range,
 }
 
-# Call cached heavy processing
 spider_data, fighter_mask_spider, opponent_mask_spider = apply_spider_filters(original_data, filter_params)
 
 # ---- Split into upcoming and historical; deduplicate only historical ----
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
 spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
 
-# Keep one row per historical fight (the row that satisfied fighter‑side filters)
 if len(spider_hist) > 0:
+    # Keep only the row that satisfied fighter‑side filters (one per fight)
     fighter_mask_aligned = fighter_mask_spider.loc[spider_hist.index]
     spider_hist = spider_hist[fighter_mask_aligned]
 
-# ---- Pre‑compute filtered historical summary ----
 total_completed_fights = spider_hist['FightID'].nunique()
 total_wins = (spider_hist['Win?'] == 'Yes').sum()
 filtered_wr = total_wins / len(spider_hist) * 100 if len(spider_hist) > 0 else 0.0
@@ -527,7 +518,6 @@ filtered_wr = total_wins / len(spider_hist) * 100 if len(spider_hist) > 0 else 0
 if spider_upcoming.empty:
     st.write("No upcoming fights for similarity.")
 else:
-    # Ensure upcoming fights still have both rows
     fight_counts = spider_upcoming.groupby('FightID').size()
     complete_ids = fight_counts[fight_counts == 2].index
     spider_upcoming = spider_upcoming[spider_upcoming['FightID'].isin(complete_ids)]
@@ -558,7 +548,6 @@ else:
                 f1 = fight_rows.iloc[0]
                 f2 = fight_rows.iloc[1]
 
-                # ---- Show which fighter matches the fighter‑side filters ----
                 mask_f = fighter_mask_spider.loc[fight_rows.index]
                 match_info = []
                 for i, row in fight_rows.iterrows():
@@ -623,7 +612,6 @@ else:
                 manual_list = st.session_state.manual_spider_vars
                 combined = list(set(auto_list + manual_list).intersection(sim_features))
 
-                # ---- Similarity metrics (unchanged) ----
                 if not combined:
                     st.warning("No similarity variables selected.")
                 else:
