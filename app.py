@@ -422,7 +422,10 @@ spider_data_full = original_data.copy()
 spider_data, fighter_mask_spider, opponent_mask_spider = build_independent_filter(spider_data_full, "spider")
 
 # ----- Strict per‑row mask for upcoming fights only -----
-row_perm_strict = fighter_mask_spider & opponent_mask_spider
+# Align masks to the filtered spider_data index
+fighter_aligned = fighter_mask_spider.loc[spider_data.index]
+opponent_aligned = opponent_mask_spider.loc[spider_data.index]
+row_perm_strict = fighter_aligned & opponent_aligned
 strict_fight_ok = row_perm_strict.groupby(spider_data['FightID']).transform('all')
 strict_fight_ids = spider_data.loc[strict_fight_ok, 'FightID'].unique()
 # ----------------------------------------------------------
