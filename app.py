@@ -176,15 +176,16 @@ else:
     st.info("No upcoming fights available.")
 
 # -----------------------------------------------
-# INDEPENDENT FILTER HELPER (permutation matching + deduplication)
+# INDEPENDENT FILTER HELPER (permutation matching, no deduplication)
 # -----------------------------------------------
 def build_independent_filter(df, key_prefix):
     """
     Returns (filtered_df, fighter_mask, opponent_mask).
-    - filtered_df contains exactly ONE row per historical fight, chosen as the row
-      that satisfies the fighter‑side filters in the valid permutation.
-    - fighter_mask: per-row True if row passes fighter‑side filters.
-    - opponent_mask: per-row True if row passes opponent‑side filters.
+    - filtered_df contains all rows of fights that pass strict AND filters AND
+      have a valid permutation (one row matches fighter-side, the other opponent-side).
+      Both rows are kept. Deduplication will be done later if needed.
+    - fighter_mask: per-row True if row passes fighter-side filters.
+    - opponent_mask: per-row True if row passes opponent-side filters.
     """
     with st.expander(f"{key_prefix} Filters", expanded=True):
         # --- General ---
@@ -408,31 +409,20 @@ def build_independent_filter(df, key_prefix):
     for m in opponent_masks[1:]:
         opponent_mask &= m
 
-    # ==========================================
-    # PERMUTATION CHECK + DEDUPLICATION (NEW)
-    # ==========================================
-    def get_selected_row_mask(group):
-        # group has exactly two rows (one fight)
+    # ============================================================
+    # PERMUTATION CHECK – keeps both rows if valid
+    # ============================================================
+    def check_permutation(group):
         idx = group.index.tolist()
         if len(idx) != 2:
-            # Incomplete fight – drop entirely
             return pd.Series(False, index=group.index)
         i1, i2 = idx[0], idx[1]
         perm1 = fighter_mask.loc[i1] and opponent_mask.loc[i2]
         perm2 = fighter_mask.loc[i2] and opponent_mask.loc[i1]
+        keep = perm1 or perm2
+        return pd.Series([keep, keep], index=group.index)
 
-        if perm1:
-            # Keep row i1 as the "fighter" side
-            return pd.Series([True, False], index=group.index)
-        elif perm2:
-            # Keep row i2 as the "fighter" side
-            return pd.Series([False, True], index=group.index)
-        else:
-            # No valid permutation → drop both
-            return pd.Series([False, False], index=group.index)
-
-    # Build per-row mask that selects exactly one row per valid fight
-    perm_ok = df.groupby('FightID', group_keys=False).apply(get_selected_row_mask)
+    perm_ok = df.groupby('FightID', group_keys=False).apply(check_permutation)
 
     final_mask = mask_strict & perm_ok.reindex(df.index, fill_value=False)
 
@@ -446,21 +436,24 @@ st.header("Fight Similarity (Independent Filters)")
 spider_data_full = original_data.copy()
 spider_data, fighter_mask_spider, opponent_mask_spider = build_independent_filter(spider_data_full, "spider")
 
-# ---- Pre‑compute filtered historical summary (for inline display) ----
-spider_hist_all = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
-total_completed_fights = spider_hist_all['FightID'].nunique()   # now equal to number of rows because deduplicated
-
-fighter_rows = spider_hist_all[fighter_mask_spider.loc[spider_hist_all.index]]
-total_wins = (fighter_rows['Win?'] == 'Yes').sum()
-total_fights_fside = len(fighter_rows)
-filtered_wr = total_wins / total_fights_fside * 100 if total_fights_fside > 0 else 0.0
-
+# ---- Split into upcoming and historical; deduplicate only historical ----
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
 spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
+
+# Deduplicate historical fights: keep exactly the row that satisfies fighter-side filters.
+# For a valid historical fight, exactly one row will match fighter_mask (the "fighter" side).
+fighter_mask_aligned = fighter_mask_spider.loc[spider_hist.index]
+spider_hist = spider_hist[fighter_mask_aligned].copy()   # now one row per fight
+
+# ---- Pre‑compute filtered historical summary (for inline display) ----
+total_completed_fights = spider_hist['FightID'].nunique()
+total_wins = (spider_hist['Win?'] == 'Yes').sum()
+filtered_wr = total_wins / len(spider_hist) * 100 if len(spider_hist) > 0 else 0.0
 
 if spider_upcoming.empty:
     st.write("No upcoming fights for similarity.")
 else:
+    # Ensure upcoming fights still have both rows
     fight_counts = spider_upcoming.groupby('FightID').size()
     complete_ids = fight_counts[fight_counts == 2].index
     spider_upcoming = spider_upcoming[spider_upcoming['FightID'].isin(complete_ids)]
