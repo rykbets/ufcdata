@@ -497,15 +497,22 @@ else:
                         # Compute MI on the filtered historical data
                         @st.cache_data
                         def compute_mi_ranking(df_hist, features):
-                            tmp = df_hist.copy()
-                            tmp['Target'] = (tmp['Win?'] == 'Yes').astype(int)
-                            X = tmp[features].dropna()
-                            y = tmp.loc[X.index, 'Target']
+                            # Only keep rows where the target is known (Win? is Yes/No)
+                            tmp = df_hist[df_hist['Win?'].isin(['Yes','No'])].copy()
+                            # Target must be 0/1
+                            y = (tmp['Win?'] == 'Yes').astype(int)
+                            # Features: only the columns in 'features' that are present and numeric
+                            X = tmp[features].select_dtypes(include=[np.number])
+                            # Drop rows where all features are NaN
+                            X = X.dropna()
+                            y = y.loc[X.index]
+                            # If no data left, return an empty series
+                            if len(X) == 0:
+                                return pd.Series(dtype=float)
                             imp = SimpleImputer(strategy='median')
                             X_imp = imp.fit_transform(X)
                             mi = mutual_info_classif(X_imp, y, discrete_features=False, random_state=42)
-                            mi_series = pd.Series(mi, index=features).sort_values(ascending=False)
-                            return mi_series
+                            return pd.Series(mi, index=X.columns).sort_values(ascending=False)
 
                         mi_series = compute_mi_ranking(spider_hist, sim_features)
                         mi_vars = mi_series.head(top_n_mi).index.tolist()
