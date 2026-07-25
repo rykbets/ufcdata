@@ -507,7 +507,6 @@ spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] 
 spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
 
 if len(spider_hist) > 0:
-    # Keep only the row that satisfied fighter‑side filters (one per fight)
     fighter_mask_aligned = fighter_mask_spider.loc[spider_hist.index]
     spider_hist = spider_hist[fighter_mask_aligned]
 
@@ -559,7 +558,6 @@ else:
                 top_n_f1 = c_slider1.slider("Top N (Fighter 1)", 0, 10, 0, key="top_n_f1")
                 top_n_f2 = c_slider2.slider("Top N (Fighter 2)", 0, 10, 0, key="top_n_f2")
 
-                # ---- Auto‑selection logic (unchanged) ----
                 if top_n_f1 > 0 or top_n_f2 > 0:
                     diff_cols = [c for c in f1.index if c.endswith('_opp_diff')]
                     f1_diffs = {c: abs(f1[c]) for c in diff_cols if pd.notna(f1[c])}
@@ -669,33 +667,31 @@ else:
                             col3.metric("Total Similarity", f"{total_sim:.1f}")
                             col4.metric("Composite Score", f"{composite:.1f}")
 
-                            # ---- Win rate calculations for thresholds 90, 80, 60 ----
+                            # ---------- NEW: Weighting exponent slider ----------
+                            weight_power = st.slider("Weighting Exponent (higher = more impact from high scores)",
+                                                     1.0, 4.0, 1.0, 0.5, key="weight_power")
+                            # ------------------------------------------------------
+
                             high_sim_90 = top_n[top_n['Similarity'] >= 90]
                             high_sim_80 = top_n[top_n['Similarity'] >= 80]
                             high_sim_60 = top_n[top_n['Similarity'] >= 60]
 
-                            # ≥90%
-                            wins_90 = (high_sim_90['Win?'] == 'Yes').sum() if len(high_sim_90) > 0 else 0
-                            win_rate_90 = wins_90 / len(high_sim_90) * 100 if len(high_sim_90) > 0 else 0.0
-                            weight_sum_wins_90 = high_sim_90.loc[high_sim_90['Win?'] == 'Yes', 'Similarity'].sum() if wins_90 > 0 else 0.0
-                            weight_sum_all_90 = high_sim_90['Similarity'].sum() if len(high_sim_90) > 0 else 1
-                            weighted_wr_90 = (weight_sum_wins_90 / weight_sum_all_90) * 100 if weight_sum_all_90 > 0 else 0.0
+                            # Use similarity**weight_power as weight
+                            def weighted_win_rate(subset):
+                                if len(subset) == 0:
+                                    return 0.0, 0.0
+                                wins = subset['Win?'] == 'Yes'
+                                weights = subset['Similarity'] ** weight_power
+                                total_weight = weights.sum()
+                                win_weight = weights[wins].sum() if wins.any() else 0.0
+                                wr = wins.mean() * 100
+                                wwr = (win_weight / total_weight) * 100 if total_weight > 0 else 0.0
+                                return wr, wwr
 
-                            # ≥80%
-                            wins_80 = (high_sim_80['Win?'] == 'Yes').sum() if len(high_sim_80) > 0 else 0
-                            win_rate_80 = wins_80 / len(high_sim_80) * 100 if len(high_sim_80) > 0 else 0.0
-                            weight_sum_wins_80 = high_sim_80.loc[high_sim_80['Win?'] == 'Yes', 'Similarity'].sum() if wins_80 > 0 else 0.0
-                            weight_sum_all_80 = high_sim_80['Similarity'].sum() if len(high_sim_80) > 0 else 1
-                            weighted_wr_80 = (weight_sum_wins_80 / weight_sum_all_80) * 100 if weight_sum_all_80 > 0 else 0.0
+                            win_rate_90, weighted_wr_90 = weighted_win_rate(high_sim_90)
+                            win_rate_80, weighted_wr_80 = weighted_win_rate(high_sim_80)
+                            win_rate_60, weighted_wr_60 = weighted_win_rate(high_sim_60)
 
-                            # ≥60%
-                            wins_60 = (high_sim_60['Win?'] == 'Yes').sum() if len(high_sim_60) > 0 else 0
-                            win_rate_60 = wins_60 / len(high_sim_60) * 100 if len(high_sim_60) > 0 else 0.0
-                            weight_sum_wins_60 = high_sim_60.loc[high_sim_60['Win?'] == 'Yes', 'Similarity'].sum() if wins_60 > 0 else 0.0
-                            weight_sum_all_60 = high_sim_60['Similarity'].sum() if len(high_sim_60) > 0 else 1
-                            weighted_wr_60 = (weight_sum_wins_60 / weight_sum_all_60) * 100 if weight_sum_all_60 > 0 else 0.0
-
-                            # Display all six metrics in one row (6 columns)
                             col5, col6, col7, col8, col9, col10 = st.columns(6)
                             col5.metric("Win Rate (≥90%)", f"{win_rate_90:.1f}%", delta=f"{len(high_sim_90)} fights")
                             col6.metric("Weighted WR (≥90%)", f"{weighted_wr_90:.1f}%")
