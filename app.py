@@ -648,35 +648,32 @@ else:
                             sim_df['Similarity'] = combined_sim.round(1)
                             sim_df = sim_df.sort_values('Similarity', ascending=False)
 
+                            # --- Hard‑coded top 100 (or fewer if less data) ---
+                            top_n = sim_df.head(100)
+                            count = len(top_n)
+
                             total_hist_count = len(sim_df)
                             cm1, cm2 = st.columns(2)
                             cm1.metric("Total Completed Fights", total_completed_fights)
                             cm2.metric("Win Rate (filtered)", f"{filtered_wr:.1f}%")
 
-                            st.subheader("Similarity Metrics (Top N)")
-                            n_top = st.slider("Number of top similar fights", 5, 100, 50, step=5, key="spider_top_n")
-                            top_n = sim_df.head(n_top)
-                            count = len(top_n)
+                            st.subheader("Similarity Metrics (Top 100 Fights)")
+
                             avg_sim = top_n['Similarity'].mean()
                             total_sim = top_n['Similarity'].sum()
                             composite = avg_sim * (count ** 0.5) / 100
 
                             col1, col2, col3, col4 = st.columns(4)
-                            col1.metric("Count (Top N)", count)
+                            col1.metric("Count", count)
                             col2.metric("Avg Similarity", f"{avg_sim:.1f}%")
                             col3.metric("Total Similarity", f"{total_sim:.1f}")
                             col4.metric("Composite Score", f"{composite:.1f}")
 
-                            # ---------- NEW: Weighting exponent slider ----------
+                            # ----- Weighting exponent slider (replaces old top‑N) -----
                             weight_power = st.slider("Weighting Exponent (higher = more impact from high scores)",
                                                      1.0, 4.0, 1.0, 0.5, key="weight_power")
-                            # ------------------------------------------------------
 
-                            high_sim_90 = top_n[top_n['Similarity'] >= 90]
-                            high_sim_80 = top_n[top_n['Similarity'] >= 80]
-                            high_sim_60 = top_n[top_n['Similarity'] >= 60]
-
-                            # Use similarity**weight_power as weight
+                            # Helper for weighted win rate using similarity ** weight_power
                             def weighted_win_rate(subset):
                                 if len(subset) == 0:
                                     return 0.0, 0.0
@@ -688,22 +685,33 @@ else:
                                 wwr = (win_weight / total_weight) * 100 if total_weight > 0 else 0.0
                                 return wr, wwr
 
+                            high_sim_90 = top_n[top_n['Similarity'] >= 90]
+                            high_sim_80 = top_n[top_n['Similarity'] >= 80]
+                            high_sim_70 = top_n[top_n['Similarity'] >= 70]
+                            high_sim_60 = top_n[top_n['Similarity'] >= 60]
+
                             win_rate_90, weighted_wr_90 = weighted_win_rate(high_sim_90)
                             win_rate_80, weighted_wr_80 = weighted_win_rate(high_sim_80)
+                            win_rate_70, weighted_wr_70 = weighted_win_rate(high_sim_70)
                             win_rate_60, weighted_wr_60 = weighted_win_rate(high_sim_60)
 
-                            col5, col6, col7, col8, col9, col10 = st.columns(6)
+                            # Show 8 columns for all thresholds (≥90, ≥80, ≥70, ≥60)
+                            col5, col6, col7, col8 = st.columns(4)
                             col5.metric("Win Rate (≥90%)", f"{win_rate_90:.1f}%", delta=f"{len(high_sim_90)} fights")
                             col6.metric("Weighted WR (≥90%)", f"{weighted_wr_90:.1f}%")
                             col7.metric("Win Rate (≥80%)", f"{win_rate_80:.1f}%", delta=f"{len(high_sim_80)} fights")
                             col8.metric("Weighted WR (≥80%)", f"{weighted_wr_80:.1f}%")
-                            col9.metric("Win Rate (≥60%)", f"{win_rate_60:.1f}%", delta=f"{len(high_sim_60)} fights")
-                            col10.metric("Weighted WR (≥60%)", f"{weighted_wr_60:.1f}%")
+
+                            col9, col10, col11, col12 = st.columns(4)
+                            col9.metric("Win Rate (≥70%)", f"{win_rate_70:.1f}%", delta=f"{len(high_sim_70)} fights")
+                            col10.metric("Weighted WR (≥70%)", f"{weighted_wr_70:.1f}%")
+                            col11.metric("Win Rate (≥60%)", f"{win_rate_60:.1f}%", delta=f"{len(high_sim_60)} fights")
+                            col12.metric("Weighted WR (≥60%)", f"{weighted_wr_60:.1f}%")
 
                             fig_hist = px.histogram(sim_df, x='Similarity', nbins=20, title="Similarity Distribution (Combined)")
                             st.plotly_chart(fig_hist, use_container_width=True, key="sim_hist_chart")
 
-                            st.subheader(f"Top {n_top} Most Similar Historical Fights")
+                            st.subheader(f"Top 100 Most Similar Historical Fights")
                             col_order = ['FightDate','Fighter','Opponent','Win?'] + [f'Sim_{m}' for m in distance_metrics] + ['Similarity']
                             st.dataframe(top_n[col_order], use_container_width=True)
 
