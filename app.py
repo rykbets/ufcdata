@@ -479,7 +479,9 @@ else:
                 top_n_f1 = c_slider1.slider("Top N (Fighter 1)", 0, 10, 0, key="top_n_f1")
                 top_n_f2 = c_slider2.slider("Top N (Fighter 2)", 0, 10, 0, key="top_n_f2")
 
+                # ---- Auto‑selection logic: differentials → feature importance → manual only ----
                 if top_n_f1 > 0 or top_n_f2 > 0:
+                    # Differential-based auto selection (current logic)
                     diff_cols = [c for c in f1.index if c.endswith('_opp_diff')]
                     f1_diffs = {c: abs(f1[c]) for c in diff_cols if pd.notna(f1[c])}
                     f2_diffs = {c: abs(f2[c]) for c in diff_cols if pd.notna(f2[c])}
@@ -488,7 +490,29 @@ else:
                     auto_vars = list(set(top_f1 + top_f2).intersection(sim_features))
                     st.session_state.auto_vars = auto_vars if auto_vars else None
                 else:
-                    st.session_state.auto_vars = None
+                    # Both differential sliders are 0 → show feature importance slider
+                    top_n_mi = st.slider("Top N by Feature Importance", 0, 10, 0,
+                                        help="Select top variables by mutual information with win/loss")
+                    if top_n_mi > 0:
+                        # Compute MI on the filtered historical data
+                        @st.cache_data
+                        def compute_mi_ranking(df_hist, features):
+                            tmp = df_hist.copy()
+                            tmp['Target'] = (tmp['Win?'] == 'Yes').astype(int)
+                            X = tmp[features].dropna()
+                            y = tmp.loc[X.index, 'Target']
+                            imp = SimpleImputer(strategy='median')
+                            X_imp = imp.fit_transform(X)
+                            mi = mutual_info_classif(X_imp, y, discrete_features=False, random_state=42)
+                            mi_series = pd.Series(mi, index=features).sort_values(ascending=False)
+                            return mi_series
+
+                        mi_series = compute_mi_ranking(spider_hist, sim_features)
+                        mi_vars = mi_series.head(top_n_mi).index.tolist()
+                        st.session_state.auto_vars = mi_vars
+                    else:
+                        st.session_state.auto_vars = None
+                # ------------------------------------------------------------------------
 
                 st.write("**Optional: manually add variables**")
                 st.multiselect(
@@ -503,7 +527,7 @@ else:
 
                 # If no variables at all, warn and skip similarity
                 if not combined:
-                    st.warning("No similarity variables selected. Either set the sliders > 0 or add variables manually.")
+                    st.warning("No similarity variables selected. Either set the sliders > 0, use feature importance, or add variables manually.")
                 else:
                     available_metrics = ["Euclidean", "Manhattan", "Chebyshev"]
                     distance_metrics = st.multiselect("Distance metrics", available_metrics,
