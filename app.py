@@ -183,8 +183,64 @@ else:
     st.info("No upcoming fights available.")
 
 # ================================================================
-# CACHED FILTER FUNCTIONS
+# SINGLE FIGHTER FILTERS
 # ================================================================
+st.header("Single Fighter Filters")
+with st.expander("Filters (Fighter‑side only)", expanded=False):
+    with st.expander("General", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            s_wc = st.multiselect("Weight Class", sorted(original_data['WC'].dropna().unique()), key="single_wc")
+            s_stance = st.multiselect("Stance", sorted(original_data['Stance'].dropna().unique()), key="single_stance")
+            s_country = st.multiselect("Country", sorted(original_data['Country'].dropna().unique()), key="single_country")
+            s_event_country = st.multiselect("Event Country", sorted(original_data['EventCountry'].dropna().unique()), key="single_event")
+        with col2:
+            s_sched_rounds = st.multiselect("Scheduled Rounds", sorted(original_data['ScheduledRounds'].dropna().unique()), key="single_sched")
+            s_title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"], key="single_title")
+            s_new_wc = st.checkbox("New Weight Class", key="single_new_wc")
+
+    colA, _ = st.columns(2)
+    with colA:
+        s_hometown = st.multiselect("Hometown", sorted(original_data['HometownFighter'].dropna().unique()), key="single_hometown")
+        s_fn_min = st.number_input("Min Fight #", value=1, min_value=1, max_value=int(original_data['FightNumber'].max()), key="single_fn_min")
+        s_fn_max = st.number_input("Max Fight #", value=int(original_data['FightNumber'].max()), key="single_fn_max")
+        s_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="single_prev_title")
+
+    with st.expander("Previous Outcomes", expanded=False):
+        s_skip_nc = st.checkbox("Skip NC outcomes", key="single_skip_nc")
+        if s_skip_nc:
+            s_prev1_col = 'Prev1_Outcome_skipNC'
+            s_career1_col = 'Career1_Outcome_skipNC'
+        else:
+            s_prev1_col = 'Prev1_Outcome_raw'
+            s_career1_col = 'Career1_Outcome_raw'
+
+        all_outcomes_raw = sorted(original_data[s_prev1_col].dropna().unique())
+        all_outcomes_career = sorted(original_data[s_career1_col].dropna().unique())
+        s_outcome_options_raw = all_outcomes_raw + ["Win (any)", "Loss (any)"]
+        s_outcome_options_career = all_outcomes_career + ["Win (any)", "Loss (any)"]
+
+        col_f, _ = st.columns(2)
+        with col_f:
+            s_prev1 = st.multiselect("Prev Fight 1", s_outcome_options_raw, key="single_prev1")
+            s_prev2 = st.multiselect("Prev Fight 2", s_outcome_options_raw, key="single_prev2")
+            s_prev3 = st.multiselect("Prev Fight 3", s_outcome_options_raw, key="single_prev3")
+            s_career1 = st.multiselect("Career F1", s_outcome_options_career, key="single_career1")
+            s_career2 = st.multiselect("Career F2", s_outcome_options_career, key="single_career2")
+            s_career3 = st.multiselect("Career F3", s_outcome_options_career, key="single_career3")
+
+single_params = {
+    'wc': s_wc, 'stance': s_stance, 'country': s_country,
+    'event_country': s_event_country, 'sched_rounds': s_sched_rounds,
+    'title_fight': s_title_fight, 'new_wc': s_new_wc,
+    'hometown_fighter': s_hometown,
+    'fn_min': s_fn_min, 'fn_max': s_fn_max,
+    'prev_title': s_prev_title,
+    'skip_nc': s_skip_nc,
+    'prev1': s_prev1, 'prev2': s_prev2, 'prev3': s_prev3,
+    'career1': s_career1, 'career2': s_career2, 'career3': s_career3,
+}
+
 @st.cache_data
 def apply_single_fighter_filters(df, params):
     """
@@ -253,11 +309,23 @@ def apply_single_fighter_filters(df, params):
     if hometown and 'HometownFighter' in df.columns:
         mask &= df['HometownFighter'].isin(hometown)
 
-    # Keep fights where at least one row satisfies the mask
     fight_ok = mask.groupby(df['FightID']).transform('any')
     filtered_df = df[fight_ok].copy()
     return filtered_df, mask
-@st.cache_data
+
+single_filtered_data, single_mask = apply_single_fighter_filters(original_data, single_params)
+
+# Metrics using only the rows that matched the fighter‑side criteria
+single_completed = single_filtered_data[single_filtered_data['Win?'].isin(['Yes','No'])]
+single_matched_rows = single_completed[single_mask]          # only rows that passed the mask
+single_fights = single_completed['FightID'].nunique()        # unique fights (both rows present)
+single_wins = (single_matched_rows['Win?'] == 'Yes').sum()
+single_total = len(single_matched_rows)
+single_wr = single_wins / single_total * 100 if single_total > 0 else 0.0
+
+col_s1, col_s2 = st.columns(2)
+col_s1.metric("Total Completed Fights (single filter)", single_fights)
+col_s2.metric("Win Rate (single filter)", f"{single_wr:.1f}%")@st.cache_data
 def apply_spider_filters(df, params):
     """
     Apply strict AND filters first, then permutation check on the subset.
