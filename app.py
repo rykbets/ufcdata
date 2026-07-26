@@ -489,6 +489,12 @@ total_completed_fights = spider_hist['FightID'].nunique()
 total_wins = (spider_hist['Win?'] == 'Yes').sum()
 filtered_wr = total_wins / len(spider_hist) * 100 if len(spider_hist) > 0 else 0.0
 
+# ---- Show filtered dataset summary ----
+col_metric1, col_metric2 = st.columns(2)
+col_metric1.metric("Total Completed Fights (filtered)", total_completed_fights)
+col_metric2.metric("Win Rate (filtered)", f"{filtered_wr:.1f}%")
+# ---------------------------------------
+
 if spider_upcoming.empty:
     st.write("No upcoming fights for similarity.")
 else:
