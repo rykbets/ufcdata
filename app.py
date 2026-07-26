@@ -8,7 +8,15 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import cross_val_score
+from sklearn.calibration import CalibratedClassifierCV
 from lightgbm import LGBMClassifier
+
+# Optional CatBoost
+try:
+    from catboost import CatBoostClassifier
+    CATBOOST_AVAILABLE = True
+except ImportError:
+    CATBOOST_AVAILABLE = False
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
@@ -568,8 +576,8 @@ else:
                 manual_list = st.session_state.manual_spider_vars
                 combined = list(set(auto_list + manual_list).intersection(sim_features))
 
-                # ========== DECISION TREE (ALL FEATURES) – AUTO ==========
-                st.subheader("Decision Tree (All Differential Features)")
+                # ========== DECISION TREE (ALL FEATURES) – AUTO + PLATT ==========
+                st.subheader("Decision Tree (All Differential Features) – Platt‑calibrated")
                 spider_tree_hist = spider_hist.copy()
                 if len(spider_tree_hist) < 10:
                     st.warning("Not enough historical fights for decision tree.")
@@ -590,8 +598,11 @@ else:
 
                         dt_sp = DecisionTreeClassifier(max_depth=max_depth_sp, min_samples_leaf=min_samples_leaf_sp,
                                                        criterion=criterion_sp, random_state=42)
-                        dt_sp.fit(X_sp, y_sp)
+                        # Platt calibration
+                        calib_dt_sp = CalibratedClassifierCV(dt_sp, method='sigmoid', cv=5)
+                        calib_dt_sp.fit(X_sp, y_sp)
 
+                        # Prediction (calibrated)
                         if len(fight_rows) == 2:
                             f1_row = fight_rows.iloc[0]
                             input_vals = []
@@ -602,15 +613,17 @@ else:
                                 input_vals.append(val)
                             X_input = np.array([input_vals])
                             try:
-                                prob = dt_sp.predict_proba(X_input)[0, 1]
+                                prob = calib_dt_sp.predict_proba(X_input)[0, 1]
+                                # leaf ID from uncalibrated tree
                                 leaf = dt_sp.apply(X_input)[0]
-                                st.write(f"**{f1_row['Fighter']}** → leaf **{leaf}** with win probability **{prob:.1%}**")
+                                st.write(f"**{f1_row['Fighter']}** → leaf **{leaf}** with calibrated win probability **{prob:.1%}**")
                             except Exception as e:
                                 st.error(f"Prediction error: {e}")
                         else:
                             st.warning("Fight data incomplete for prediction.")
 
-                        st.subheader("Leaf Win Percentages")
+                        # Leaf win percentages (uncalibrated)
+                        st.subheader("Leaf Win Percentages (uncalibrated)")
                         leaf_ids = dt_sp.apply(X_sp)
                         leaf_stats = []
                         for leaf_id in np.unique(leaf_ids):
@@ -623,8 +636,8 @@ else:
                         leaf_df = pd.DataFrame(leaf_stats)
                         st.dataframe(leaf_df, use_container_width=True, hide_index=True)
 
-                # ========== LIGHTGBM MODELS (BOTH USE ALL DIFF FEATURES) ==========
-                st.header("LightGBM Models (5‑fold CV Accuracy)")
+                # ========== MODEL COMPARISON (LGBM + CatBoost + Top‑Var DT) ==========
+                st.header("Model Comparison (Platt‑calibrated, 5‑fold CV)")
 
                 all_diff_features = [c for c in numeric_features if c in spider_data.columns and c not in abs_rating_cols]
                 top_diff_features = st.session_state.auto_vars if st.session_state.auto_vars else []
@@ -665,41 +678,9 @@ else:
                     else:
                         fighter_name = None
 
-                    # ----- LightGBM 1 -----
-                    st.subheader("LightGBM – Model 1")
-                    lgbm1_depth = st.slider("Max Depth (Model 1)", 1, 20, 6, key="lgbm1_depth")
-                    lgbm1 = LGBMClassifier(n_estimators=200, max_depth=lgbm1_depth, random_state=42, n_jobs=-1, verbosity=-1)
-                    cv1 = cross_val_score(lgbm1, X_all, y, cv=5, scoring='accuracy').mean()
-                    lgbm1.fit(X_all, y)
-
-                    col_m1a, col_m1b = st.columns(2)
-                    col_m1a.metric("CV Accuracy (Model 1)", f"{cv1:.1%}")
-                    if fighter_name and all_diff_features:
-                        X_input_1 = get_fighter_input(f1_row, all_diff_features, spider_hist)
-                        prob1 = lgbm1.predict_proba(X_input_1)[0, 1]
-                        col_m1b.write(f"**{fighter_name}** win prob: **{prob1:.1%}**")
-                    else:
-                        col_m1b.write("No fighter prediction available.")
-
-                    # ----- LightGBM 2 -----
-                    st.subheader("LightGBM – Model 2")
-                    lgbm2_depth = st.slider("Max Depth (Model 2)", 1, 20, 6, key="lgbm2_depth")
-                    lgbm2 = LGBMClassifier(n_estimators=200, max_depth=lgbm2_depth, random_state=42, n_jobs=-1, verbosity=-1)
-                    cv2 = cross_val_score(lgbm2, X_all, y, cv=5, scoring='accuracy').mean()
-                    lgbm2.fit(X_all, y)
-
-                    col_m2a, col_m2b = st.columns(2)
-                    col_m2a.metric("CV Accuracy (Model 2)", f"{cv2:.1%}")
-                    if fighter_name and all_diff_features:
-                        X_input_2 = get_fighter_input(f1_row, all_diff_features, spider_hist)
-                        prob2 = lgbm2.predict_proba(X_input_2)[0, 1]
-                        col_m2b.write(f"**{fighter_name}** win prob: **{prob2:.1%}**")
-                    else:
-                        col_m2b.write("No fighter prediction available.")
-
-                    # Optional top‑slider decision tree (unchanged)
+                    # ---- Top‑Var Decision Tree (Platt, auto) ----
                     if top_diff_features:
-                        st.subheader("Decision Tree (Top‑Slider Variables Only)")
+                        st.subheader("Decision Tree (Top‑Slider Variables) – Platt‑calibrated")
                         X_top = safe_prepare(spider_hist, top_diff_features)
                         c1, c2, c3 = st.columns(3)
                         with c1:
@@ -711,18 +692,60 @@ else:
 
                         dt_top = DecisionTreeClassifier(max_depth=max_depth_top, min_samples_leaf=min_samples_leaf_top,
                                                         criterion=criterion_top, random_state=42)
-                        dt_top.fit(X_top, y)
+                        calib_top = CalibratedClassifierCV(dt_top, method='sigmoid', cv=5)
+                        calib_top.fit(X_top, y)
 
                         if fighter_name:
                             X_input = get_fighter_input(f1_row, top_diff_features, spider_hist)
                             try:
-                                prob = dt_top.predict_proba(X_input)[0, 1]
+                                prob = calib_top.predict_proba(X_input)[0, 1]
                                 leaf = dt_top.apply(X_input)[0]
-                                st.write(f"**{fighter_name}** (top‑var tree) → leaf **{leaf}** with win probability **{prob:.1%}**")
+                                st.write(f"**{fighter_name}** (top‑var tree) → leaf **{leaf}** with calibrated win probability **{prob:.1%}**")
                             except Exception as e:
                                 st.error(f"Prediction error: {e}")
                     else:
-                        st.info("No top‑slider variables selected.")
+                        st.info("No top‑slider variables selected. Skipping Top‑Var tree.")
+
+                    # ----- LightGBM (Platt) -----
+                    st.subheader("LightGBM – Platt‑calibrated")
+                    lgbm_all_depth = st.slider("Max Depth (LightGBM)", 1, 20, 6, key="lgbm_all_depth")
+                    lgbm_base = LGBMClassifier(n_estimators=200, max_depth=lgbm_all_depth, random_state=42, n_jobs=-1, verbosity=-1)
+                    calib_lgbm = CalibratedClassifierCV(lgbm_base, method='sigmoid', cv=5)
+                    # CV on base model (uncalibrated) for accurate accuracy measure
+                    cv_lgbm = cross_val_score(lgbm_base, X_all, y, cv=5, scoring='accuracy').mean()
+                    calib_lgbm.fit(X_all, y)
+
+                    col_l1, col_l2 = st.columns(2)
+                    col_l1.metric("CV Accuracy (LightGBM)", f"{cv_lgbm:.1%}")
+                    if fighter_name:
+                        X_input_lgbm = get_fighter_input(f1_row, all_diff_features, spider_hist)
+                        prob_lgbm = calib_lgbm.predict_proba(X_input_lgbm)[0, 1]
+                        col_l2.write(f"**{fighter_name}** win prob: **{prob_lgbm:.1%}**")
+                    else:
+                        col_l2.write("No fighter prediction available.")
+
+                    # ----- CatBoost (Platt) -----
+                    st.subheader("CatBoost – Platt‑calibrated")
+                    if CATBOOST_AVAILABLE:
+                        cb_depth = st.slider("Max Depth (CatBoost)", 1, 20, 6, key="cb_depth")
+                        cb_base = CatBoostClassifier(
+                            iterations=200, depth=cb_depth, random_seed=42,
+                            thread_count=-1, logging_level='Silent'
+                        )
+                        calib_cb = CalibratedClassifierCV(cb_base, method='sigmoid', cv=5)
+                        cv_cb = cross_val_score(cb_base, X_all, y, cv=5, scoring='accuracy').mean()
+                        calib_cb.fit(X_all, y)
+
+                        col_c1, col_c2 = st.columns(2)
+                        col_c1.metric("CV Accuracy (CatBoost)", f"{cv_cb:.1%}")
+                        if fighter_name:
+                            X_input_cb = get_fighter_input(f1_row, all_diff_features, spider_hist)
+                            prob_cb = calib_cb.predict_proba(X_input_cb)[0, 1]
+                            col_c2.write(f"**{fighter_name}** win prob: **{prob_cb:.1%}**")
+                        else:
+                            col_c2.write("No fighter prediction available.")
+                    else:
+                        st.warning("CatBoost is not installed. Install it with `pip install catboost` to enable this model.")
 
 # -----------------------------------------------
 # FEATURE IMPORTANCE – Random Forest
