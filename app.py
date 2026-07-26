@@ -8,9 +8,9 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
-from sklearn.feature_selection import mutual_info_classif
 from sklearn.ensemble import RandomForestClassifier
-from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
+from scipy.spatial.distance import cdist
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
@@ -489,11 +489,10 @@ total_completed_fights = spider_hist['FightID'].nunique()
 total_wins = (spider_hist['Win?'] == 'Yes').sum()
 filtered_wr = total_wins / len(spider_hist) * 100 if len(spider_hist) > 0 else 0.0
 
-# ---- Show filtered dataset summary ----
+# Show filtered data summary
 col_metric1, col_metric2 = st.columns(2)
 col_metric1.metric("Total Completed Fights (filtered)", total_completed_fights)
 col_metric2.metric("Win Rate (filtered)", f"{filtered_wr:.1f}%")
-# ---------------------------------------
 
 if spider_upcoming.empty:
     st.write("No upcoming fights for similarity.")
@@ -539,6 +538,7 @@ else:
                 top_n_f1 = c_slider1.slider("Top N (Fighter 1)", 0, 10, 0, key="top_n_f1")
                 top_n_f2 = c_slider2.slider("Top N (Fighter 2)", 0, 10, 0, key="top_n_f2")
 
+                # Feature importance now uses Random Forest
                 if top_n_f1 > 0 or top_n_f2 > 0:
                     diff_cols = [c for c in f1.index if c.endswith('_opp_diff')]
                     f1_diffs = {c: abs(f1[c]) for c in diff_cols if pd.notna(f1[c])}
@@ -548,35 +548,17 @@ else:
                     auto_vars = list(set(top_f1 + top_f2).intersection(sim_features))
                     st.session_state.auto_vars = auto_vars if auto_vars else None
                 else:
-                    top_n_mi = st.slider("Top N by Feature Importance", 0, 10, 0,
-                                        help="Select top variables by mutual information with win/loss")
-                    if top_n_mi > 0:
-                        @st.cache_data
-                        def compute_mi_ranking(df_hist, features):
-                            tmp = df_hist.copy()
-                            y = (tmp['Win?'] == 'Yes').astype(int)
-                            available = [c for c in features if c in tmp.columns and np.issubdtype(tmp[c].dtype, np.number)]
-                            if not available:
-                                return pd.Series(dtype=float)
-                            missing_frac = tmp[available].isna().mean()
-                            keep_features = missing_frac[missing_frac <= 0.8].index.tolist()
-                            if not keep_features:
-                                return pd.Series(dtype=float)
-                            X = tmp[keep_features].copy()
-                            imp = SimpleImputer(strategy='median')
-                            X_imp = imp.fit_transform(X)
-                            if len(y) < 5:
-                                return pd.Series(dtype=float)
-                            mi = mutual_info_classif(X_imp, y, discrete_features=False, random_state=42)
-                            return pd.Series(mi, index=keep_features).sort_values(ascending=False)
-
-                        mi_series = compute_mi_ranking(spider_hist, sim_features)
-                        if mi_series.empty:
-                            st.warning("Not enough complete data for feature importance.")
-                            st.session_state.auto_vars = None
-                        else:
-                            mi_vars = mi_series.head(top_n_mi).index.tolist()
-                            st.session_state.auto_vars = mi_vars
+                    top_n_rf = st.slider("Top N by Feature Importance", 0, 10, 0,
+                                        help="Select top variables by Random Forest feature importance")
+                    if top_n_rf > 0:
+                        # Train a quick Random Forest on all differential features
+                        X_all = spider_hist[sim_features].fillna(spider_hist[sim_features].median())
+                        y = (spider_hist['Win?'] == 'Yes').astype(int)
+                        rf_ranker = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+                        rf_ranker.fit(X_all, y)
+                        importances = pd.Series(rf_ranker.feature_importances_, index=sim_features)
+                        top_vars = importances.sort_values(ascending=False).head(top_n_rf).index.tolist()
+                        st.session_state.auto_vars = top_vars
                     else:
                         st.session_state.auto_vars = None
 
@@ -587,18 +569,19 @@ else:
                     key="manual_spider_vars"
                 )
 
-                # ========== DECISION TREE (ALL FEATURES) – NO GRAPHIC ==========
-                st.subheader("Decision Tree (All Differential Features)")
+                auto_list = st.session_state.auto_vars if st.session_state.auto_vars else []
+                manual_list = st.session_state.manual_spider_vars
+                combined = list(set(auto_list + manual_list).intersection(sim_features))
 
+                # ========== DECISION TREE (ALL FEATURES) – AUTO ==========
+                st.subheader("Decision Tree (All Differential Features)")
                 spider_tree_hist = spider_hist.copy()
                 if len(spider_tree_hist) < 10:
                     st.warning("Not enough historical fights for decision tree.")
                 else:
                     spider_tree_hist['Target'] = (spider_tree_hist['Win?'] == 'Yes').astype(int)
                     spider_features = [c for c in numeric_features if c in spider_data.columns and c not in abs_rating_cols]
-                    if not spider_features:
-                        st.warning("No features available for decision tree.")
-                    else:
+                    if spider_features:
                         X_sp = spider_tree_hist[spider_features].fillna(spider_tree_hist[spider_features].median())
                         y_sp = spider_tree_hist['Target']
 
@@ -610,43 +593,46 @@ else:
                         with col3:
                             criterion_sp = st.selectbox("Splitting Criterion", ["gini", "entropy", "log_loss"], index=0, key="spider_tree_criterion")
 
-                        if st.button("Train Decision Tree", key="train_spider_tree"):
-                            with st.spinner("Training..."):
-                                dt_sp = DecisionTreeClassifier(max_depth=max_depth_sp, min_samples_leaf=min_samples_leaf_sp,
-                                                               criterion=criterion_sp, random_state=42)
-                                dt_sp.fit(X_sp, y_sp)
+                        # Auto-train (cached)
+                        @st.cache_resource
+                        def train_tree(depth, leaf, crit):
+                            dt = DecisionTreeClassifier(max_depth=depth, min_samples_leaf=leaf,
+                                                        criterion=crit, random_state=42)
+                            dt.fit(X_sp, y_sp)
+                            return dt
 
-                                st.subheader("Prediction for Selected Upcoming Fight")
-                                if len(fight_rows) == 2:
-                                    f1_row = fight_rows.iloc[0]
-                                    input_vals = []
-                                    for c in spider_features:
-                                        val = f1_row.get(c, np.nan)
-                                        if pd.isna(val):
-                                            val = spider_tree_hist[c].median()
-                                        input_vals.append(val)
-                                    X_input = np.array([input_vals])
-                                    try:
-                                        prob = dt_sp.predict_proba(X_input)[0, 1]
-                                        leaf = dt_sp.apply(X_input)[0]
-                                        st.write(f"**{f1_row['Fighter']}** → leaf **{leaf}** with win probability **{prob:.1%}**")
-                                    except Exception as e:
-                                        st.error(f"Prediction error: {e}")
-                                else:
-                                    st.warning("Fight data incomplete for prediction.")
-
-                                st.subheader("Leaf Win Percentages")
-                                leaf_ids = dt_sp.apply(X_sp)
-                                leaf_stats = []
-                                for leaf_id in np.unique(leaf_ids):
-                                    mask_leaf = leaf_ids == leaf_id
-                                    leaf_stats.append({
-                                        "Leaf": leaf_id,
-                                        "Samples": mask_leaf.sum(),
-                                        "Win Rate": f"{y_sp[mask_leaf].mean() * 100:.1f}%"
-                                    })
-                                leaf_df = pd.DataFrame(leaf_stats)
-                                st.dataframe(leaf_df, use_container_width=True, hide_index=True)
+                        dt_sp = train_tree(max_depth_sp, min_samples_leaf_sp, criterion_sp)
+                        # Prediction
+                        if len(fight_rows) == 2:
+                            f1_row = fight_rows.iloc[0]
+                            input_vals = []
+                            for c in spider_features:
+                                val = f1_row.get(c, np.nan)
+                                if pd.isna(val):
+                                    val = spider_tree_hist[c].median()
+                                input_vals.append(val)
+                            X_input = np.array([input_vals])
+                            try:
+                                prob = dt_sp.predict_proba(X_input)[0, 1]
+                                leaf = dt_sp.apply(X_input)[0]
+                                st.write(f"**{f1_row['Fighter']}** → leaf **{leaf}** with win probability **{prob:.1%}**")
+                            except Exception as e:
+                                st.error(f"Prediction error: {e}")
+                        else:
+                            st.warning("Fight data incomplete for prediction.")
+                        # Leaf win percentages
+                        st.subheader("Leaf Win Percentages")
+                        leaf_ids = dt_sp.apply(X_sp)
+                        leaf_stats = []
+                        for leaf_id in np.unique(leaf_ids):
+                            mask_leaf = leaf_ids == leaf_id
+                            leaf_stats.append({
+                                "Leaf": leaf_id,
+                                "Samples": mask_leaf.sum(),
+                                "Win Rate": f"{y_sp[mask_leaf].mean() * 100:.1f}%"
+                            })
+                        leaf_df = pd.DataFrame(leaf_stats)
+                        st.dataframe(leaf_df, use_container_width=True, hide_index=True)
 
                 # ========== MODEL COMPARISON SECTION ==========
                 st.header("Model Comparison (Filtered Historical Data)")
@@ -690,7 +676,7 @@ else:
                     else:
                         fighter_name = None
 
-                    # ---- Top‑Var Decision Tree (no graphic) ----
+                    # ---- Top‑Var Decision Tree (auto) ----
                     if top_diff_features:
                         st.subheader("Decision Tree (Top‑Slider Variables Only)")
                         X_top = safe_prepare(spider_hist, top_diff_features)
@@ -702,22 +688,22 @@ else:
                         with c3:
                             criterion_top = st.selectbox("Splitting Criterion (Top‑Var Tree)", ["gini", "entropy", "log_loss"], index=0, key="top_tree_criterion")
 
-                        if st.button("Train Top‑Var Decision Tree", key="train_top_tree"):
-                            with st.spinner("Training..."):
-                                dt_top = DecisionTreeClassifier(max_depth=max_depth_top,
-                                                                min_samples_leaf=min_samples_leaf_top,
-                                                                criterion=criterion_top, random_state=42)
-                                dt_top.fit(X_top, y)
-                                st.success(f"Top‑Var Tree trained. Training accuracy: {dt_top.score(X_top, y):.1%}")
+                        @st.cache_resource
+                        def train_top_tree(depth, leaf, crit):
+                            dt = DecisionTreeClassifier(max_depth=depth, min_samples_leaf=leaf,
+                                                        criterion=crit, random_state=42)
+                            dt.fit(X_top, y)
+                            return dt
 
-                                if fighter_name:
-                                    X_input = get_fighter_input(f1_row, top_diff_features, spider_hist)
-                                    try:
-                                        prob = dt_top.predict_proba(X_input)[0, 1]
-                                        leaf = dt_top.apply(X_input)[0]
-                                        st.write(f"**{fighter_name}** (top‑var tree) → leaf **{leaf}** with win probability **{prob:.1%}**")
-                                    except Exception as e:
-                                        st.error(f"Prediction error: {e}")
+                        dt_top = train_top_tree(max_depth_top, min_samples_leaf_top, criterion_top)
+                        if fighter_name:
+                            X_input = get_fighter_input(f1_row, top_diff_features, spider_hist)
+                            try:
+                                prob = dt_top.predict_proba(X_input)[0, 1]
+                                leaf = dt_top.apply(X_input)[0]
+                                st.write(f"**{fighter_name}** (top‑var tree) → leaf **{leaf}** with win probability **{prob:.1%}**")
+                            except Exception as e:
+                                st.error(f"Prediction error: {e}")
                     else:
                         st.info("No top‑slider variables selected. Skipping Top‑Var models.")
 
@@ -783,67 +769,57 @@ else:
                     else:
                         col_rf2.write("N/A")
 
-                    # ---- XGBoost ----
-                    st.subheader("XGBoost Win Rates")
-                    xgb_max_depth = st.slider("XGBoost Max Depth", 1, 20, 6, key="xgb_depth_slider")
+                    # ---- LightGBM ----
+                    st.subheader("LightGBM Win Rates")
+                    lgbm_max_depth = st.slider("LightGBM Max Depth", 1, 20, 6, key="lgbm_depth_slider")
 
-                    xgb_all = XGBClassifier(n_estimators=200, max_depth=xgb_max_depth, random_state=42, n_jobs=-1, verbosity=0)
-                    xgb_all.fit(X_all, y)
-                    acc_all_xgb = xgb_all.score(X_all, y)
+                    lgbm_all = LGBMClassifier(n_estimators=200, max_depth=lgbm_max_depth, random_state=42, n_jobs=-1, verbosity=-1)
+                    lgbm_all.fit(X_all, y)
+                    acc_all_lgbm = lgbm_all.score(X_all, y)
 
-                    col_xgb1, col_xgb2 = st.columns(2)
-                    col_xgb1.metric("XGB (All Diff Vars) Win Rate", f"{acc_all_xgb:.1%}")
+                    col_lgbm1, col_lgbm2 = st.columns(2)
+                    col_lgbm1.metric("LGBM (All Diff Vars) Win Rate", f"{acc_all_lgbm:.1%}")
                     if fighter_name and all_diff_features:
-                        X_input_all_xgb = get_fighter_input(f1_row, all_diff_features, spider_hist)
-                        prob_all_xgb = xgb_all.predict_proba(X_input_all_xgb)[0, 1]
-                        col_xgb1.write(f"**{fighter_name}** win prob: **{prob_all_xgb:.1%}**")
+                        X_input_all_lgbm = get_fighter_input(f1_row, all_diff_features, spider_hist)
+                        prob_all_lgbm = lgbm_all.predict_proba(X_input_all_lgbm)[0, 1]
+                        col_lgbm1.write(f"**{fighter_name}** win prob: **{prob_all_lgbm:.1%}**")
                     else:
-                        col_xgb1.write("No fighter prediction available.")
+                        col_lgbm1.write("No fighter prediction available.")
 
                     if top_diff_features:
-                        X_top_xgb = safe_prepare(spider_hist, top_diff_features)
-                        xgb_top = XGBClassifier(n_estimators=200, max_depth=xgb_max_depth, random_state=42, n_jobs=-1, verbosity=0)
-                        xgb_top.fit(X_top_xgb, y)
-                        acc_top_xgb = xgb_top.score(X_top_xgb, y)
-                        col_xgb2.metric("XGB (Top‑Slider Vars) Win Rate", f"{acc_top_xgb:.1%}")
+                        X_top_lgbm = safe_prepare(spider_hist, top_diff_features)
+                        lgbm_top = LGBMClassifier(n_estimators=200, max_depth=lgbm_max_depth, random_state=42, n_jobs=-1, verbosity=-1)
+                        lgbm_top.fit(X_top_lgbm, y)
+                        acc_top_lgbm = lgbm_top.score(X_top_lgbm, y)
+                        col_lgbm2.metric("LGBM (Top‑Slider Vars) Win Rate", f"{acc_top_lgbm:.1%}")
                         if fighter_name:
-                            X_input_top_xgb = get_fighter_input(f1_row, top_diff_features, spider_hist)
-                            prob_top_xgb = xgb_top.predict_proba(X_input_top_xgb)[0, 1]
-                            col_xgb2.write(f"**{fighter_name}** win prob: **{prob_top_xgb:.1%}**")
+                            X_input_top_lgbm = get_fighter_input(f1_row, top_diff_features, spider_hist)
+                            prob_top_lgbm = lgbm_top.predict_proba(X_input_top_lgbm)[0, 1]
+                            col_lgbm2.write(f"**{fighter_name}** win prob: **{prob_top_lgbm:.1%}**")
                         else:
-                            col_xgb2.write("No fighter prediction available.")
+                            col_lgbm2.write("No fighter prediction available.")
                     else:
-                        col_xgb2.write("N/A")
+                        col_lgbm2.write("N/A")
 
 # -----------------------------------------------
-# FEATURE IMPORTANCE (MI only)
+# FEATURE IMPORTANCE – Random Forest (replaces mutual information)
 # -----------------------------------------------
-st.header("Feature Importance (Mutual Information)")
+st.header("Feature Importance (Random Forest)")
 hist_imp_full = spider_hist.copy()
 if len(hist_imp_full) < 10:
     st.warning("Too few historical fights to compute importance (apply broader filters).")
 else:
-    hist_imp_full['Target'] = (hist_imp_full['Win?'] == 'Yes').astype(int)
     feats = [c for c in numeric_features if c in hist_imp_full.columns and c not in abs_rating_cols]
     if not feats:
         st.warning("No numeric features (excluding absolute ratings).")
     else:
-        missing_frac = hist_imp_full[feats].isna().mean()
-        keep_features = missing_frac[missing_frac <= 0.8].index.tolist()
-        if not keep_features:
-            st.warning("All features are too sparse – try broadening filters.")
-        else:
-            X = hist_imp_full[keep_features].copy()
-            y = hist_imp_full['Target']
+        # Impute missing values with median (safe)
+        X = hist_imp_full[feats].fillna(hist_imp_full[feats].median())
+        y = (hist_imp_full['Win?'] == 'Yes').astype(int)
 
-            imp = SimpleImputer(strategy='median')
-            X_imp = imp.fit_transform(X)
-
-            if len(y) < 5:
-                st.warning("Not enough rows to compute importance (apply broader filters).")
-            else:
-                mi = mutual_info_classif(X_imp, y, discrete_features=False, random_state=42)
-                mi_df = pd.DataFrame({'Feature': keep_features, 'MI': mi}).sort_values('MI', ascending=False).head(20)
-                fig_mi = px.bar(mi_df, x='MI', y='Feature', orientation='h',
-                                title="Top 20 Mutual Information (filtered)")
-                st.plotly_chart(fig_mi, use_container_width=True, key="mi_plot")
+        rf_imp = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+        rf_imp.fit(X, y)
+        importances = pd.Series(rf_imp.feature_importances_, index=feats).sort_values(ascending=False).head(20)
+        fig_imp = px.bar(importances, x=importances.values, y=importances.index, orientation='h',
+                         title="Top 20 Random Forest Feature Importances")
+        st.plotly_chart(fig_imp, use_container_width=True, key="rf_imp_plot")
