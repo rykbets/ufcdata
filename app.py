@@ -188,8 +188,8 @@ else:
 @st.cache_data
 def apply_single_fighter_filters(df, params):
     """
-    Filters rows based only on fighter‑side attributes.
-    Keeps fights where BOTH rows satisfy the criteria.
+    Filters fights where at least one row satisfies the fighter‑side criteria.
+    Keeps complete fights (both rows).
     """
     wc = params['wc']
     stance = params['stance']
@@ -253,11 +253,10 @@ def apply_single_fighter_filters(df, params):
     if hometown and 'HometownFighter' in df.columns:
         mask &= df['HometownFighter'].isin(hometown)
 
-    # Keep fights where both rows pass
-    fight_ok = mask.groupby(df['FightID']).transform('all')
+    # Keep fights where **at least one row** passes the filter (single fighter logic)
+    fight_ok = mask.groupby(df['FightID']).transform('any')
     filtered_df = df[fight_ok].copy()
     return filtered_df
-
 @st.cache_data
 def apply_spider_filters(df, params):
     """
