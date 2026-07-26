@@ -74,6 +74,82 @@ abs_rating_cols = [c for c in rating_raw_cols if not c.endswith('Diff')] + \
 # Session state
 for key, default in [
     ('overall_wr', 0.0), ('recent_wr', 0.0), ('recent_count', 0),
+    ('selected_fight_row', None), ('auto_selected_vars', None),import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import matplotlib.pyplot as plt
+import gdown
+from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import cross_val_score
+from lightgbm import LGBMClassifier
+from scipy.spatial.distance import cdist
+
+st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
+
+# -----------------------------------------------
+# LOAD DATA
+# -----------------------------------------------
+PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"
+
+@st.cache_data
+def load_data():
+    gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
+    df = pd.read_parquet("data.parquet")
+    required_cols = ['FightID', 'Fighter', 'Opponent', 'FightDate', 'Win?', 'Age', 'Height', 'Reach', 'WC']
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Parquet is missing required columns: {missing}")
+    return df
+
+try:
+    data = load_data()
+except Exception as e:
+    st.error(f"Failed to load data: {e}")
+    st.stop()
+
+if 'FightDate' in data.columns:
+    data = data[data['FightDate'] >= '2015-01-01'].copy()
+original_data = data.copy()
+
+def get_diff_range(df, col_name):
+    if col_name not in df.columns: return -1.0, 1.0
+    vals = df[col_name].dropna()
+    if len(vals) == 0: return -1.0, 1.0
+    return float(vals.min()), float(vals.max())
+
+# ---------- VARIABLE DEFINITIONS ----------
+rating_raw_cols = [
+    'FighterColleyDecay', 'OpponentColleyDecay', 'ColleyDecayDiff',
+    'FighterMasseyFinishDecay', 'OpponentMasseyFinishDecay', 'MasseyFinishDecayDiff',
+    'FighterMasseyStrikeDecay', 'OpponentMasseyStrikeDecay', 'MasseyStrikeDecayDiff',
+    'FighterMasseyCtrlDecay', 'OpponentMasseyCtrlDecay', 'MasseyCtrlDecayDiff',
+    'FighterWeightedMasseyDecay', 'OpponentWeightedMasseyDecay', 'WeightedMasseyDecayDiff'
+]
+rating_avg7_cols = [
+    'FighterColleyDecay_avg7', 'Opponent_FighterColleyDecay_avg7', 'FighterColleyDecay_avg7_diff',
+    'FighterMasseyFinishDecay_avg7', 'Opponent_FighterMasseyFinishDecay_avg7', 'FighterMasseyFinishDecay_avg7_diff',
+    'FighterMasseyStrikeDecay_avg7', 'Opponent_FighterMasseyStrikeDecay_avg7', 'FighterMasseyStrikeDecay_avg7_diff',
+    'FighterMasseyCtrlDecay_avg7', 'Opponent_FighterMasseyCtrlDecay_avg7', 'FighterMasseyCtrlDecay_avg7_diff',
+    'FighterWeightedMasseyDecay_avg7', 'Opponent_FighterWeightedMasseyDecay_avg7', 'FighterWeightedMasseyDecay_avg7_diff'
+]
+
+numeric_features = [c for c in data.columns
+                    if c.endswith('_opp_diff')
+                    or (c.startswith('adj_') and c.endswith('_diff'))
+                    or c in rating_raw_cols
+                    or c in rating_avg7_cols]
+
+abs_rating_cols = [c for c in rating_raw_cols if not c.endswith('Diff')] + \
+                  [c for c in rating_avg7_cols if not c.endswith('_diff')]
+
+# Session state
+for key, default in [
+    ('overall_wr', 0.0), ('recent_wr', 0.0), ('recent_count', 0),
     ('selected_fight_row', None), ('auto_selected_vars', None),
     ('manual_spider_vars', []),
 ]:
@@ -626,8 +702,8 @@ else:
                         leaf_df = pd.DataFrame(leaf_stats)
                         st.dataframe(leaf_df, use_container_width=True, hide_index=True)
 
-                # ========== MODEL COMPARISON (CROSS‑VALIDATED) ==========
-                st.header("Model Comparison (5‑fold CV Accuracy)")
+                # ========== MODEL COMPARISON – ONLY LIGHTGBM ==========
+                st.header("Model Comparison – LightGBM (5‑fold CV Accuracy)")
 
                 all_diff_features = [c for c in numeric_features if c in spider_data.columns and c not in abs_rating_cols]
                 top_diff_features = st.session_state.auto_vars if st.session_state.auto_vars else []
@@ -695,99 +771,40 @@ else:
                     else:
                         st.info("No top‑slider variables selected. Skipping Top‑Var models.")
 
-                    # ---- Logistic Regression (CV) ----
-                    st.subheader("Logistic Regression 5‑fold CV Accuracy")
-                    lr_all = LogisticRegression(max_iter=2000, random_state=42)
-                    cv_lr_all = cross_val_score(lr_all, X_all, y, cv=5, scoring='accuracy').mean()
-                    lr_all.fit(X_all, y)  # fit on full data for prediction
-
-                    col_lr1, col_lr2 = st.columns(2)
-                    col_lr1.metric("LR (All Diff Vars) CV", f"{cv_lr_all:.1%}")
-                    if fighter_name and all_diff_features:
-                        X_input_all = get_fighter_input(f1_row, all_diff_features, spider_hist)
-                        prob_all_lr = lr_all.predict_proba(X_input_all)[0, 1]
-                        col_lr1.write(f"**{fighter_name}** win prob: **{prob_all_lr:.1%}**")
-                    else:
-                        col_lr1.write("No fighter prediction available.")
-
-                    if top_diff_features:
-                        X_top_lr = safe_prepare(spider_hist, top_diff_features)
-                        lr_top = LogisticRegression(max_iter=2000, random_state=42)
-                        cv_top_lr = cross_val_score(lr_top, X_top_lr, y, cv=5, scoring='accuracy').mean()
-                        lr_top.fit(X_top_lr, y)
-                        col_lr2.metric("LR (Top‑Slider Vars) CV", f"{cv_top_lr:.1%}")
-                        if fighter_name:
-                            X_input_top_lr = get_fighter_input(f1_row, top_diff_features, spider_hist)
-                            prob_top_lr = lr_top.predict_proba(X_input_top_lr)[0, 1]
-                            col_lr2.write(f"**{fighter_name}** win prob: **{prob_top_lr:.1%}**")
-                        else:
-                            col_lr2.write("No fighter prediction available.")
-                    else:
-                        col_lr2.write("N/A")
-
-                    # ---- Random Forest (CV) ----
-                    st.subheader("Random Forest 5‑fold CV Accuracy")
-                    rf_max_depth = st.slider("Random Forest Max Depth", 1, 20, 10, key="rf_depth_slider")
-
-                    rf_all = RandomForestClassifier(n_estimators=200, max_depth=rf_max_depth, random_state=42, n_jobs=-1)
-                    cv_rf_all = cross_val_score(rf_all, X_all, y, cv=5, scoring='accuracy').mean()
-                    rf_all.fit(X_all, y)
-
-                    col_rf1, col_rf2 = st.columns(2)
-                    col_rf1.metric("RF (All Diff Vars) CV", f"{cv_rf_all:.1%}")
-                    if fighter_name and all_diff_features:
-                        X_input_all_rf = get_fighter_input(f1_row, all_diff_features, spider_hist)
-                        prob_all_rf = rf_all.predict_proba(X_input_all_rf)[0, 1]
-                        col_rf1.write(f"**{fighter_name}** win prob: **{prob_all_rf:.1%}**")
-                    else:
-                        col_rf1.write("No fighter prediction available.")
-
-                    if top_diff_features:
-                        X_top_rf = safe_prepare(spider_hist, top_diff_features)
-                        rf_top = RandomForestClassifier(n_estimators=200, max_depth=rf_max_depth, random_state=42, n_jobs=-1)
-                        cv_top_rf = cross_val_score(rf_top, X_top_rf, y, cv=5, scoring='accuracy').mean()
-                        rf_top.fit(X_top_rf, y)
-                        col_rf2.metric("RF (Top‑Slider Vars) CV", f"{cv_top_rf:.1%}")
-                        if fighter_name:
-                            X_input_top_rf = get_fighter_input(f1_row, top_diff_features, spider_hist)
-                            prob_top_rf = rf_top.predict_proba(X_input_top_rf)[0, 1]
-                            col_rf2.write(f"**{fighter_name}** win prob: **{prob_top_rf:.1%}**")
-                        else:
-                            col_rf2.write("No fighter prediction available.")
-                    else:
-                        col_rf2.write("N/A")
-
-                    # ---- LightGBM (CV) ----
-                    st.subheader("LightGBM 5‑fold CV Accuracy")
-                    lgbm_max_depth = st.slider("LightGBM Max Depth", 1, 20, 6, key="lgbm_depth_slider")
-
-                    lgbm_all = LGBMClassifier(n_estimators=200, max_depth=lgbm_max_depth, random_state=42, n_jobs=-1, verbosity=-1)
-                    cv_lgbm_all = cross_val_score(lgbm_all, X_all, y, cv=5, scoring='accuracy').mean()
-                    lgbm_all.fit(X_all, y)
+                    # ---- LightGBM All Diff Vars (CV) ----
+                    st.subheader("LightGBM – All Diff Variables")
+                    lgbm_all_depth = st.slider("Max Depth (All Diff)", 1, 20, 6, key="lgbm_all_depth")
+                    lgbm_all = LGBMClassifier(n_estimators=200, max_depth=lgbm_all_depth, random_state=42, n_jobs=-1, verbosity=-1)
+                    cv_all_lgbm = cross_val_score(lgbm_all, X_all, y, cv=5, scoring='accuracy').mean()
+                    lgbm_all.fit(X_all, y)  # fit on full data for prediction
 
                     col_lgbm1, col_lgbm2 = st.columns(2)
-                    col_lgbm1.metric("LGBM (All Diff Vars) CV", f"{cv_lgbm_all:.1%}")
+                    col_lgbm1.metric("LGBM (All Diff) CV Accuracy", f"{cv_all_lgbm:.1%}")
                     if fighter_name and all_diff_features:
-                        X_input_all_lgbm = get_fighter_input(f1_row, all_diff_features, spider_hist)
-                        prob_all_lgbm = lgbm_all.predict_proba(X_input_all_lgbm)[0, 1]
+                        X_input_all = get_fighter_input(f1_row, all_diff_features, spider_hist)
+                        prob_all_lgbm = lgbm_all.predict_proba(X_input_all)[0, 1]
                         col_lgbm1.write(f"**{fighter_name}** win prob: **{prob_all_lgbm:.1%}**")
                     else:
                         col_lgbm1.write("No fighter prediction available.")
 
+                    # ---- LightGBM Top‑Slider Vars (CV) ----
                     if top_diff_features:
+                        st.subheader("LightGBM – Top‑Slider Variables")
                         X_top_lgbm = safe_prepare(spider_hist, top_diff_features)
-                        lgbm_top = LGBMClassifier(n_estimators=200, max_depth=lgbm_max_depth, random_state=42, n_jobs=-1, verbosity=-1)
+                        lgbm_top_depth = st.slider("Max Depth (Top‑Slider)", 1, 20, 6, key="lgbm_top_depth")
+                        lgbm_top = LGBMClassifier(n_estimators=200, max_depth=lgbm_top_depth, random_state=42, n_jobs=-1, verbosity=-1)
                         cv_top_lgbm = cross_val_score(lgbm_top, X_top_lgbm, y, cv=5, scoring='accuracy').mean()
                         lgbm_top.fit(X_top_lgbm, y)
-                        col_lgbm2.metric("LGBM (Top‑Slider Vars) CV", f"{cv_top_lgbm:.1%}")
+
+                        col_lgbm1.metric("LGBM (Top‑Slider) CV Accuracy", f"{cv_top_lgbm:.1%}")
                         if fighter_name:
-                            X_input_top_lgbm = get_fighter_input(f1_row, top_diff_features, spider_hist)
-                            prob_top_lgbm = lgbm_top.predict_proba(X_input_top_lgbm)[0, 1]
+                            X_input_top = get_fighter_input(f1_row, top_diff_features, spider_hist)
+                            prob_top_lgbm = lgbm_top.predict_proba(X_input_top)[0, 1]
                             col_lgbm2.write(f"**{fighter_name}** win prob: **{prob_top_lgbm:.1%}**")
                         else:
                             col_lgbm2.write("No fighter prediction available.")
                     else:
-                        col_lgbm2.write("N/A")
+                        st.info("No top‑slider variables selected – cannot train Top‑Slider LightGBM.")
 
 # -----------------------------------------------
 # FEATURE IMPORTANCE – Random Forest
