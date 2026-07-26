@@ -9,6 +9,7 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import cross_val_score
 from lightgbm import LGBMClassifier
 from scipy.spatial.distance import cdist
 
@@ -489,7 +490,6 @@ total_completed_fights = spider_hist['FightID'].nunique()
 total_wins = (spider_hist['Win?'] == 'Yes').sum()
 filtered_wr = total_wins / len(spider_hist) * 100 if len(spider_hist) > 0 else 0.0
 
-# Show filtered data summary
 col_metric1, col_metric2 = st.columns(2)
 col_metric1.metric("Total Completed Fights (filtered)", total_completed_fights)
 col_metric2.metric("Win Rate (filtered)", f"{filtered_wr:.1f}%")
@@ -538,7 +538,6 @@ else:
                 top_n_f1 = c_slider1.slider("Top N (Fighter 1)", 0, 10, 0, key="top_n_f1")
                 top_n_f2 = c_slider2.slider("Top N (Fighter 2)", 0, 10, 0, key="top_n_f2")
 
-                # Feature importance now uses Random Forest
                 if top_n_f1 > 0 or top_n_f2 > 0:
                     diff_cols = [c for c in f1.index if c.endswith('_opp_diff')]
                     f1_diffs = {c: abs(f1[c]) for c in diff_cols if pd.notna(f1[c])}
@@ -592,12 +591,10 @@ else:
                         with col3:
                             criterion_sp = st.selectbox("Splitting Criterion", ["gini", "entropy", "log_loss"], index=0, key="spider_tree_criterion")
 
-                        # Train directly (no cache)
                         dt_sp = DecisionTreeClassifier(max_depth=max_depth_sp, min_samples_leaf=min_samples_leaf_sp,
                                                        criterion=criterion_sp, random_state=42)
                         dt_sp.fit(X_sp, y_sp)
 
-                        # Prediction
                         if len(fight_rows) == 2:
                             f1_row = fight_rows.iloc[0]
                             input_vals = []
@@ -629,8 +626,8 @@ else:
                         leaf_df = pd.DataFrame(leaf_stats)
                         st.dataframe(leaf_df, use_container_width=True, hide_index=True)
 
-                # ========== MODEL COMPARISON SECTION ==========
-                st.header("Model Comparison (Filtered Historical Data)")
+                # ========== MODEL COMPARISON (CROSS‑VALIDATED) ==========
+                st.header("Model Comparison (5‑fold CV Accuracy)")
 
                 all_diff_features = [c for c in numeric_features if c in spider_data.columns and c not in abs_rating_cols]
                 top_diff_features = st.session_state.auto_vars if st.session_state.auto_vars else []
@@ -698,14 +695,14 @@ else:
                     else:
                         st.info("No top‑slider variables selected. Skipping Top‑Var models.")
 
-                    # ---- Logistic Regression ----
-                    st.subheader("Logistic Regression Win Rates")
+                    # ---- Logistic Regression (CV) ----
+                    st.subheader("Logistic Regression 5‑fold CV Accuracy")
                     lr_all = LogisticRegression(max_iter=2000, random_state=42)
-                    lr_all.fit(X_all, y)
-                    acc_all_lr = lr_all.score(X_all, y)
+                    cv_lr_all = cross_val_score(lr_all, X_all, y, cv=5, scoring='accuracy').mean()
+                    lr_all.fit(X_all, y)  # fit on full data for prediction
 
                     col_lr1, col_lr2 = st.columns(2)
-                    col_lr1.metric("LR (All Diff Vars) Win Rate", f"{acc_all_lr:.1%}")
+                    col_lr1.metric("LR (All Diff Vars) CV", f"{cv_lr_all:.1%}")
                     if fighter_name and all_diff_features:
                         X_input_all = get_fighter_input(f1_row, all_diff_features, spider_hist)
                         prob_all_lr = lr_all.predict_proba(X_input_all)[0, 1]
@@ -716,9 +713,9 @@ else:
                     if top_diff_features:
                         X_top_lr = safe_prepare(spider_hist, top_diff_features)
                         lr_top = LogisticRegression(max_iter=2000, random_state=42)
+                        cv_top_lr = cross_val_score(lr_top, X_top_lr, y, cv=5, scoring='accuracy').mean()
                         lr_top.fit(X_top_lr, y)
-                        acc_top_lr = lr_top.score(X_top_lr, y)
-                        col_lr2.metric("LR (Top‑Slider Vars) Win Rate", f"{acc_top_lr:.1%}")
+                        col_lr2.metric("LR (Top‑Slider Vars) CV", f"{cv_top_lr:.1%}")
                         if fighter_name:
                             X_input_top_lr = get_fighter_input(f1_row, top_diff_features, spider_hist)
                             prob_top_lr = lr_top.predict_proba(X_input_top_lr)[0, 1]
@@ -728,16 +725,16 @@ else:
                     else:
                         col_lr2.write("N/A")
 
-                    # ---- Random Forest ----
-                    st.subheader("Random Forest Win Rates")
+                    # ---- Random Forest (CV) ----
+                    st.subheader("Random Forest 5‑fold CV Accuracy")
                     rf_max_depth = st.slider("Random Forest Max Depth", 1, 20, 10, key="rf_depth_slider")
 
                     rf_all = RandomForestClassifier(n_estimators=200, max_depth=rf_max_depth, random_state=42, n_jobs=-1)
+                    cv_rf_all = cross_val_score(rf_all, X_all, y, cv=5, scoring='accuracy').mean()
                     rf_all.fit(X_all, y)
-                    acc_all_rf = rf_all.score(X_all, y)
 
                     col_rf1, col_rf2 = st.columns(2)
-                    col_rf1.metric("RF (All Diff Vars) Win Rate", f"{acc_all_rf:.1%}")
+                    col_rf1.metric("RF (All Diff Vars) CV", f"{cv_rf_all:.1%}")
                     if fighter_name and all_diff_features:
                         X_input_all_rf = get_fighter_input(f1_row, all_diff_features, spider_hist)
                         prob_all_rf = rf_all.predict_proba(X_input_all_rf)[0, 1]
@@ -748,9 +745,9 @@ else:
                     if top_diff_features:
                         X_top_rf = safe_prepare(spider_hist, top_diff_features)
                         rf_top = RandomForestClassifier(n_estimators=200, max_depth=rf_max_depth, random_state=42, n_jobs=-1)
+                        cv_top_rf = cross_val_score(rf_top, X_top_rf, y, cv=5, scoring='accuracy').mean()
                         rf_top.fit(X_top_rf, y)
-                        acc_top_rf = rf_top.score(X_top_rf, y)
-                        col_rf2.metric("RF (Top‑Slider Vars) Win Rate", f"{acc_top_rf:.1%}")
+                        col_rf2.metric("RF (Top‑Slider Vars) CV", f"{cv_top_rf:.1%}")
                         if fighter_name:
                             X_input_top_rf = get_fighter_input(f1_row, top_diff_features, spider_hist)
                             prob_top_rf = rf_top.predict_proba(X_input_top_rf)[0, 1]
@@ -760,16 +757,16 @@ else:
                     else:
                         col_rf2.write("N/A")
 
-                    # ---- LightGBM ----
-                    st.subheader("LightGBM Win Rates")
+                    # ---- LightGBM (CV) ----
+                    st.subheader("LightGBM 5‑fold CV Accuracy")
                     lgbm_max_depth = st.slider("LightGBM Max Depth", 1, 20, 6, key="lgbm_depth_slider")
 
                     lgbm_all = LGBMClassifier(n_estimators=200, max_depth=lgbm_max_depth, random_state=42, n_jobs=-1, verbosity=-1)
+                    cv_lgbm_all = cross_val_score(lgbm_all, X_all, y, cv=5, scoring='accuracy').mean()
                     lgbm_all.fit(X_all, y)
-                    acc_all_lgbm = lgbm_all.score(X_all, y)
 
                     col_lgbm1, col_lgbm2 = st.columns(2)
-                    col_lgbm1.metric("LGBM (All Diff Vars) Win Rate", f"{acc_all_lgbm:.1%}")
+                    col_lgbm1.metric("LGBM (All Diff Vars) CV", f"{cv_lgbm_all:.1%}")
                     if fighter_name and all_diff_features:
                         X_input_all_lgbm = get_fighter_input(f1_row, all_diff_features, spider_hist)
                         prob_all_lgbm = lgbm_all.predict_proba(X_input_all_lgbm)[0, 1]
@@ -780,9 +777,9 @@ else:
                     if top_diff_features:
                         X_top_lgbm = safe_prepare(spider_hist, top_diff_features)
                         lgbm_top = LGBMClassifier(n_estimators=200, max_depth=lgbm_max_depth, random_state=42, n_jobs=-1, verbosity=-1)
+                        cv_top_lgbm = cross_val_score(lgbm_top, X_top_lgbm, y, cv=5, scoring='accuracy').mean()
                         lgbm_top.fit(X_top_lgbm, y)
-                        acc_top_lgbm = lgbm_top.score(X_top_lgbm, y)
-                        col_lgbm2.metric("LGBM (Top‑Slider Vars) Win Rate", f"{acc_top_lgbm:.1%}")
+                        col_lgbm2.metric("LGBM (Top‑Slider Vars) CV", f"{cv_top_lgbm:.1%}")
                         if fighter_name:
                             X_input_top_lgbm = get_fighter_input(f1_row, top_diff_features, spider_hist)
                             prob_top_lgbm = lgbm_top.predict_proba(X_input_top_lgbm)[0, 1]
