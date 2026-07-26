@@ -307,6 +307,7 @@ def apply_spider_filters(df, params):
     # --- Continuous columns – only filter if the user deliberately moved the slider,
     #     and always allow NaN (so missing data doesn't drop rows) ---
     def add_continuous_filter(col_name, user_min, user_max):
+        nonlocal mask_strict              # <-- fix: access the outer mask_strict
         if col_name not in df.columns:
             return
         data_min = float(df[col_name].min())
@@ -451,7 +452,6 @@ def apply_spider_filters(df, params):
     filtered_df = df_strict[final_mask].copy()
 
     return filtered_df, fighterA_mask, fighterB_mask
-
 # ================================================================
 # SINGLE FIGHTER FILTERS
 # ================================================================
