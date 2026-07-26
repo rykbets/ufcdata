@@ -1,32 +1,9 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import matplotlib.pyplot as plt
-import gdown
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.impute import SimpleImputer
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import cross_val_score
-from sklearn.calibration import CalibratedClassifierCV
-from lightgbm import LGBMClassifier
-
-# Optional CatBoost
-try:
-    from catboost import CatBoostClassifier
-    CATBOOST_AVAILABLE = True
-except ImportError:
-    CATBOOST_AVAILABLE = False
-
-st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
-
-# -----------------------------------------------
-# LOAD DATA
-# -----------------------------------------------
-PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"
-
 @st.cache_data
 def load_data():
+    # Force fresh download – delete old parquet first
+    if os.path.exists("data.parquet"):
+        os.remove("data.parquet")
+
     gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
     df = pd.read_parquet("data.parquet")
     required_cols = ['FightID', 'Fighter', 'Opponent', 'FightDate', 'Win?', 'Age', 'Height', 'Reach', 'WC']
