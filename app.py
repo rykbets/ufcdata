@@ -265,8 +265,9 @@ def apply_single_fighter_filters(df, params):
 @st.cache_data
 def apply_spider_filters(df, params):
     """
-    Apply strict AND filters first, then permutation check on the subset.
-    Returns (filtered_df, fighterA_mask, fighterB_mask).
+    Spider filter with permutation check – corrected to avoid silently
+    dropping rows with missing continuous data when sliders are at their
+    default extremes.
     """
     wc = params['wc']
     stance = params['stance']
@@ -291,48 +292,60 @@ def apply_spider_filters(df, params):
     use_massey = params['use_massey']; massey_range = params.get('massey_range', None)
     use_wmd = params['use_wmd']; wmd_range = params.get('wmd_range', None)
 
+    # ===== Build strict mask =====
     mask_strict = pd.Series(True, index=df.index)
 
-    def add_strict(condition, col_name=None):
-        if condition is None:
-            return None
-        if col_name and col_name in df.columns:
-            return condition | df[col_name].isna()
-        return condition
+    # --- Categorical / Boolean filters (only applied if user selected something) ---
+    if wc:                    mask_strict &= df['WC'].isin(wc)
+    if stance:                mask_strict &= df['Stance'].isin(stance)
+    if sched_rounds:          mask_strict &= df['ScheduledRounds'].isin(sched_rounds)
+    if title_fight != "All":  mask_strict &= df['Title'] == title_fight
+    if event_country:         mask_strict &= df['EventCountry'].isin(event_country)
+    if new_wc and 'IsNewWeightClass' in df.columns:
+        mask_strict &= df['IsNewWeightClass'] == True
 
-    if wc: mask_strict &= df['WC'].isin(wc)
-    if stance: mask_strict &= df['Stance'].isin(stance)
-    if sched_rounds: mask_strict &= df['ScheduledRounds'].isin(sched_rounds)
-    if title_fight != "All": mask_strict &= df['Title'] == title_fight
-    if event_country: mask_strict &= df['EventCountry'].isin(event_country)
-    if new_wc and 'IsNewWeightClass' in df.columns: mask_strict &= df['IsNewWeightClass'] == True
+    # --- Continuous columns – only filter if the user deliberately moved the slider,
+    #     and always allow NaN (so missing data doesn't drop rows) ---
+    def add_continuous_filter(col_name, user_min, user_max):
+        if col_name not in df.columns:
+            return
+        data_min = float(df[col_name].min())
+        data_max = float(df[col_name].max())
+        # Only apply the filter if the user's range is narrower than the data range
+        if user_min > data_min or user_max < data_max:
+            mask_strict &= (df[col_name] >= user_min) & (df[col_name] <= user_max) | df[col_name].isna()
 
-    if 'CareerWinPct_diff' in df.columns:
-        mask_strict &= add_strict((df['CareerWinPct_diff'] >= cwp_min) & (df['CareerWinPct_diff'] <= cwp_max), 'CareerWinPct_diff')
+    add_continuous_filter('CareerWinPct_diff', cwp_min, cwp_max)
+    add_continuous_filter('Age', age_min, age_max)
+    add_continuous_filter('AgeDiff', ad_min, ad_max)
+    add_continuous_filter('HeightDiff', hd_min, hd_max)
+    add_continuous_filter('ReachDiff', rd_min, rd_max)
+    add_continuous_filter('DaysSincePrev', days_min, days_max)
+    add_continuous_filter('DaysSincePrev_diff', ddiff_min, ddiff_max)
+    add_continuous_filter('Avg3DaysGap_diff', avg3_min, avg3_max)
+    add_continuous_filter('FighterOddsNum', odds_min, odds_max)
+    add_continuous_filter('PrevFighterOddsNum', podds_min, podds_max)
 
-    for col, (cmin, cmax) in [
-        ('Age', (age_min, age_max)), ('AgeDiff', (ad_min, ad_max)),
-        ('HeightDiff', (hd_min, hd_max)), ('ReachDiff', (rd_min, rd_max)),
-        ('DaysSincePrev', (days_min, days_max)),
-        ('DaysSincePrev_diff', (ddiff_min, ddiff_max)),
-        ('Avg3DaysGap_diff', (avg3_min, avg3_max)),
-        ('FighterOddsNum', (odds_min, odds_max)),
-        ('PrevFighterOddsNum', (podds_min, podds_max))
-    ]:
-        if col in df.columns:
-            mask_strict &= add_strict((df[col] >= cmin) & (df[col] <= cmax), col)
+    # --- Rating difference filters (only if checkbox is on) ---
+    if use_colley and colley_range is not None and 'ColleyDecayDiff' in df.columns:
+        cmin, cmax = colley_range
+        mask_strict &= (df['ColleyDecayDiff'] >= cmin) & (df['ColleyDecayDiff'] <= cmax) | df['ColleyDecayDiff'].isna()
+    if use_massey and massey_range is not None and 'MasseyFinishDecayDiff' in df.columns:
+        cmin, cmax = massey_range
+        mask_strict &= (df['MasseyFinishDecayDiff'] >= cmin) & (df['MasseyFinishDecayDiff'] <= cmax) | df['MasseyFinishDecayDiff'].isna()
+    if use_wmd and wmd_range is not None and 'WeightedMasseyDecayDiff' in df.columns:
+        cmin, cmax = wmd_range
+        mask_strict &= (df['WeightedMasseyDecayDiff'] >= cmin) & (df['WeightedMasseyDecayDiff'] <= cmax) | df['WeightedMasseyDecayDiff'].isna()
 
-    if use_colley and 'ColleyDecayDiff' in df.columns:
-        mask_strict &= add_strict((df['ColleyDecayDiff'] >= colley_range[0]) & (df['ColleyDecayDiff'] <= colley_range[1]), 'ColleyDecayDiff')
-    if use_massey and 'MasseyFinishDecayDiff' in df.columns:
-        mask_strict &= add_strict((df['MasseyFinishDecayDiff'] >= massey_range[0]) & (df['MasseyFinishDecayDiff'] <= massey_range[1]), 'MasseyFinishDecayDiff')
-    if use_wmd and 'WeightedMasseyDecayDiff' in df.columns:
-        mask_strict &= add_strict((df['WeightedMasseyDecayDiff'] >= wmd_range[0]) & (df['WeightedMasseyDecayDiff'] <= wmd_range[1]), 'WeightedMasseyDecayDiff')
-
+    # Keep only fights where BOTH rows satisfy the strict mask
     fight_ok = mask_strict.groupby(df['FightID']).transform('all')
     df_strict = df[fight_ok].copy()
 
+    # ==================================================================
+    # Build side masks (Fighter A and Fighter B) – unchanged from before
+    # ==================================================================
     def build_side_mask(data_side, side_params):
+        """Return a boolean Series based on each row's own attributes."""
         fn_min, fn_max = side_params['fn_min'], side_params['fn_max']
         prev_title = side_params['prev_title']
         hometown = side_params.get('hometown', [])
@@ -422,6 +435,7 @@ def apply_spider_filters(df, params):
     fighterA_mask = build_side_mask(df_strict, fighterA_params)
     fighterB_mask = build_side_mask(df_strict, fighterB_params)
 
+    # ----- Permutation check -----
     def check_permutation(group):
         idx = group.index.tolist()
         if len(idx) != 2:
