@@ -9,7 +9,6 @@ from sklearn.impute import SimpleImputer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import cross_val_score
 from lightgbm import LGBMClassifier
-from scipy.spatial.distance import cdist
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
@@ -353,7 +352,7 @@ def apply_spider_filters(df, params):
     return filtered_df, fighterA_mask, fighterB_mask
 
 # -----------------------------------------------
-# SPIDER FILTERS (keep as dataset filters)
+# SPIDER FILTERS
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 
@@ -624,9 +623,8 @@ else:
                         leaf_df = pd.DataFrame(leaf_stats)
                         st.dataframe(leaf_df, use_container_width=True, hide_index=True)
 
-                # ========== LIGHTGBM MODELS – CLEARLY SEPARATED ==========
-                st.header("LightGBM Models (5‑fold CV Accuracy)")
-
+                # ========== LIGHTGBM MODELS – ONLY ALL-DIFF HAS CV ==========
+                st.header("LightGBM Models")
                 all_diff_features = [c for c in numeric_features if c in spider_data.columns and c not in abs_rating_cols]
                 top_diff_features = st.session_state.auto_vars if st.session_state.auto_vars else []
 
@@ -666,7 +664,7 @@ else:
                     else:
                         fighter_name = None
 
-                    # ---- Top‑Var Decision Tree (auto) ----
+                    # --- Top‑Var Decision Tree (optional) ---
                     if top_diff_features:
                         st.subheader("Decision Tree (Top‑Slider Variables Only)")
                         X_top = safe_prepare(spider_hist, top_diff_features)
@@ -691,9 +689,9 @@ else:
                             except Exception as e:
                                 st.error(f"Prediction error: {e}")
                     else:
-                        st.info("No top‑slider variables selected. Skipping Top‑Var models.")
+                        st.info("No top‑slider variables selected.")
 
-                    # --- LightGBM 1: All Differential Features ---
+                    # ----- LightGBM 1: All Differential Features (has CV) -----
                     st.subheader("LightGBM – All Differential Features")
                     lgbm_all_depth = st.slider("Max Depth (All Diff)", 1, 20, 6, key="lgbm_all_depth")
                     lgbm_all = LGBMClassifier(n_estimators=200, max_depth=lgbm_all_depth, random_state=42, n_jobs=-1, verbosity=-1)
@@ -709,17 +707,16 @@ else:
                     else:
                         col_a2.write("No fighter prediction available.")
 
-                    # --- LightGBM 2: Top‑Slider Variables (if any) ---
+                    # ----- LightGBM 2: Top‑Slider Variables (NO CV) -----
                     if top_diff_features:
                         st.subheader("LightGBM – Top‑Slider Variables")
                         X_top_lgbm = safe_prepare(spider_hist, top_diff_features)
                         lgbm_top_depth = st.slider("Max Depth (Top‑Slider)", 1, 20, 6, key="lgbm_top_depth")
                         lgbm_top = LGBMClassifier(n_estimators=200, max_depth=lgbm_top_depth, random_state=42, n_jobs=-1, verbosity=-1)
-                        cv_top = cross_val_score(lgbm_top, X_top_lgbm, y, cv=5, scoring='accuracy').mean()
                         lgbm_top.fit(X_top_lgbm, y)
 
                         col_b1, col_b2 = st.columns(2)
-                        col_b1.metric("CV Accuracy (Top‑Slider)", f"{cv_top:.1%}")
+                        col_b1.write("**Prediction (no CV)**")  # no CV metric
                         if fighter_name:
                             X_input_top = get_fighter_input(f1_row, top_diff_features, spider_hist)
                             prob_top = lgbm_top.predict_proba(X_input_top)[0, 1]
