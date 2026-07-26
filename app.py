@@ -2,16 +2,15 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 import gdown
 from sklearn.linear_model import LogisticRegression
-from sklearn.tree import DecisionTreeClassifier, plot_tree
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.ensemble import RandomForestClassifier
-from scipy.spatial.distance import cdist
+from xgboost import XGBClassifier
 
 st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
 
@@ -248,12 +247,7 @@ def apply_spider_filters(df, params):
     fight_ok = mask_strict.groupby(df['FightID']).transform('all')
     df_strict = df[fight_ok].copy()
 
-    # -- Build two identical masks, one for Fighter A, one for Fighter B --
     def build_side_mask(data_side, side_params):
-        """
-        Checks each row's OWN stats (FightNumber, HometownFighter, Country, etc.)
-        against the side-specific filters. Does NOT use opponent columns.
-        """
         fn_min, fn_max = side_params['fn_min'], side_params['fn_max']
         prev_title = side_params['prev_title']
         hometown = side_params.get('hometown', [])
@@ -343,7 +337,6 @@ def apply_spider_filters(df, params):
     fighterA_mask = build_side_mask(df_strict, fighterA_params)
     fighterB_mask = build_side_mask(df_strict, fighterB_params)
 
-    # Permutation check: one row must satisfy A, the other must satisfy B
     def check_permutation(group):
         idx = group.index.tolist()
         if len(idx) != 2:
@@ -361,7 +354,7 @@ def apply_spider_filters(df, params):
     return filtered_df, fighterA_mask, fighterB_mask
 
 # -----------------------------------------------
-# SPIDER SECTION
+# SPIDER FILTERS (keep as dataset filters)
 # -----------------------------------------------
 st.header("Fight Similarity (Independent Filters)")
 
@@ -588,112 +581,7 @@ else:
                     key="manual_spider_vars"
                 )
 
-                auto_list = st.session_state.auto_vars if st.session_state.auto_vars else []
-                manual_list = st.session_state.manual_spider_vars
-                combined = list(set(auto_list + manual_list).intersection(sim_features))
-
-                if not combined:
-                    st.warning("No similarity variables selected.")
-                else:
-                    available_metrics = ["Euclidean", "Manhattan", "Chebyshev"]
-                    distance_metrics = st.multiselect("Distance metrics", available_metrics,
-                                                     default=["Euclidean"], key="spider_metrics")
-                    if not distance_metrics:
-                        st.warning("Please select at least one distance metric.")
-                    else:
-                        hist_sub = spider_hist[combined].dropna()
-                        if len(hist_sub) < 2:
-                            st.warning("Not enough historical data for the selected variables.")
-                        else:
-                            scaler_sim = StandardScaler()
-                            scaler_sim.fit(hist_sub)
-
-                            up_vals = [float(f1.get(var, 0.0)) for var in combined]
-                            up_vec = np.array([up_vals], dtype=np.float64)
-                            up_scaled = scaler_sim.transform(up_vec)
-                            hist_scaled = scaler_sim.transform(hist_sub)
-
-                            metric_map = {"Euclidean": "euclidean", "Manhattan": "cityblock", "Chebyshev": "chebyshev"}
-                            metric_similarities = {}
-                            for metric_display in distance_metrics:
-                                metric = metric_map[metric_display]
-                                dists = cdist(up_scaled, hist_scaled, metric=metric).flatten()
-                                max_dist = dists.max() if dists.max() > 0 else 1.0
-                                sim = 100 * (1 - dists / max_dist)
-                                metric_similarities[metric_display] = sim
-
-                            combined_sim = sum(metric_similarities.values()) / len(metric_similarities)
-
-                            sim_df = spider_hist.loc[hist_sub.index, ['FightDate', 'Fighter', 'Opponent', 'Win?']].copy()
-                            for metric_display in distance_metrics:
-                                sim_df[f'Sim_{metric_display}'] = metric_similarities[metric_display].round(1)
-                            sim_df['Similarity'] = combined_sim.round(1)
-                            sim_df = sim_df.sort_values('Similarity', ascending=False)
-
-                            top_n = sim_df.head(100)
-                            count = len(top_n)
-
-                            total_hist_count = len(sim_df)
-                            cm1, cm2 = st.columns(2)
-                            cm1.metric("Total Completed Fights", total_completed_fights)
-                            cm2.metric("Win Rate (filtered)", f"{filtered_wr:.1f}%")
-
-                            st.subheader("Similarity Metrics (Top 100 Fights)")
-
-                            avg_sim = top_n['Similarity'].mean()
-                            total_sim = top_n['Similarity'].sum()
-                            composite = avg_sim * (count ** 0.5) / 100
-
-                            col1, col2, col3, col4 = st.columns(4)
-                            col1.metric("Count", count)
-                            col2.metric("Avg Similarity", f"{avg_sim:.1f}%")
-                            col3.metric("Total Similarity", f"{total_sim:.1f}")
-                            col4.metric("Composite Score", f"{composite:.1f}")
-
-                            weight_power = st.slider("Weighting Exponent (higher = more impact from high scores)",
-                                                     1.0, 4.0, 1.0, 0.5, key="weight_power")
-
-                            def weighted_win_rate(subset):
-                                if len(subset) == 0:
-                                    return 0.0, 0.0
-                                wins = subset['Win?'] == 'Yes'
-                                weights = subset['Similarity'] ** weight_power
-                                total_weight = weights.sum()
-                                win_weight = weights[wins].sum() if wins.any() else 0.0
-                                wr = wins.mean() * 100
-                                wwr = (win_weight / total_weight) * 100 if total_weight > 0 else 0.0
-                                return wr, wwr
-
-                            high_sim_90 = top_n[top_n['Similarity'] >= 90]
-                            high_sim_80 = top_n[top_n['Similarity'] >= 80]
-                            high_sim_70 = top_n[top_n['Similarity'] >= 70]
-                            high_sim_60 = top_n[top_n['Similarity'] >= 60]
-
-                            win_rate_90, weighted_wr_90 = weighted_win_rate(high_sim_90)
-                            win_rate_80, weighted_wr_80 = weighted_win_rate(high_sim_80)
-                            win_rate_70, weighted_wr_70 = weighted_win_rate(high_sim_70)
-                            win_rate_60, weighted_wr_60 = weighted_win_rate(high_sim_60)
-
-                            col5, col6, col7, col8 = st.columns(4)
-                            col5.metric("Win Rate (≥90%)", f"{win_rate_90:.1f}%", delta=f"{len(high_sim_90)} fights")
-                            col6.metric("Weighted WR (≥90%)", f"{weighted_wr_90:.1f}%")
-                            col7.metric("Win Rate (≥80%)", f"{win_rate_80:.1f}%", delta=f"{len(high_sim_80)} fights")
-                            col8.metric("Weighted WR (≥80%)", f"{weighted_wr_80:.1f}%")
-
-                            col9, col10, col11, col12 = st.columns(4)
-                            col9.metric("Win Rate (≥70%)", f"{win_rate_70:.1f}%", delta=f"{len(high_sim_70)} fights")
-                            col10.metric("Weighted WR (≥70%)", f"{weighted_wr_70:.1f}%")
-                            col11.metric("Win Rate (≥60%)", f"{win_rate_60:.1f}%", delta=f"{len(high_sim_60)} fights")
-                            col12.metric("Weighted WR (≥60%)", f"{weighted_wr_60:.1f}%")
-
-                            fig_hist = px.histogram(sim_df, x='Similarity', nbins=20, title="Similarity Distribution (Combined)")
-                            st.plotly_chart(fig_hist, use_container_width=True, key="sim_hist_chart")
-
-                            st.subheader(f"Top 100 Most Similar Historical Fights")
-                            col_order = ['FightDate','Fighter','Opponent','Win?'] + [f'Sim_{m}' for m in distance_metrics] + ['Similarity']
-                            st.dataframe(top_n[col_order], use_container_width=True)
-
-                # ========== ORIGINAL DECISION TREE (ALL FEATURES) ==========
+                # ========== DECISION TREE (ALL FEATURES) – NO GRAPHIC ==========
                 st.subheader("Decision Tree (All Differential Features)")
 
                 spider_tree_hist = spider_hist.copy()
@@ -740,34 +628,6 @@ else:
                                         st.error(f"Prediction error: {e}")
                                 else:
                                     st.warning("Fight data incomplete for prediction.")
-
-                                fig_w = max(16, max_depth_sp * 5)
-                                fig_h = max(8,  max_depth_sp * 3)
-                                fig, ax = plt.subplots(figsize=(fig_w, fig_h))
-                                plot_tree(dt_sp, feature_names=spider_features, class_names=['Loss', 'Win'],
-                                          filled=True, rounded=True, proportion=False,
-                                          impurity=False, fontsize=8, ax=ax)
-
-                                for text_obj, node_id in zip(ax.texts, range(dt_sp.tree_.node_count)):
-                                    old_text = text_obj.get_text()
-                                    if 'value' not in old_text:
-                                        continue
-                                    lines = old_text.split('\n')
-                                    new_lines = []
-                                    for line in lines:
-                                        if line.strip().startswith('value'):
-                                            values = dt_sp.tree_.value[node_id][0]
-                                            total = values.sum()
-                                            if total > 0:
-                                                win_pct  = values[1] / total * 100
-                                                loss_pct = values[0] / total * 100
-                                                new_lines.append(f"Loss {loss_pct:.0f}%  Win {win_pct:.0f}%")
-                                            else:
-                                                new_lines.append(line)
-                                        else:
-                                            new_lines.append(line)
-                                    text_obj.set_text('\n'.join(new_lines))
-                                st.pyplot(fig)
 
                                 st.subheader("Leaf Win Percentages")
                                 leaf_ids = dt_sp.apply(X_sp)
@@ -824,6 +684,7 @@ else:
                     else:
                         fighter_name = None
 
+                    # ---- Top‑Var Decision Tree (no graphic) ----
                     if top_diff_features:
                         st.subheader("Decision Tree (Top‑Slider Variables Only)")
                         X_top = safe_prepare(spider_hist, top_diff_features)
@@ -851,15 +712,10 @@ else:
                                         st.write(f"**{fighter_name}** (top‑var tree) → leaf **{leaf}** with win probability **{prob:.1%}**")
                                     except Exception as e:
                                         st.error(f"Prediction error: {e}")
-
-                                if max_depth_top <= 4:
-                                    fig, ax = plt.subplots(figsize=(12, 6))
-                                    plot_tree(dt_top, feature_names=top_diff_features, class_names=['Loss','Win'],
-                                              filled=True, rounded=True, fontsize=8, ax=ax)
-                                    st.pyplot(fig)
                     else:
                         st.info("No top‑slider variables selected. Skipping Top‑Var models.")
 
+                    # ---- Logistic Regression ----
                     st.subheader("Logistic Regression Win Rates")
                     lr_all = LogisticRegression(max_iter=2000, random_state=42)
                     lr_all.fit(X_all, y)
@@ -889,6 +745,7 @@ else:
                     else:
                         col_lr2.write("N/A")
 
+                    # ---- Random Forest ----
                     st.subheader("Random Forest Win Rates")
                     rf_max_depth = st.slider("Random Forest Max Depth", 1, 20, 10, key="rf_depth_slider")
 
@@ -919,6 +776,38 @@ else:
                             col_rf2.write("No fighter prediction available.")
                     else:
                         col_rf2.write("N/A")
+
+                    # ---- XGBoost ----
+                    st.subheader("XGBoost Win Rates")
+                    xgb_max_depth = st.slider("XGBoost Max Depth", 1, 20, 6, key="xgb_depth_slider")
+
+                    xgb_all = XGBClassifier(n_estimators=200, max_depth=xgb_max_depth, random_state=42, n_jobs=-1, verbosity=0)
+                    xgb_all.fit(X_all, y)
+                    acc_all_xgb = xgb_all.score(X_all, y)
+
+                    col_xgb1, col_xgb2 = st.columns(2)
+                    col_xgb1.metric("XGB (All Diff Vars) Win Rate", f"{acc_all_xgb:.1%}")
+                    if fighter_name and all_diff_features:
+                        X_input_all_xgb = get_fighter_input(f1_row, all_diff_features, spider_hist)
+                        prob_all_xgb = xgb_all.predict_proba(X_input_all_xgb)[0, 1]
+                        col_xgb1.write(f"**{fighter_name}** win prob: **{prob_all_xgb:.1%}**")
+                    else:
+                        col_xgb1.write("No fighter prediction available.")
+
+                    if top_diff_features:
+                        X_top_xgb = safe_prepare(spider_hist, top_diff_features)
+                        xgb_top = XGBClassifier(n_estimators=200, max_depth=xgb_max_depth, random_state=42, n_jobs=-1, verbosity=0)
+                        xgb_top.fit(X_top_xgb, y)
+                        acc_top_xgb = xgb_top.score(X_top_xgb, y)
+                        col_xgb2.metric("XGB (Top‑Slider Vars) Win Rate", f"{acc_top_xgb:.1%}")
+                        if fighter_name:
+                            X_input_top_xgb = get_fighter_input(f1_row, top_diff_features, spider_hist)
+                            prob_top_xgb = xgb_top.predict_proba(X_input_top_xgb)[0, 1]
+                            col_xgb2.write(f"**{fighter_name}** win prob: **{prob_top_xgb:.1%}**")
+                        else:
+                            col_xgb2.write("No fighter prediction available.")
+                    else:
+                        col_xgb2.write("N/A")
 
 # -----------------------------------------------
 # FEATURE IMPORTANCE (MI only)
