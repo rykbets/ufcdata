@@ -188,8 +188,10 @@ else:
 @st.cache_data
 def apply_single_fighter_filters(df, params):
     """
-    Filters fights where at least one row satisfies the fighter‑side criteria.
-    Keeps complete fights (both rows).
+    Filters fights where **at least one fighter** meets the criteria.
+    Returns:
+        filtered_df : complete fights (both rows for each FightID)
+        mask        : boolean Series (True for rows that passed the fighter‑side criteria)
     """
     wc = params['wc']
     stance = params['stance']
@@ -208,7 +210,6 @@ def apply_single_fighter_filters(df, params):
 
     mask = pd.Series(True, index=df.index)
 
-    # General (shared) filters
     if wc: mask &= df['WC'].isin(wc)
     if stance: mask &= df['Stance'].isin(stance)
     if country: mask &= df['Country'].isin(country)
@@ -220,7 +221,6 @@ def apply_single_fighter_filters(df, params):
     if 'FightNumber' in df.columns:
         mask &= (df['FightNumber'] >= fn_min) & (df['FightNumber'] <= fn_max)
 
-    # Previous outcomes
     if skip_nc:
         prev1_col = 'Prev1_Outcome_skipNC'; prev2_col = 'Prev2_Outcome_skipNC'; prev3_col = 'Prev3_Outcome_skipNC'
         career1_col = 'Career1_Outcome_skipNC'; career2_col = 'Career2_Outcome_skipNC'; career3_col = 'Career3_Outcome_skipNC'
@@ -253,10 +253,10 @@ def apply_single_fighter_filters(df, params):
     if hometown and 'HometownFighter' in df.columns:
         mask &= df['HometownFighter'].isin(hometown)
 
-    # Keep fights where **at least one row** passes the filter (single fighter logic)
+    # Keep fights where at least one row satisfies the mask
     fight_ok = mask.groupby(df['FightID']).transform('any')
     filtered_df = df[fight_ok].copy()
-    return filtered_df
+    return filtered_df, mask
 @st.cache_data
 def apply_spider_filters(df, params):
     """
