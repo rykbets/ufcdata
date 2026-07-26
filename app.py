@@ -5,7 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 import gdown
-from sklearn.linear_model import LogisticRegressionCV
+from sklearn.linear_model import LogisticRegressionCV, LogisticRegression
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
@@ -253,7 +253,7 @@ def apply_spider_filters(df, params):
     df_strict = df[fight_ok].copy()
 
     # ==================================================================
-    # NEW: Build identical masks for both sides using row's OWN columns
+    # Build identical masks for both sides using row's OWN columns
     # ==================================================================
     def build_side_mask(data_side, side_params):
         """Return a boolean Series based on each row's own attributes."""
@@ -263,7 +263,6 @@ def apply_spider_filters(df, params):
         country_side = side_params.get('country', [])
         skip_nc = side_params['skip_nc']
 
-        # Columns depend on skip_nc flag
         if skip_nc:
             prev1_col = 'Prev1_Outcome_skipNC'
             prev2_col = 'Prev2_Outcome_skipNC'
@@ -280,13 +279,11 @@ def apply_spider_filters(df, params):
             career3_col = 'Career3_Outcome_raw'
 
         masks = []
-        # FightNumber
         if 'FightNumber' in data_side.columns:
             masks.append((data_side['FightNumber'] >= fn_min) & (data_side['FightNumber'] <= fn_max))
         else:
             masks.append(pd.Series(True, index=data_side.index))
 
-        # Outcome helper (uses row's own outcome columns)
         def outcome_cond(col, selected):
             if not selected or col not in data_side.columns:
                 return pd.Series(True, index=data_side.index)
@@ -307,19 +304,16 @@ def apply_spider_filters(df, params):
         masks.append(outcome_cond(career2_col, side_params.get('career2', [])))
         masks.append(outcome_cond(career3_col, side_params.get('career3', [])))
 
-        # Prev title
         if prev_title != "All" and 'Prev1_Title' in data_side.columns:
             masks.append(data_side['Prev1_Title'].str.strip().str.lower() == prev_title.lower())
         else:
             masks.append(pd.Series(True, index=data_side.index))
 
-        # Hometown
         if hometown and 'HometownFighter' in data_side.columns:
             masks.append(data_side['HometownFighter'].isin(hometown))
         else:
             masks.append(pd.Series(True, index=data_side.index))
 
-        # Country
         if country_side and 'Country' in data_side.columns:
             masks.append(data_side['Country'].isin(country_side))
         else:
@@ -330,7 +324,6 @@ def apply_spider_filters(df, params):
             mask &= m
         return mask
 
-    # Extract side‑specific parameters
     fighter_params = {
         'fn_min': params['fn_min'], 'fn_max': params['fn_max'],
         'prev_title': params['prev_title'],
@@ -353,7 +346,6 @@ def apply_spider_filters(df, params):
     fighter_mask = build_side_mask(df_strict, fighter_params)
     opponent_mask = build_side_mask(df_strict, opponent_params)
 
-    # ----- Permutation check (unchanged) -----
     def check_permutation(group):
         idx = group.index.tolist()
         if len(idx) != 2:
@@ -388,7 +380,6 @@ with st.expander("Spider Filters", expanded=True):
             title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"], key="spider_title")
             new_wc = st.checkbox("New Weight Class", key="spider_new_wc")
 
-    # ---- Fighter‑side & Opponent‑side filters (side by side) ----
     colF, colO = st.columns(2)
     with colF:
         st.write("**Fighter‑Side Filters**")
@@ -405,7 +396,6 @@ with st.expander("Spider Filters", expanded=True):
         ofn_max = st.number_input("Opponent Max Fight #", value=int(original_data['FightNumber'].max()), key="spider_ofn_max")
         opp_prev_title = st.selectbox("Opponent Prev Fight Title?", ["All", "Yes", "No"], key="spider_opp_prev_title")
 
-    # ---- Physical & Days (shared) ----
     with st.expander("Physical & Days", expanded=False):
         age_min, age_max = st.slider("Age", int(original_data['Age'].min()), int(original_data['Age'].max()), (int(original_data['Age'].min()), int(original_data['Age'].max())), key="spider_age")
         ad_min, ad_max = st.slider("Age Diff", int(original_data['AgeDiff'].min()), int(original_data['AgeDiff'].max()), (int(original_data['AgeDiff'].min()), int(original_data['AgeDiff'].max())), key="spider_age_diff")
@@ -416,12 +406,10 @@ with st.expander("Spider Filters", expanded=True):
         avg3_min, avg3_max = st.slider("Avg3DaysGap Diff", int(original_data['Avg3DaysGap_diff'].min()), int(original_data['Avg3DaysGap_diff'].max()), (int(original_data['Avg3DaysGap_diff'].min()), int(original_data['Avg3DaysGap_diff'].max())), key="spider_avg3")
         cwp_min, cwp_max = st.slider("Career Win % Diff", -100, 100, (-100, 100), step=5, key="spider_cwp")
 
-    # ---- Odds ----
     with st.expander("Odds", expanded=False):
         odds_min, odds_max = st.slider("Fighter Odds", int(original_data['FighterOddsNum'].min()), int(original_data['FighterOddsNum'].max()), (int(original_data['FighterOddsNum'].min()), int(original_data['FighterOddsNum'].max())), step=10, key="spider_odds")
         podds_min, podds_max = st.slider("Prev Fighter Odds", int(original_data['PrevFighterOddsNum'].min()), int(original_data['PrevFighterOddsNum'].max()), (int(original_data['PrevFighterOddsNum'].min()), int(original_data['PrevFighterOddsNum'].max())), step=10, key="spider_podds")
 
-    # ---- Previous Outcomes (side by side) ----
     with st.expander("Previous Outcomes", expanded=False):
         skip_nc = st.checkbox("Skip NC outcomes", key="spider_skip_nc")
         if skip_nc:
@@ -454,7 +442,6 @@ with st.expander("Spider Filters", expanded=True):
             opp_career2 = st.multiselect("Opp Career F2", outcome_options_career, key="spider_opp_career2")
             opp_career3 = st.multiselect("Opp Career F3", outcome_options_career, key="spider_opp_career3")
 
-    # ---- Ratings ----
     with st.expander("Ratings", expanded=False):
         use_colley = st.checkbox("Filter ColleyDecayDiff", value=False, key="spider_use_colley")
         colley_range = None
@@ -474,7 +461,6 @@ with st.expander("Spider Filters", expanded=True):
             min_wmd, max_wmd = get_diff_range(original_data, 'WeightedMasseyDecayDiff')
             wmd_range = st.slider("WeightedMasseyDecayDiff range", min_wmd, max_wmd, (min_wmd, max_wmd), step=0.01, key="spider_wmd")
 
-# ----- Pack all filter values into a dict for caching -----
 filter_params = {
     'wc': wc, 'stance': stance, 'event_country': event_country,
     'sched_rounds': sched_rounds, 'title_fight': title_fight, 'new_wc': new_wc,
@@ -502,7 +488,6 @@ filter_params = {
 
 spider_data, fighter_mask_spider, opponent_mask_spider = apply_spider_filters(original_data, filter_params)
 
-# ---- Split into upcoming and historical; deduplicate only historical ----
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
 spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
 
@@ -648,7 +633,6 @@ else:
                             sim_df['Similarity'] = combined_sim.round(1)
                             sim_df = sim_df.sort_values('Similarity', ascending=False)
 
-                            # --- Hard‑coded top 100 (or fewer if less data) ---
                             top_n = sim_df.head(100)
                             count = len(top_n)
 
@@ -669,11 +653,9 @@ else:
                             col3.metric("Total Similarity", f"{total_sim:.1f}")
                             col4.metric("Composite Score", f"{composite:.1f}")
 
-                            # ----- Weighting exponent slider (replaces old top‑N) -----
                             weight_power = st.slider("Weighting Exponent (higher = more impact from high scores)",
                                                      1.0, 4.0, 1.0, 0.5, key="weight_power")
 
-                            # Helper for weighted win rate using similarity ** weight_power
                             def weighted_win_rate(subset):
                                 if len(subset) == 0:
                                     return 0.0, 0.0
@@ -695,7 +677,6 @@ else:
                             win_rate_70, weighted_wr_70 = weighted_win_rate(high_sim_70)
                             win_rate_60, weighted_wr_60 = weighted_win_rate(high_sim_60)
 
-                            # Show 8 columns for all thresholds (≥90, ≥80, ≥70, ≥60)
                             col5, col6, col7, col8 = st.columns(4)
                             col5.metric("Win Rate (≥90%)", f"{win_rate_90:.1f}%", delta=f"{len(high_sim_90)} fights")
                             col6.metric("Weighted WR (≥90%)", f"{weighted_wr_90:.1f}%")
@@ -715,8 +696,8 @@ else:
                             col_order = ['FightDate','Fighter','Opponent','Win?'] + [f'Sim_{m}' for m in distance_metrics] + ['Similarity']
                             st.dataframe(top_n[col_order], use_container_width=True)
 
-                # ========== SPIDER DECISION TREE ==========
-                st.subheader("Decision Tree from Similarity Filters")
+                # ========== ORIGINAL DECISION TREE (ALL FEATURES) ==========
+                st.subheader("Decision Tree (All Differential Features)")
 
                 spider_tree_hist = spider_hist.copy()
                 if len(spider_tree_hist) < 10:
@@ -804,10 +785,97 @@ else:
                                 leaf_df = pd.DataFrame(leaf_stats)
                                 st.dataframe(leaf_df, use_container_width=True, hide_index=True)
 
+                # ========== MODEL COMPARISON SECTION (NEW) ==========
+                st.header("Model Comparison (Filtered Historical Data)")
+
+                # All differential features (exact same as used in first tree)
+                all_diff_features = [c for c in numeric_features if c in spider_data.columns and c not in abs_rating_cols]
+
+                # Top‑slider variables (auto_vars) – only if available
+                top_diff_features = st.session_state.auto_vars if st.session_state.auto_vars else []
+
+                if len(spider_hist) < 10:
+                    st.warning("Not enough historical fights for model training.")
+                else:
+                    # Prepare data for all-differential models
+                    y = (spider_hist['Win?'] == 'Yes').astype(int)
+                    if all_diff_features:
+                        X_all = spider_hist[all_diff_features].fillna(spider_hist[all_diff_features].median())
+                    else:
+                        X_all = pd.DataFrame(index=spider_hist.index)
+
+                    # ---- Decision Tree using only TOP SLIDER variables ----
+                    if top_diff_features:
+                        st.subheader("Decision Tree (Top‑Slider Variables Only)")
+                        X_top = spider_hist[top_diff_features].fillna(spider_hist[top_diff_features].median())
+                        c1, c2, c3 = st.columns(3)
+                        with c1:
+                            max_depth_top = st.slider("Max Depth (Top‑Var Tree)", 1, 10, 3, key="top_tree_depth")
+                        with c2:
+                            min_samples_leaf_top = st.slider("Min Samples Leaf (Top‑Var Tree)", 1, 100, 5, key="top_tree_leaf")
+                        with c3:
+                            criterion_top = st.selectbox("Splitting Criterion (Top‑Var Tree)", ["gini", "entropy", "log_loss"], index=0, key="top_tree_criterion")
+
+                        if st.button("Train Top‑Var Decision Tree", key="train_top_tree"):
+                            with st.spinner("Training..."):
+                                dt_top = DecisionTreeClassifier(max_depth=max_depth_top,
+                                                                min_samples_leaf=min_samples_leaf_top,
+                                                                criterion=criterion_top, random_state=42)
+                                dt_top.fit(X_top, y)
+                                st.success(f"Top‑Var Tree trained. Training accuracy: {dt_top.score(X_top, y):.1%}")
+                                # Optional: plot small tree if depth <= 4
+                                if max_depth_top <= 4:
+                                    fig, ax = plt.subplots(figsize=(12, 6))
+                                    plot_tree(dt_top, feature_names=top_diff_features, class_names=['Loss','Win'],
+                                              filled=True, rounded=True, fontsize=8, ax=ax)
+                                    st.pyplot(fig)
+                    else:
+                        st.info("No top‑slider variables selected. Skipping Top‑Var models.")
+
+                    # ---- Logistic Regression models ----
+                    st.subheader("Logistic Regression Win Rates")
+                    lr_all = LogisticRegression(max_iter=2000, random_state=42)
+                    lr_all.fit(X_all, y)
+                    acc_all_lr = lr_all.score(X_all, y)
+
+                    if top_diff_features:
+                        lr_top = LogisticRegression(max_iter=2000, random_state=42)
+                        lr_top.fit(X_top, y)
+                        acc_top_lr = lr_top.score(X_top, y)
+                    else:
+                        acc_top_lr = None
+
+                    col_lr1, col_lr2 = st.columns(2)
+                    col_lr1.metric("LR (All Diff Vars) Win Rate", f"{acc_all_lr:.1%}")
+                    if acc_top_lr is not None:
+                        col_lr2.metric("LR (Top‑Slider Vars) Win Rate", f"{acc_top_lr:.1%}")
+                    else:
+                        col_lr2.write("N/A")
+
+                    # ---- Random Forest models ----
+                    st.subheader("Random Forest Win Rates")
+                    rf_all = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
+                    rf_all.fit(X_all, y)
+                    acc_all_rf = rf_all.score(X_all, y)
+
+                    if top_diff_features:
+                        rf_top = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
+                        rf_top.fit(X_top, y)
+                        acc_top_rf = rf_top.score(X_top, y)
+                    else:
+                        acc_top_rf = None
+
+                    col_rf1, col_rf2 = st.columns(2)
+                    col_rf1.metric("RF (All Diff Vars) Win Rate", f"{acc_all_rf:.1%}")
+                    if acc_top_rf is not None:
+                        col_rf2.metric("RF (Top‑Slider Vars) Win Rate", f"{acc_top_rf:.1%}")
+                    else:
+                        col_rf2.write("N/A")
+
 # -----------------------------------------------
-# FEATURE IMPORTANCE (uses spider filtered data)
+# FEATURE IMPORTANCE (MI only, Lasso/RF removed)
 # -----------------------------------------------
-st.header("Feature Importance (based on Spider Filters)")
+st.header("Feature Importance (Mutual Information)")
 hist_imp_full = spider_hist.copy()
 if len(hist_imp_full) < 10:
     st.warning("Too few historical fights to compute importance (apply broader filters).")
@@ -836,37 +904,3 @@ else:
                 fig_mi = px.bar(mi_df, x='MI', y='Feature', orientation='h',
                                 title="Top 20 Mutual Information (filtered)")
                 st.plotly_chart(fig_mi, use_container_width=True, key="mi_plot")
-
-                if st.button("Compute Lasso Importance (filtered)"):
-                    with st.spinner("Fitting LassoCV..."):
-                        scaler_lasso = StandardScaler()
-                        X_lasso_scaled = scaler_lasso.fit_transform(X_imp)
-                        lasso = LogisticRegressionCV(
-                            penalty='l1', solver='saga', cv=5,
-                            scoring='neg_brier_score', max_iter=2000,
-                            Cs=10, n_jobs=-1, random_state=42
-                        )
-                        lasso.fit(X_lasso_scaled, y)
-                        coef = lasso.coef_.flatten()
-                        coef_df = pd.DataFrame({'Feature': keep_features, 'Coefficient': coef})
-                        coef_df = coef_df[coef_df['Coefficient'] != 0].sort_values('Coefficient', key=abs, ascending=False)
-                        st.subheader("Lasso Non‑Zero Coefficients (filtered)")
-                        if len(coef_df) > 0:
-                            fig_lasso = px.bar(coef_df.head(30), x='Coefficient', y='Feature', orientation='h',
-                                               title="Lasso Coefficients (filtered)")
-                            st.plotly_chart(fig_lasso, use_container_width=True, key="lasso_plot")
-                        else:
-                            st.write("Lasso eliminated all features.")
-
-                if st.button("Compute Random Forest Importance (filtered)"):
-                    with st.spinner("Training Random Forest..."):
-                        X_rf = X.copy()
-                        imp_rf = SimpleImputer(strategy='median')
-                        X_rf_imp = imp_rf.fit_transform(X_rf)
-                        rf = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
-                        rf.fit(X_rf_imp, y)
-                        rf_imp = pd.DataFrame({'Feature': keep_features, 'Importance': rf.feature_importances_}).sort_values('Importance', ascending=False).head(30)
-                        st.subheader("Random Forest Feature Importance (filtered)")
-                        fig_rf = px.bar(rf_imp, x='Importance', y='Feature', orientation='h',
-                                        title="Random Forest Feature Importance (filtered)")
-                        st.plotly_chart(fig_rf, use_container_width=True, key="rf_plot")
