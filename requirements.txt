@@ -5,5 +5,5 @@ plotly
 matplotlib
 gdown
 scikit-learn
-xgboost
+lightgbm
 
