@@ -576,7 +576,7 @@ else:
                 manual_list = st.session_state.manual_spider_vars
                 combined = list(set(auto_list + manual_list).intersection(sim_features))
 
-                # ========== DECISION TREE (ALL FEATURES) – AUTO + PLATT ==========
+                # ========== FULL‑FEATURES DECISION TREE (PLATT) ==========
                 st.subheader("Decision Tree (All Differential Features) – Platt‑calibrated")
                 spider_tree_hist = spider_hist.copy()
                 if len(spider_tree_hist) < 10:
@@ -596,13 +596,14 @@ else:
                         with col3:
                             criterion_sp = st.selectbox("Splitting Criterion", ["gini", "entropy", "log_loss"], index=0, key="spider_tree_criterion")
 
-                        dt_sp = DecisionTreeClassifier(max_depth=max_depth_sp, min_samples_leaf=min_samples_leaf_sp,
-                                                       criterion=criterion_sp, random_state=42)
-                        # Platt calibration
-                        calib_dt_sp = CalibratedClassifierCV(dt_sp, method='sigmoid', cv=5)
+                        base_tree = DecisionTreeClassifier(max_depth=max_depth_sp, min_samples_leaf=min_samples_leaf_sp,
+                                                           criterion=criterion_sp, random_state=42)
+                        calib_dt_sp = CalibratedClassifierCV(base_tree, method='sigmoid', cv=5)
                         calib_dt_sp.fit(X_sp, y_sp)
 
-                        # Prediction (calibrated)
+                        # The fitted tree is stored inside the calibrated wrapper
+                        fitted_tree = calib_dt_sp.estimator_
+
                         if len(fight_rows) == 2:
                             f1_row = fight_rows.iloc[0]
                             input_vals = []
@@ -614,17 +615,15 @@ else:
                             X_input = np.array([input_vals])
                             try:
                                 prob = calib_dt_sp.predict_proba(X_input)[0, 1]
-                                # leaf ID from uncalibrated tree
-                                leaf = dt_sp.apply(X_input)[0]
+                                leaf = fitted_tree.apply(X_input)[0]
                                 st.write(f"**{f1_row['Fighter']}** → leaf **{leaf}** with calibrated win probability **{prob:.1%}**")
                             except Exception as e:
                                 st.error(f"Prediction error: {e}")
                         else:
                             st.warning("Fight data incomplete for prediction.")
 
-                        # Leaf win percentages (uncalibrated)
                         st.subheader("Leaf Win Percentages (uncalibrated)")
-                        leaf_ids = dt_sp.apply(X_sp)
+                        leaf_ids = fitted_tree.apply(X_sp)
                         leaf_stats = []
                         for leaf_id in np.unique(leaf_ids):
                             mask_leaf = leaf_ids == leaf_id
@@ -690,16 +689,16 @@ else:
                         with c3:
                             criterion_top = st.selectbox("Splitting Criterion (Top‑Var Tree)", ["gini", "entropy", "log_loss"], index=0, key="top_tree_criterion")
 
-                        dt_top = DecisionTreeClassifier(max_depth=max_depth_top, min_samples_leaf=min_samples_leaf_top,
-                                                        criterion=criterion_top, random_state=42)
-                        calib_top = CalibratedClassifierCV(dt_top, method='sigmoid', cv=5)
+                        base_top = DecisionTreeClassifier(max_depth=max_depth_top, min_samples_leaf=min_samples_leaf_top,
+                                                          criterion=criterion_top, random_state=42)
+                        calib_top = CalibratedClassifierCV(base_top, method='sigmoid', cv=5)
                         calib_top.fit(X_top, y)
 
                         if fighter_name:
                             X_input = get_fighter_input(f1_row, top_diff_features, spider_hist)
                             try:
                                 prob = calib_top.predict_proba(X_input)[0, 1]
-                                leaf = dt_top.apply(X_input)[0]
+                                leaf = base_top.apply(X_input)[0]
                                 st.write(f"**{fighter_name}** (top‑var tree) → leaf **{leaf}** with calibrated win probability **{prob:.1%}**")
                             except Exception as e:
                                 st.error(f"Prediction error: {e}")
@@ -711,7 +710,6 @@ else:
                     lgbm_all_depth = st.slider("Max Depth (LightGBM)", 1, 20, 6, key="lgbm_all_depth")
                     lgbm_base = LGBMClassifier(n_estimators=200, max_depth=lgbm_all_depth, random_state=42, n_jobs=-1, verbosity=-1)
                     calib_lgbm = CalibratedClassifierCV(lgbm_base, method='sigmoid', cv=5)
-                    # CV on base model (uncalibrated) for accurate accuracy measure
                     cv_lgbm = cross_val_score(lgbm_base, X_all, y, cv=5, scoring='accuracy').mean()
                     calib_lgbm.fit(X_all, y)
 
@@ -745,7 +743,7 @@ else:
                         else:
                             col_c2.write("No fighter prediction available.")
                     else:
-                        st.warning("CatBoost is not installed. Install it with `pip install catboost` to enable this model.")
+                        st.warning("CatBoost is not installed. Run `pip install catboost` to enable this model.")
 
 # -----------------------------------------------
 # FEATURE IMPORTANCE – Random Forest
