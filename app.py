@@ -551,7 +551,6 @@ else:
                     top_n_rf = st.slider("Top N by Feature Importance", 0, 10, 0,
                                         help="Select top variables by Random Forest feature importance")
                     if top_n_rf > 0:
-                        # Train a quick Random Forest on all differential features
                         X_all = spider_hist[sim_features].fillna(spider_hist[sim_features].median())
                         y = (spider_hist['Win?'] == 'Yes').astype(int)
                         rf_ranker = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
@@ -593,15 +592,11 @@ else:
                         with col3:
                             criterion_sp = st.selectbox("Splitting Criterion", ["gini", "entropy", "log_loss"], index=0, key="spider_tree_criterion")
 
-                        # Auto-train (cached)
-                        @st.cache_resource
-                        def train_tree(depth, leaf, crit):
-                            dt = DecisionTreeClassifier(max_depth=depth, min_samples_leaf=leaf,
-                                                        criterion=crit, random_state=42)
-                            dt.fit(X_sp, y_sp)
-                            return dt
+                        # Train directly (no cache)
+                        dt_sp = DecisionTreeClassifier(max_depth=max_depth_sp, min_samples_leaf=min_samples_leaf_sp,
+                                                       criterion=criterion_sp, random_state=42)
+                        dt_sp.fit(X_sp, y_sp)
 
-                        dt_sp = train_tree(max_depth_sp, min_samples_leaf_sp, criterion_sp)
                         # Prediction
                         if len(fight_rows) == 2:
                             f1_row = fight_rows.iloc[0]
@@ -620,7 +615,7 @@ else:
                                 st.error(f"Prediction error: {e}")
                         else:
                             st.warning("Fight data incomplete for prediction.")
-                        # Leaf win percentages
+
                         st.subheader("Leaf Win Percentages")
                         leaf_ids = dt_sp.apply(X_sp)
                         leaf_stats = []
@@ -688,14 +683,10 @@ else:
                         with c3:
                             criterion_top = st.selectbox("Splitting Criterion (Top‑Var Tree)", ["gini", "entropy", "log_loss"], index=0, key="top_tree_criterion")
 
-                        @st.cache_resource
-                        def train_top_tree(depth, leaf, crit):
-                            dt = DecisionTreeClassifier(max_depth=depth, min_samples_leaf=leaf,
-                                                        criterion=crit, random_state=42)
-                            dt.fit(X_top, y)
-                            return dt
+                        dt_top = DecisionTreeClassifier(max_depth=max_depth_top, min_samples_leaf=min_samples_leaf_top,
+                                                        criterion=criterion_top, random_state=42)
+                        dt_top.fit(X_top, y)
 
-                        dt_top = train_top_tree(max_depth_top, min_samples_leaf_top, criterion_top)
                         if fighter_name:
                             X_input = get_fighter_input(f1_row, top_diff_features, spider_hist)
                             try:
@@ -802,7 +793,7 @@ else:
                         col_lgbm2.write("N/A")
 
 # -----------------------------------------------
-# FEATURE IMPORTANCE – Random Forest (replaces mutual information)
+# FEATURE IMPORTANCE – Random Forest
 # -----------------------------------------------
 st.header("Feature Importance (Random Forest)")
 hist_imp_full = spider_hist.copy()
@@ -813,7 +804,6 @@ else:
     if not feats:
         st.warning("No numeric features (excluding absolute ratings).")
     else:
-        # Impute missing values with median (safe)
         X = hist_imp_full[feats].fillna(hist_imp_full[feats].median())
         y = (hist_imp_full['Win?'] == 'Yes').astype(int)
 
