@@ -5,7 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 import gdown
-from sklearn.linear_model import LogisticRegressionCV, LogisticRegression
+from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
@@ -785,7 +785,7 @@ else:
                                 leaf_df = pd.DataFrame(leaf_stats)
                                 st.dataframe(leaf_df, use_container_width=True, hide_index=True)
 
-                # ========== MODEL COMPARISON SECTION (FIXED) ==========
+                # ========== MODEL COMPARISON SECTION (UPDATED) ==========
                 st.header("Model Comparison (Filtered Historical Data)")
 
                 # All differential features (same as first tree)
@@ -812,7 +812,25 @@ else:
                                 X[col] = X[col].fillna(med)
                         return X
 
+                    # Helper to get a single-row input for the upcoming fighter
+                    def get_fighter_input(f1_row, features, df_hist):
+                        vals = []
+                        for c in features:
+                            val = f1_row.get(c, np.nan)
+                            if pd.isna(val):
+                                col_vals = df_hist[c].dropna()
+                                val = col_vals.median() if len(col_vals) > 0 else 0.0
+                            vals.append(val)
+                        return np.array([vals])
+
                     X_all = safe_prepare(spider_hist, all_diff_features)
+
+                    # Fighter row for predictions
+                    if len(fight_rows) == 2:
+                        f1_row = fight_rows.iloc[0]
+                        fighter_name = f1_row['Fighter']
+                    else:
+                        fighter_name = None
 
                     # ---- Decision Tree using only TOP SLIDER variables ----
                     if top_diff_features:
@@ -833,6 +851,16 @@ else:
                                                                 criterion=criterion_top, random_state=42)
                                 dt_top.fit(X_top, y)
                                 st.success(f"Top‑Var Tree trained. Training accuracy: {dt_top.score(X_top, y):.1%}")
+
+                                if fighter_name:
+                                    X_input = get_fighter_input(f1_row, top_diff_features, spider_hist)
+                                    try:
+                                        prob = dt_top.predict_proba(X_input)[0, 1]
+                                        leaf = dt_top.apply(X_input)[0]
+                                        st.write(f"**{fighter_name}** (top‑var tree) → leaf **{leaf}** with win probability **{prob:.1%}**")
+                                    except Exception as e:
+                                        st.error(f"Prediction error: {e}")
+
                                 if max_depth_top <= 4:
                                     fig, ax = plt.subplots(figsize=(12, 6))
                                     plot_tree(dt_top, feature_names=top_diff_features, class_names=['Loss','Win'],
@@ -847,39 +875,60 @@ else:
                     lr_all.fit(X_all, y)
                     acc_all_lr = lr_all.score(X_all, y)
 
+                    col_lr1, col_lr2 = st.columns(2)
+                    col_lr1.metric("LR (All Diff Vars) Win Rate", f"{acc_all_lr:.1%}")
+
+                    if fighter_name and all_diff_features:
+                        X_input_all = get_fighter_input(f1_row, all_diff_features, spider_hist)
+                        prob_all_lr = lr_all.predict_proba(X_input_all)[0, 1]
+                        col_lr1.write(f"**{fighter_name}** win prob: **{prob_all_lr:.1%}**")
+                    else:
+                        col_lr1.write("No fighter prediction available.")
+
                     if top_diff_features:
                         X_top_lr = safe_prepare(spider_hist, top_diff_features)
                         lr_top = LogisticRegression(max_iter=2000, random_state=42)
                         lr_top.fit(X_top_lr, y)
                         acc_top_lr = lr_top.score(X_top_lr, y)
-                    else:
-                        acc_top_lr = None
-
-                    col_lr1, col_lr2 = st.columns(2)
-                    col_lr1.metric("LR (All Diff Vars) Win Rate", f"{acc_all_lr:.1%}")
-                    if acc_top_lr is not None:
                         col_lr2.metric("LR (Top‑Slider Vars) Win Rate", f"{acc_top_lr:.1%}")
+                        if fighter_name:
+                            X_input_top_lr = get_fighter_input(f1_row, top_diff_features, spider_hist)
+                            prob_top_lr = lr_top.predict_proba(X_input_top_lr)[0, 1]
+                            col_lr2.write(f"**{fighter_name}** win prob: **{prob_top_lr:.1%}**")
+                        else:
+                            col_lr2.write("No fighter prediction available.")
                     else:
                         col_lr2.write("N/A")
 
                     # ---- Random Forest models ----
                     st.subheader("Random Forest Win Rates")
-                    rf_all = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
+                    rf_max_depth = st.slider("Random Forest Max Depth", 1, 20, 10, key="rf_depth_slider")
+
+                    rf_all = RandomForestClassifier(n_estimators=200, max_depth=rf_max_depth, random_state=42, n_jobs=-1)
                     rf_all.fit(X_all, y)
                     acc_all_rf = rf_all.score(X_all, y)
 
-                    if top_diff_features:
-                        X_top_rf = safe_prepare(spider_hist, top_diff_features)
-                        rf_top = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
-                        rf_top.fit(X_top_rf, y)
-                        acc_top_rf = rf_top.score(X_top_rf, y)
-                    else:
-                        acc_top_rf = None
-
                     col_rf1, col_rf2 = st.columns(2)
                     col_rf1.metric("RF (All Diff Vars) Win Rate", f"{acc_all_rf:.1%}")
-                    if acc_top_rf is not None:
+                    if fighter_name and all_diff_features:
+                        X_input_all_rf = get_fighter_input(f1_row, all_diff_features, spider_hist)
+                        prob_all_rf = rf_all.predict_proba(X_input_all_rf)[0, 1]
+                        col_rf1.write(f"**{fighter_name}** win prob: **{prob_all_rf:.1%}**")
+                    else:
+                        col_rf1.write("No fighter prediction available.")
+
+                    if top_diff_features:
+                        X_top_rf = safe_prepare(spider_hist, top_diff_features)
+                        rf_top = RandomForestClassifier(n_estimators=200, max_depth=rf_max_depth, random_state=42, n_jobs=-1)
+                        rf_top.fit(X_top_rf, y)
+                        acc_top_rf = rf_top.score(X_top_rf, y)
                         col_rf2.metric("RF (Top‑Slider Vars) Win Rate", f"{acc_top_rf:.1%}")
+                        if fighter_name:
+                            X_input_top_rf = get_fighter_input(f1_row, top_diff_features, spider_hist)
+                            prob_top_rf = rf_top.predict_proba(X_input_top_rf)[0, 1]
+                            col_rf2.write(f"**{fighter_name}** win prob: **{prob_top_rf:.1%}**")
+                        else:
+                            col_rf2.write("No fighter prediction available.")
                     else:
                         col_rf2.write("N/A")
 
