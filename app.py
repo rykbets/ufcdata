@@ -785,29 +785,39 @@ else:
                                 leaf_df = pd.DataFrame(leaf_stats)
                                 st.dataframe(leaf_df, use_container_width=True, hide_index=True)
 
-                # ========== MODEL COMPARISON SECTION (NEW) ==========
+                # ========== MODEL COMPARISON SECTION (FIXED) ==========
                 st.header("Model Comparison (Filtered Historical Data)")
 
-                # All differential features (exact same as used in first tree)
+                # All differential features (same as first tree)
                 all_diff_features = [c for c in numeric_features if c in spider_data.columns and c not in abs_rating_cols]
-
-                # Top‑slider variables (auto_vars) – only if available
                 top_diff_features = st.session_state.auto_vars if st.session_state.auto_vars else []
 
                 if len(spider_hist) < 10:
                     st.warning("Not enough historical fights for model training.")
                 else:
-                    # Prepare data for all-differential models
                     y = (spider_hist['Win?'] == 'Yes').astype(int)
-                    if all_diff_features:
-                        X_all = spider_hist[all_diff_features].fillna(spider_hist[all_diff_features].median())
-                    else:
-                        X_all = pd.DataFrame(index=spider_hist.index)
+
+                    # Helper to safely prepare feature matrix
+                    def safe_prepare(df, features):
+                        """Fill missing/infinite values: replace inf -> NaN, then fill NaNs with median or 0."""
+                        if not features:
+                            return pd.DataFrame(index=df.index)
+                        X = df[features].copy()
+                        X.replace([np.inf, -np.inf], np.nan, inplace=True)
+                        for col in X.columns:
+                            if X[col].isna().all():
+                                X[col] = 0.0
+                            else:
+                                med = X[col].median()
+                                X[col] = X[col].fillna(med)
+                        return X
+
+                    X_all = safe_prepare(spider_hist, all_diff_features)
 
                     # ---- Decision Tree using only TOP SLIDER variables ----
                     if top_diff_features:
                         st.subheader("Decision Tree (Top‑Slider Variables Only)")
-                        X_top = spider_hist[top_diff_features].fillna(spider_hist[top_diff_features].median())
+                        X_top = safe_prepare(spider_hist, top_diff_features)
                         c1, c2, c3 = st.columns(3)
                         with c1:
                             max_depth_top = st.slider("Max Depth (Top‑Var Tree)", 1, 10, 3, key="top_tree_depth")
@@ -823,7 +833,6 @@ else:
                                                                 criterion=criterion_top, random_state=42)
                                 dt_top.fit(X_top, y)
                                 st.success(f"Top‑Var Tree trained. Training accuracy: {dt_top.score(X_top, y):.1%}")
-                                # Optional: plot small tree if depth <= 4
                                 if max_depth_top <= 4:
                                     fig, ax = plt.subplots(figsize=(12, 6))
                                     plot_tree(dt_top, feature_names=top_diff_features, class_names=['Loss','Win'],
@@ -839,9 +848,10 @@ else:
                     acc_all_lr = lr_all.score(X_all, y)
 
                     if top_diff_features:
+                        X_top_lr = safe_prepare(spider_hist, top_diff_features)
                         lr_top = LogisticRegression(max_iter=2000, random_state=42)
-                        lr_top.fit(X_top, y)
-                        acc_top_lr = lr_top.score(X_top, y)
+                        lr_top.fit(X_top_lr, y)
+                        acc_top_lr = lr_top.score(X_top_lr, y)
                     else:
                         acc_top_lr = None
 
@@ -859,9 +869,10 @@ else:
                     acc_all_rf = rf_all.score(X_all, y)
 
                     if top_diff_features:
+                        X_top_rf = safe_prepare(spider_hist, top_diff_features)
                         rf_top = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
-                        rf_top.fit(X_top, y)
-                        acc_top_rf = rf_top.score(X_top, y)
+                        rf_top.fit(X_top_rf, y)
+                        acc_top_rf = rf_top.score(X_top_rf, y)
                     else:
                         acc_top_rf = None
 
@@ -873,7 +884,7 @@ else:
                         col_rf2.write("N/A")
 
 # -----------------------------------------------
-# FEATURE IMPORTANCE (MI only, Lasso/RF removed)
+# FEATURE IMPORTANCE (MI only)
 # -----------------------------------------------
 st.header("Feature Importance (Mutual Information)")
 hist_imp_full = spider_hist.copy()
