@@ -1,3 +1,31 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import matplotlib.pyplot as plt
+import gdown
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import cross_val_score
+from sklearn.calibration import CalibratedClassifierCV
+from lightgbm import LGBMClassifier
+import os
+
+# Optional CatBoost
+try:
+    from catboost import CatBoostClassifier
+    CATBOOST_AVAILABLE = True
+except ImportError:
+    CATBOOST_AVAILABLE = False
+
+st.set_page_config(page_title="UFC Pre‑Fight Dashboard", layout="wide")
+
+# -----------------------------------------------
+# LOAD DATA
+# -----------------------------------------------
+PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"
+
 @st.cache_data
 def load_data():
     # Force fresh download – delete old parquet first
