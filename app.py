@@ -596,13 +596,14 @@ else:
                         with col3:
                             criterion_sp = st.selectbox("Splitting Criterion", ["gini", "entropy", "log_loss"], index=0, key="spider_tree_criterion")
 
-                        base_tree = DecisionTreeClassifier(max_depth=max_depth_sp, min_samples_leaf=min_samples_leaf_sp,
-                                                           criterion=criterion_sp, random_state=42)
-                        calib_dt_sp = CalibratedClassifierCV(base_tree, method='sigmoid', cv=5)
-                        calib_dt_sp.fit(X_sp, y_sp)
+                        # Uncalibrated tree for leaf statistics
+                        dt_uncal = DecisionTreeClassifier(max_depth=max_depth_sp, min_samples_leaf=min_samples_leaf_sp,
+                                                          criterion=criterion_sp, random_state=42)
+                        dt_uncal.fit(X_sp, y_sp)
 
-                        # The fitted tree is stored inside the calibrated wrapper
-                        fitted_tree = calib_dt_sp.estimator_
+                        # Calibrated wrapper for probability
+                        calib_dt_sp = CalibratedClassifierCV(dt_uncal, method='sigmoid', cv=5)
+                        calib_dt_sp.fit(X_sp, y_sp)
 
                         if len(fight_rows) == 2:
                             f1_row = fight_rows.iloc[0]
@@ -615,7 +616,7 @@ else:
                             X_input = np.array([input_vals])
                             try:
                                 prob = calib_dt_sp.predict_proba(X_input)[0, 1]
-                                leaf = fitted_tree.apply(X_input)[0]
+                                leaf = dt_uncal.apply(X_input)[0]
                                 st.write(f"**{f1_row['Fighter']}** → leaf **{leaf}** with calibrated win probability **{prob:.1%}**")
                             except Exception as e:
                                 st.error(f"Prediction error: {e}")
@@ -623,7 +624,7 @@ else:
                             st.warning("Fight data incomplete for prediction.")
 
                         st.subheader("Leaf Win Percentages (uncalibrated)")
-                        leaf_ids = fitted_tree.apply(X_sp)
+                        leaf_ids = dt_uncal.apply(X_sp)
                         leaf_stats = []
                         for leaf_id in np.unique(leaf_ids):
                             mask_leaf = leaf_ids == leaf_id
@@ -677,7 +678,7 @@ else:
                     else:
                         fighter_name = None
 
-                    # ---- Top‑Var Decision Tree (Platt, auto) ----
+                    # ---- Top‑Var Decision Tree (Platt) ----
                     if top_diff_features:
                         st.subheader("Decision Tree (Top‑Slider Variables) – Platt‑calibrated")
                         X_top = safe_prepare(spider_hist, top_diff_features)
@@ -693,6 +694,7 @@ else:
                                                           criterion=criterion_top, random_state=42)
                         calib_top = CalibratedClassifierCV(base_top, method='sigmoid', cv=5)
                         calib_top.fit(X_top, y)
+                        base_top.fit(X_top, y)  # fit again (fast) for leaf retrieval
 
                         if fighter_name:
                             X_input = get_fighter_input(f1_row, top_diff_features, spider_hist)
