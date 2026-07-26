@@ -4,9 +4,7 @@ import numpy as np
 import plotly.express as px
 import matplotlib.pyplot as plt
 import gdown
-from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import cross_val_score
@@ -626,8 +624,8 @@ else:
                         leaf_df = pd.DataFrame(leaf_stats)
                         st.dataframe(leaf_df, use_container_width=True, hide_index=True)
 
-                # ========== MODEL COMPARISON – ONLY LIGHTGBM ==========
-                st.header("Model Comparison – LightGBM (5‑fold CV Accuracy)")
+                # ========== LIGHTGBM MODELS – CLEARLY SEPARATED ==========
+                st.header("LightGBM Models (5‑fold CV Accuracy)")
 
                 all_diff_features = [c for c in numeric_features if c in spider_data.columns and c not in abs_rating_cols]
                 top_diff_features = st.session_state.auto_vars if st.session_state.auto_vars else []
@@ -695,38 +693,39 @@ else:
                     else:
                         st.info("No top‑slider variables selected. Skipping Top‑Var models.")
 
-                    # ---- LightGBM All Diff Vars (CV) ----
-                    st.subheader("LightGBM – All Diff Variables")
+                    # --- LightGBM 1: All Differential Features ---
+                    st.subheader("LightGBM – All Differential Features")
                     lgbm_all_depth = st.slider("Max Depth (All Diff)", 1, 20, 6, key="lgbm_all_depth")
                     lgbm_all = LGBMClassifier(n_estimators=200, max_depth=lgbm_all_depth, random_state=42, n_jobs=-1, verbosity=-1)
-                    cv_all_lgbm = cross_val_score(lgbm_all, X_all, y, cv=5, scoring='accuracy').mean()
-                    lgbm_all.fit(X_all, y)  # fit on full data for prediction
+                    cv_all = cross_val_score(lgbm_all, X_all, y, cv=5, scoring='accuracy').mean()
+                    lgbm_all.fit(X_all, y)
 
-                    col_lgbm1, col_lgbm2 = st.columns(2)
-                    col_lgbm1.metric("LGBM (All Diff) CV Accuracy", f"{cv_all_lgbm:.1%}")
+                    col_a1, col_a2 = st.columns(2)
+                    col_a1.metric("CV Accuracy (All Diff)", f"{cv_all:.1%}")
                     if fighter_name and all_diff_features:
                         X_input_all = get_fighter_input(f1_row, all_diff_features, spider_hist)
-                        prob_all_lgbm = lgbm_all.predict_proba(X_input_all)[0, 1]
-                        col_lgbm1.write(f"**{fighter_name}** win prob: **{prob_all_lgbm:.1%}**")
+                        prob_all = lgbm_all.predict_proba(X_input_all)[0, 1]
+                        col_a2.write(f"**{fighter_name}** win prob: **{prob_all:.1%}**")
                     else:
-                        col_lgbm1.write("No fighter prediction available.")
+                        col_a2.write("No fighter prediction available.")
 
-                    # ---- LightGBM Top‑Slider Vars (CV) ----
+                    # --- LightGBM 2: Top‑Slider Variables (if any) ---
                     if top_diff_features:
                         st.subheader("LightGBM – Top‑Slider Variables")
                         X_top_lgbm = safe_prepare(spider_hist, top_diff_features)
                         lgbm_top_depth = st.slider("Max Depth (Top‑Slider)", 1, 20, 6, key="lgbm_top_depth")
                         lgbm_top = LGBMClassifier(n_estimators=200, max_depth=lgbm_top_depth, random_state=42, n_jobs=-1, verbosity=-1)
-                        cv_top_lgbm = cross_val_score(lgbm_top, X_top_lgbm, y, cv=5, scoring='accuracy').mean()
+                        cv_top = cross_val_score(lgbm_top, X_top_lgbm, y, cv=5, scoring='accuracy').mean()
                         lgbm_top.fit(X_top_lgbm, y)
 
-                        col_lgbm1.metric("LGBM (Top‑Slider) CV Accuracy", f"{cv_top_lgbm:.1%}")
+                        col_b1, col_b2 = st.columns(2)
+                        col_b1.metric("CV Accuracy (Top‑Slider)", f"{cv_top:.1%}")
                         if fighter_name:
                             X_input_top = get_fighter_input(f1_row, top_diff_features, spider_hist)
-                            prob_top_lgbm = lgbm_top.predict_proba(X_input_top)[0, 1]
-                            col_lgbm2.write(f"**{fighter_name}** win prob: **{prob_top_lgbm:.1%}**")
+                            prob_top = lgbm_top.predict_proba(X_input_top)[0, 1]
+                            col_b2.write(f"**{fighter_name}** win prob: **{prob_top:.1%}**")
                         else:
-                            col_lgbm2.write("No fighter prediction available.")
+                            col_b2.write("No fighter prediction available.")
                     else:
                         st.info("No top‑slider variables selected – cannot train Top‑Slider LightGBM.")
 
