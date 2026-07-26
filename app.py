@@ -81,6 +81,8 @@ for key, default in [
     ('overall_wr', 0.0), ('recent_wr', 0.0), ('recent_count', 0),
     ('selected_fight_row', None), ('auto_selected_vars', None),
     ('manual_spider_vars', []),
+    ('lgbm_cb_trained', False),      # for the train button
+    ('lgbm_model', None), ('cb_model', None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -180,9 +182,82 @@ if not upcoming_display.empty:
 else:
     st.info("No upcoming fights available.")
 
-# -----------------------------------------------
-# CACHED FILTER PROCESSING
-# -----------------------------------------------
+# ================================================================
+# CACHED FILTER FUNCTIONS
+# ================================================================
+@st.cache_data
+def apply_single_fighter_filters(df, params):
+    """
+    Filters rows based only on fighter‑side attributes.
+    Keeps fights where BOTH rows satisfy the criteria.
+    """
+    wc = params['wc']
+    stance = params['stance']
+    country = params.get('country', [])
+    event_country = params.get('event_country', [])
+    sched_rounds = params.get('sched_rounds', [])
+    title_fight = params.get('title_fight', 'All')
+    hometown = params.get('hometown_fighter', [])
+    fn_min, fn_max = params['fn_min'], params['fn_max']
+    new_wc = params.get('new_wc', False)
+
+    prev_title = params['prev_title']
+    skip_nc = params['skip_nc']
+    prev1 = params['prev1']; prev2 = params['prev2']; prev3 = params['prev3']
+    career1 = params['career1']; career2 = params['career2']; career3 = params['career3']
+
+    mask = pd.Series(True, index=df.index)
+
+    # General (shared) filters
+    if wc: mask &= df['WC'].isin(wc)
+    if stance: mask &= df['Stance'].isin(stance)
+    if country: mask &= df['Country'].isin(country)
+    if event_country: mask &= df['EventCountry'].isin(event_country)
+    if sched_rounds: mask &= df['ScheduledRounds'].isin(sched_rounds)
+    if title_fight != "All": mask &= df['Title'] == title_fight
+    if new_wc and 'IsNewWeightClass' in df.columns: mask &= df['IsNewWeightClass'] == True
+
+    if 'FightNumber' in df.columns:
+        mask &= (df['FightNumber'] >= fn_min) & (df['FightNumber'] <= fn_max)
+
+    # Previous outcomes
+    if skip_nc:
+        prev1_col = 'Prev1_Outcome_skipNC'; prev2_col = 'Prev2_Outcome_skipNC'; prev3_col = 'Prev3_Outcome_skipNC'
+        career1_col = 'Career1_Outcome_skipNC'; career2_col = 'Career2_Outcome_skipNC'; career3_col = 'Career3_Outcome_skipNC'
+    else:
+        prev1_col = 'Prev1_Outcome_raw'; prev2_col = 'Prev2_Outcome_raw'; prev3_col = 'Prev3_Outcome_raw'
+        career1_col = 'Career1_Outcome_raw'; career2_col = 'Career2_Outcome_raw'; career3_col = 'Career3_Outcome_raw'
+
+    def outcome_cond(col, selected):
+        if not selected or col not in df.columns:
+            return pd.Series(True, index=df.index)
+        cond = pd.Series(False, index=df.index)
+        if "Win (any)" in selected:
+            cond |= df[col].str.startswith('Win', na=False)
+        if "Loss (any)" in selected:
+            cond |= df[col].str.startswith('Loss', na=False)
+        exact = [s for s in selected if s not in ("Win (any)", "Loss (any)")]
+        if exact: cond |= df[col].isin(exact)
+        return cond
+
+    mask &= outcome_cond(prev1_col, prev1)
+    mask &= outcome_cond(prev2_col, prev2)
+    mask &= outcome_cond(prev3_col, prev3)
+    mask &= outcome_cond(career1_col, career1)
+    mask &= outcome_cond(career2_col, career2)
+    mask &= outcome_cond(career3_col, career3)
+
+    if prev_title != "All" and 'Prev1_Title' in df.columns:
+        mask &= df['Prev1_Title'].str.strip().str.lower() == prev_title.lower()
+
+    if hometown and 'HometownFighter' in df.columns:
+        mask &= df['HometownFighter'].isin(hometown)
+
+    # Keep fights where both rows pass
+    fight_ok = mask.groupby(df['FightID']).transform('all')
+    filtered_df = df[fight_ok].copy()
+    return filtered_df
+
 @st.cache_data
 def apply_spider_filters(df, params):
     """
@@ -359,9 +434,81 @@ def apply_spider_filters(df, params):
 
     return filtered_df, fighterA_mask, fighterB_mask
 
-# -----------------------------------------------
-# SPIDER FILTERS
-# -----------------------------------------------
+# ================================================================
+# SINGLE FIGHTER FILTERS
+# ================================================================
+st.header("Single Fighter Filters")
+with st.expander("Filters (Fighter‑side only)", expanded=False):
+    with st.expander("General", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            s_wc = st.multiselect("Weight Class", sorted(original_data['WC'].dropna().unique()), key="single_wc")
+            s_stance = st.multiselect("Stance", sorted(original_data['Stance'].dropna().unique()), key="single_stance")
+            s_country = st.multiselect("Country", sorted(original_data['Country'].dropna().unique()), key="single_country")
+            s_event_country = st.multiselect("Event Country", sorted(original_data['EventCountry'].dropna().unique()), key="single_event")
+        with col2:
+            s_sched_rounds = st.multiselect("Scheduled Rounds", sorted(original_data['ScheduledRounds'].dropna().unique()), key="single_sched")
+            s_title_fight = st.selectbox("Title Fight", ["All", "Yes", "No"], key="single_title")
+            s_new_wc = st.checkbox("New Weight Class", key="single_new_wc")
+
+    colA, _ = st.columns(2)
+    with colA:
+        s_hometown = st.multiselect("Hometown", sorted(original_data['HometownFighter'].dropna().unique()), key="single_hometown")
+        s_fn_min = st.number_input("Min Fight #", value=1, min_value=1, max_value=int(original_data['FightNumber'].max()), key="single_fn_min")
+        s_fn_max = st.number_input("Max Fight #", value=int(original_data['FightNumber'].max()), key="single_fn_max")
+        s_prev_title = st.selectbox("Prev Fight Was Title?", ["All", "Yes", "No"], key="single_prev_title")
+
+    with st.expander("Previous Outcomes", expanded=False):
+        s_skip_nc = st.checkbox("Skip NC outcomes", key="single_skip_nc")
+        if s_skip_nc:
+            s_prev1_col = 'Prev1_Outcome_skipNC'
+            s_career1_col = 'Career1_Outcome_skipNC'
+        else:
+            s_prev1_col = 'Prev1_Outcome_raw'
+            s_career1_col = 'Career1_Outcome_raw'
+
+        all_outcomes_raw = sorted(original_data[s_prev1_col].dropna().unique())
+        all_outcomes_career = sorted(original_data[s_career1_col].dropna().unique())
+        s_outcome_options_raw = all_outcomes_raw + ["Win (any)", "Loss (any)"]
+        s_outcome_options_career = all_outcomes_career + ["Win (any)", "Loss (any)"]
+
+        col_f, _ = st.columns(2)
+        with col_f:
+            s_prev1 = st.multiselect("Prev Fight 1", s_outcome_options_raw, key="single_prev1")
+            s_prev2 = st.multiselect("Prev Fight 2", s_outcome_options_raw, key="single_prev2")
+            s_prev3 = st.multiselect("Prev Fight 3", s_outcome_options_raw, key="single_prev3")
+            s_career1 = st.multiselect("Career F1", s_outcome_options_career, key="single_career1")
+            s_career2 = st.multiselect("Career F2", s_outcome_options_career, key="single_career2")
+            s_career3 = st.multiselect("Career F3", s_outcome_options_career, key="single_career3")
+
+single_params = {
+    'wc': s_wc, 'stance': s_stance, 'country': s_country,
+    'event_country': s_event_country, 'sched_rounds': s_sched_rounds,
+    'title_fight': s_title_fight, 'new_wc': s_new_wc,
+    'hometown_fighter': s_hometown,
+    'fn_min': s_fn_min, 'fn_max': s_fn_max,
+    'prev_title': s_prev_title,
+    'skip_nc': s_skip_nc,
+    'prev1': s_prev1, 'prev2': s_prev2, 'prev3': s_prev3,
+    'career1': s_career1, 'career2': s_career2, 'career3': s_career3,
+}
+
+single_filtered_data = apply_single_fighter_filters(original_data, single_params)
+
+# Show metrics for single fighter filters
+single_completed = single_filtered_data[single_filtered_data['Win?'].isin(['Yes','No'])]
+single_fights = single_completed['FightID'].nunique()
+single_wins = (single_completed['Win?'] == 'Yes').sum()
+single_total_rows = len(single_completed)
+single_wr = single_wins / single_total_rows * 100 if single_total_rows > 0 else 0.0
+
+col_s1, col_s2 = st.columns(2)
+col_s1.metric("Total Completed Fights (single filter)", single_fights)
+col_s2.metric("Win Rate (single filter)", f"{single_wr:.1f}%")
+
+# ================================================================
+# SPIDER FILTERS (uses single_filtered_data as input)
+# ================================================================
 st.header("Fight Similarity (Independent Filters)")
 
 with st.expander("Spider Filters", expanded=True):
@@ -482,7 +629,7 @@ filter_params = {
     'use_wmd': use_wmd, 'wmd_range': wmd_range,
 }
 
-spider_data, fighter_mask_spider, opponent_mask_spider = apply_spider_filters(original_data, filter_params)
+spider_data, fighter_mask_spider, opponent_mask_spider = apply_spider_filters(single_filtered_data, filter_params)
 
 spider_upcoming = spider_data[spider_data['Win?'].isna() | (spider_data['Win?'] == '')]
 spider_hist = spider_data[spider_data['Win?'].isin(['Yes','No'])].copy()
@@ -496,8 +643,8 @@ total_wins = (spider_hist['Win?'] == 'Yes').sum()
 filtered_wr = total_wins / len(spider_hist) * 100 if len(spider_hist) > 0 else 0.0
 
 col_metric1, col_metric2 = st.columns(2)
-col_metric1.metric("Total Completed Fights (filtered)", total_completed_fights)
-col_metric2.metric("Win Rate (filtered)", f"{filtered_wr:.1f}%")
+col_metric1.metric("Total Completed Fights (spider)", total_completed_fights)
+col_metric2.metric("Win Rate (spider)", f"{filtered_wr:.1f}%")
 
 if spider_upcoming.empty:
     st.write("No upcoming fights for similarity.")
@@ -576,7 +723,7 @@ else:
                 manual_list = st.session_state.manual_spider_vars
                 combined = list(set(auto_list + manual_list).intersection(sim_features))
 
-                # ========== FULL‑FEATURES DECISION TREE (PLATT) ==========
+                # ========== DECISION TREE (ALL FEATURES) ==========
                 st.subheader("Decision Tree (All Differential Features) – Platt‑calibrated")
                 spider_tree_hist = spider_hist.copy()
                 if len(spider_tree_hist) < 10:
@@ -596,12 +743,9 @@ else:
                         with col3:
                             criterion_sp = st.selectbox("Splitting Criterion", ["gini", "entropy", "log_loss"], index=0, key="spider_tree_criterion")
 
-                        # Uncalibrated tree for leaf statistics
                         dt_uncal = DecisionTreeClassifier(max_depth=max_depth_sp, min_samples_leaf=min_samples_leaf_sp,
                                                           criterion=criterion_sp, random_state=42)
                         dt_uncal.fit(X_sp, y_sp)
-
-                        # Calibrated wrapper for probability
                         calib_dt_sp = CalibratedClassifierCV(dt_uncal, method='sigmoid', cv=5)
                         calib_dt_sp.fit(X_sp, y_sp)
 
@@ -636,7 +780,7 @@ else:
                         leaf_df = pd.DataFrame(leaf_stats)
                         st.dataframe(leaf_df, use_container_width=True, hide_index=True)
 
-                # ========== MODEL COMPARISON (LGBM + CatBoost + Top‑Var DT) ==========
+                # ========== MODEL COMPARISON ==========
                 st.header("Model Comparison (Platt‑calibrated, 5‑fold CV)")
 
                 all_diff_features = [c for c in numeric_features if c in spider_data.columns and c not in abs_rating_cols]
@@ -678,7 +822,7 @@ else:
                     else:
                         fighter_name = None
 
-                    # ---- Top‑Var Decision Tree (Platt) ----
+                    # Top‑Var Decision Tree (auto)
                     if top_diff_features:
                         st.subheader("Decision Tree (Top‑Slider Variables) – Platt‑calibrated")
                         X_top = safe_prepare(spider_hist, top_diff_features)
@@ -694,7 +838,7 @@ else:
                                                           criterion=criterion_top, random_state=42)
                         calib_top = CalibratedClassifierCV(base_top, method='sigmoid', cv=5)
                         calib_top.fit(X_top, y)
-                        base_top.fit(X_top, y)  # fit again (fast) for leaf retrieval
+                        base_top.fit(X_top, y)
 
                         if fighter_name:
                             X_input = get_fighter_input(f1_row, top_diff_features, spider_hist)
@@ -707,45 +851,67 @@ else:
                     else:
                         st.info("No top‑slider variables selected. Skipping Top‑Var tree.")
 
-                    # ----- LightGBM (Platt) -----
-                    st.subheader("LightGBM – Platt‑calibrated")
-                    lgbm_all_depth = st.slider("Max Depth (LightGBM)", 1, 20, 6, key="lgbm_all_depth")
-                    lgbm_base = LGBMClassifier(n_estimators=200, max_depth=lgbm_all_depth, random_state=42, n_jobs=-1, verbosity=-1)
-                    calib_lgbm = CalibratedClassifierCV(lgbm_base, method='sigmoid', cv=5)
-                    cv_lgbm = cross_val_score(lgbm_base, X_all, y, cv=5, scoring='accuracy').mean()
-                    calib_lgbm.fit(X_all, y)
+                    # ----- LightGBM & CatBoost (button) -----
+                    if st.button("Train LightGBM & CatBoost"):
+                        with st.spinner("Training LightGBM and CatBoost..."):
+                            # LightGBM
+                            lgbm_all_depth = st.session_state.get("lgbm_depth", 6)
+                            lgbm_base = LGBMClassifier(n_estimators=200, max_depth=lgbm_all_depth, random_state=42, n_jobs=-1, verbosity=-1)
+                            calib_lgbm = CalibratedClassifierCV(lgbm_base, method='sigmoid', cv=5)
+                            cv_lgbm = cross_val_score(lgbm_base, X_all, y, cv=5, scoring='accuracy').mean()
+                            calib_lgbm.fit(X_all, y)
+                            st.session_state.lgbm_model = (calib_lgbm, cv_lgbm)
 
-                    col_l1, col_l2 = st.columns(2)
-                    col_l1.metric("CV Accuracy (LightGBM)", f"{cv_lgbm:.1%}")
-                    if fighter_name:
-                        X_input_lgbm = get_fighter_input(f1_row, all_diff_features, spider_hist)
-                        prob_lgbm = calib_lgbm.predict_proba(X_input_lgbm)[0, 1]
-                        col_l2.write(f"**{fighter_name}** win prob: **{prob_lgbm:.1%}**")
-                    else:
-                        col_l2.write("No fighter prediction available.")
+                            # CatBoost
+                            if CATBOOST_AVAILABLE:
+                                cb_depth = st.session_state.get("cb_depth", 6)
+                                cb_base = CatBoostClassifier(iterations=200, depth=cb_depth, random_seed=42,
+                                                             thread_count=-1, logging_level='Silent')
+                                calib_cb = CalibratedClassifierCV(cb_base, method='sigmoid', cv=5)
+                                cv_cb = cross_val_score(cb_base, X_all, y, cv=5, scoring='accuracy').mean()
+                                calib_cb.fit(X_all, y)
+                                st.session_state.cb_model = (calib_cb, cv_cb)
+                            else:
+                                st.session_state.cb_model = None
 
-                    # ----- CatBoost (Platt) -----
-                    st.subheader("CatBoost – Platt‑calibrated")
-                    if CATBOOST_AVAILABLE:
-                        cb_depth = st.slider("Max Depth (CatBoost)", 1, 20, 6, key="cb_depth")
-                        cb_base = CatBoostClassifier(
-                            iterations=200, depth=cb_depth, random_seed=42,
-                            thread_count=-1, logging_level='Silent'
-                        )
-                        calib_cb = CalibratedClassifierCV(cb_base, method='sigmoid', cv=5)
-                        cv_cb = cross_val_score(cb_base, X_all, y, cv=5, scoring='accuracy').mean()
-                        calib_cb.fit(X_all, y)
+                            st.session_state.lgbm_cb_trained = True
 
-                        col_c1, col_c2 = st.columns(2)
-                        col_c1.metric("CV Accuracy (CatBoost)", f"{cv_cb:.1%}")
-                        if fighter_name:
-                            X_input_cb = get_fighter_input(f1_row, all_diff_features, spider_hist)
-                            prob_cb = calib_cb.predict_proba(X_input_cb)[0, 1]
-                            col_c2.write(f"**{fighter_name}** win prob: **{prob_cb:.1%}**")
+                    # Show results if trained
+                    if st.session_state.lgbm_cb_trained:
+                        # LightGBM depth slider (must exist before button)
+                        st.subheader("LightGBM – Platt‑calibrated")
+                        lgbm_all_depth = st.slider("Max Depth (LightGBM)", 1, 20, 6, key="lgbm_all_depth")
+                        if st.session_state.lgbm_model:
+                            calib_lgbm, cv_lgbm = st.session_state.lgbm_model
+                            col_l1, col_l2 = st.columns(2)
+                            col_l1.metric("CV Accuracy (LightGBM)", f"{cv_lgbm:.1%}")
+                            if fighter_name:
+                                X_input_lgbm = get_fighter_input(f1_row, all_diff_features, spider_hist)
+                                prob_lgbm = calib_lgbm.predict_proba(X_input_lgbm)[0, 1]
+                                col_l2.write(f"**{fighter_name}** win prob: **{prob_lgbm:.1%}**")
+                            else:
+                                col_l2.write("No fighter prediction available.")
                         else:
-                            col_c2.write("No fighter prediction available.")
-                    else:
-                        st.warning("CatBoost is not installed. Run `pip install catboost` to enable this model.")
+                            st.write("LightGBM model not trained yet.")
+
+                        # CatBoost
+                        st.subheader("CatBoost – Platt‑calibrated")
+                        if CATBOOST_AVAILABLE:
+                            cb_depth = st.slider("Max Depth (CatBoost)", 1, 20, 6, key="cb_depth")
+                            if st.session_state.cb_model:
+                                calib_cb, cv_cb = st.session_state.cb_model
+                                col_c1, col_c2 = st.columns(2)
+                                col_c1.metric("CV Accuracy (CatBoost)", f"{cv_cb:.1%}")
+                                if fighter_name:
+                                    X_input_cb = get_fighter_input(f1_row, all_diff_features, spider_hist)
+                                    prob_cb = calib_cb.predict_proba(X_input_cb)[0, 1]
+                                    col_c2.write(f"**{fighter_name}** win prob: **{prob_cb:.1%}**")
+                                else:
+                                    col_c2.write("No fighter prediction available.")
+                            else:
+                                st.write("CatBoost model not trained yet.")
+                        else:
+                            st.warning("CatBoost is not installed. Run `pip install catboost` to enable this model.")
 
 # -----------------------------------------------
 # FEATURE IMPORTANCE – Random Forest
