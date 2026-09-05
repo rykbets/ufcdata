@@ -335,7 +335,6 @@ def get_params_from_widgets():
         'sched_rounds': st.session_state.get('sched_rounds', []),
         'new_wc': st.session_state.get('new_wc', False),
     }
-    # Side A
     params['sideA_country'] = st.session_state.get('fa_country', [])
     params['sideA_stance'] = st.session_state.get('fa_stance', [])
     params['sideA_hometown'] = st.session_state.get('fa_hometown', [])
@@ -345,7 +344,6 @@ def get_params_from_widgets():
     for i in range(1,4):
         params[f'sideA_prev{i}'] = st.session_state.get(f'fa_prev{i}', [])
         params[f'sideA_career{i}'] = st.session_state.get(f'fa_career{i}', [])
-    # Side B
     params['sideB_country'] = st.session_state.get('fb_country', [])
     params['sideB_stance'] = st.session_state.get('fb_stance', [])
     params['sideB_hometown'] = st.session_state.get('fb_hometown', [])
@@ -355,11 +353,9 @@ def get_params_from_widgets():
     for i in range(1,4):
         params[f'sideB_prev{i}'] = st.session_state.get(f'fb_prev{i}', [])
         params[f'sideB_career{i}'] = st.session_state.get(f'fb_career{i}', [])
-    # Static sliders
     for col in SLIDER_COLUMNS:
         params[f'sideA_{col}_range'] = list(st.session_state.get(f'fa_{col}_range', (slider_min_max[col][0], slider_min_max[col][1])))
         params[f'sideB_{col}_range'] = list(st.session_state.get(f'fb_{col}_range', (slider_min_max[col][0], slider_min_max[col][1])))
-    # Dynamic sliders
     dyn_a = []
     for i in range(3):
         feat = st.session_state.get(f'fa_dyn_{i}_feat', 'None')
@@ -410,7 +406,6 @@ def apply_params_to_widgets(params):
     for col in SLIDER_COLUMNS:
         st.session_state[f'fa_{col}_range'] = tuple(params.get(f'sideA_{col}_range', [slider_min_max[col][0], slider_min_max[col][1]]))
         st.session_state[f'fb_{col}_range'] = tuple(params.get(f'sideB_{col}_range', [slider_min_max[col][0], slider_min_max[col][1]]))
-        # Update min/max session states for number inputs
         st.session_state[f'fa_{col}_min'] = st.session_state[f'fa_{col}_range'][0]
         st.session_state[f'fa_{col}_max'] = st.session_state[f'fa_{col}_range'][1]
         st.session_state[f'fb_{col}_min'] = st.session_state[f'fb_{col}_range'][0]
@@ -533,20 +528,21 @@ with st.container():
             min_key = f'fa_{col}_min'
             max_key = f'fa_{col}_max'
 
-            # Initialize if not present
+            # Initialise range if missing
             if range_key not in st.session_state:
                 st.session_state[range_key] = (mn, mx)
-                st.session_state[min_key] = mn
-                st.session_state[max_key] = mx
+            # Ensure min/max keys exist (fix KeyError)
+            if min_key not in st.session_state:
+                st.session_state[min_key] = st.session_state[range_key][0]
+            if max_key not in st.session_state:
+                st.session_state[max_key] = st.session_state[range_key][1]
 
-            # Callback for slider
             def on_slider_change(col=col, slider_key=slider_key, min_key=min_key, max_key=max_key, range_key=range_key):
                 val = st.session_state[slider_key]
                 st.session_state[range_key] = val
                 st.session_state[min_key] = val[0]
                 st.session_state[max_key] = val[1]
 
-            # Callback for min input
             def on_min_change(col=col, min_key=min_key, max_key=max_key, range_key=range_key):
                 new_min = st.session_state[min_key]
                 current_max = st.session_state[max_key]
@@ -555,7 +551,6 @@ with st.container():
                     st.session_state[min_key] = new_min
                 st.session_state[range_key] = (new_min, current_max)
 
-            # Callback for max input
             def on_max_change(col=col, min_key=min_key, max_key=max_key, range_key=range_key):
                 new_max = st.session_state[max_key]
                 current_min = st.session_state[min_key]
@@ -573,6 +568,8 @@ with st.container():
                 on_change=on_slider_change
             )
             st.session_state[range_key] = slider_val
+            st.session_state[min_key] = slider_val[0]
+            st.session_state[max_key] = slider_val[1]
 
             with st.expander(f"Set exact range for {label} A", expanded=False):
                 c1, c2 = st.columns(2)
@@ -642,8 +639,10 @@ with st.container():
 
             if range_key not in st.session_state:
                 st.session_state[range_key] = (mn, mx)
-                st.session_state[min_key] = mn
-                st.session_state[max_key] = mx
+            if min_key not in st.session_state:
+                st.session_state[min_key] = st.session_state[range_key][0]
+            if max_key not in st.session_state:
+                st.session_state[max_key] = st.session_state[range_key][1]
 
             def on_slider_change(col=col, slider_key=slider_key, min_key=min_key, max_key=max_key, range_key=range_key):
                 val = st.session_state[slider_key]
@@ -676,6 +675,8 @@ with st.container():
                 on_change=on_slider_change
             )
             st.session_state[range_key] = slider_val
+            st.session_state[min_key] = slider_val[0]
+            st.session_state[max_key] = slider_val[1]
 
             with st.expander(f"Set exact range for {label} B", expanded=False):
                 c1, c2 = st.columns(2)
