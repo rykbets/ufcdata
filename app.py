@@ -8,9 +8,11 @@ import pandas as pd
 import gdown
 import streamlit as st
 from scipy.stats import binomtest
+from sklearn.ensemble import RandomForestClassifier
 
 # ----------------------------- Configuration -----------------------------
 PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"  # public Google Drive file ID
+SAVED_SEARCHES_FILE = "saved_searches.json"
 
 # ----------------------------- Data Loading -----------------------------
 @st.cache_data
@@ -61,7 +63,7 @@ for col in df_all.columns:
         if orig in df_all.columns:
             ABS_MAPPING[orig] = col
 
-# ----------------------------- Exclusions (FULL) -----------------------------
+# ----------------------------- Exclusions (simplified but sufficient) -----------------------------
 EXCLUDE_FROM_FEATURES = [
     'FightID','Fighter','Opponent','FightDate','Win?','Method','Round','WC','Stance','Country',
     'EventCountry','HometownFighter','Opponent_Hometown','ScheduledRounds','Title','Prev1_Title',
@@ -341,8 +343,8 @@ def compute_advanced_metrics(df_filtered, df_baseline, target='win', params=None
 
 # ----------------------------- Saved Search Management -----------------------------
 def load_saved_searches():
-    if os.path.exists("saved_searches.json"):
-        with open("saved_searches.json", 'r') as f:
+    if os.path.exists(SAVED_SEARCHES_FILE):
+        with open(SAVED_SEARCHES_FILE, 'r') as f:
             raw = json.load(f)
         normalized = {}
         for name, entry in raw.items():
@@ -354,7 +356,7 @@ def load_saved_searches():
     return {}
 
 def save_saved_searches(searches):
-    with open("saved_searches.json", 'w') as f:
+    with open(SAVED_SEARCHES_FILE, 'w') as f:
         json.dump(searches, f)
 
 saved_searches = load_saved_searches()
@@ -369,6 +371,7 @@ def get_params_from_widgets():
         'sched_rounds': st.session_state.get('sched_rounds', []),
         'new_wc': st.session_state.get('new_wc', False),
     }
+    # Side A
     params['sideA_country'] = st.session_state.get('fa_country', [])
     params['sideA_stance'] = st.session_state.get('fa_stance', [])
     params['sideA_hometown'] = st.session_state.get('fa_hometown', [])
@@ -378,6 +381,7 @@ def get_params_from_widgets():
     for i in range(1,4):
         params[f'sideA_prev{i}'] = st.session_state.get(f'fa_prev{i}', [])
         params[f'sideA_career{i}'] = st.session_state.get(f'fa_career{i}', [])
+    # Side B
     params['sideB_country'] = st.session_state.get('fb_country', [])
     params['sideB_stance'] = st.session_state.get('fb_stance', [])
     params['sideB_hometown'] = st.session_state.get('fb_hometown', [])
@@ -387,9 +391,11 @@ def get_params_from_widgets():
     for i in range(1,4):
         params[f'sideB_prev{i}'] = st.session_state.get(f'fb_prev{i}', [])
         params[f'sideB_career{i}'] = st.session_state.get(f'fb_career{i}', [])
+    # Static sliders
     for col in SLIDER_COLUMNS:
         params[f'sideA_{col}_range'] = list(st.session_state.get(f'fa_{col}', [slider_min_max[col][0], slider_min_max[col][1]]))
         params[f'sideB_{col}_range'] = list(st.session_state.get(f'fb_{col}', [slider_min_max[col][0], slider_min_max[col][1]]))
+    # Dynamic sliders
     dyn_a = []
     for i in range(3):
         feat = st.session_state.get(f'fa_dyn_{i}_feat', 'None')
@@ -416,6 +422,7 @@ def apply_params_to_widgets(params):
     st.session_state['title_fight'] = params.get('title_fight', 'All')
     st.session_state['sched_rounds'] = params.get('sched_rounds', [])
     st.session_state['new_wc'] = params.get('new_wc', False)
+
     st.session_state['fa_country'] = params.get('sideA_country', [])
     st.session_state['fa_stance'] = params.get('sideA_stance', [])
     st.session_state['fa_hometown'] = params.get('sideA_hometown', [])
@@ -425,6 +432,7 @@ def apply_params_to_widgets(params):
     for i in range(1,4):
         st.session_state[f'fa_prev{i}'] = params.get(f'sideA_prev{i}', [])
         st.session_state[f'fa_career{i}'] = params.get(f'sideA_career{i}', [])
+
     st.session_state['fb_country'] = params.get('sideB_country', [])
     st.session_state['fb_stance'] = params.get('sideB_stance', [])
     st.session_state['fb_hometown'] = params.get('sideB_hometown', [])
@@ -434,11 +442,13 @@ def apply_params_to_widgets(params):
     for i in range(1,4):
         st.session_state[f'fb_prev{i}'] = params.get(f'sideB_prev{i}', [])
         st.session_state[f'fb_career{i}'] = params.get(f'sideB_career{i}', [])
+
     for col in SLIDER_COLUMNS:
         rng_a = params.get(f'sideA_{col}_range', [slider_min_max[col][0], slider_min_max[col][1]])
         rng_b = params.get(f'sideB_{col}_range', [slider_min_max[col][0], slider_min_max[col][1]])
         st.session_state[f'fa_{col}'] = tuple(rng_a)
         st.session_state[f'fb_{col}'] = tuple(rng_b)
+
     for i in range(3):
         dyn_a = params.get('sideA_dynamic_sliders', [])
         if i < len(dyn_a) and dyn_a[i].get('col'):
@@ -447,6 +457,7 @@ def apply_params_to_widgets(params):
         else:
             st.session_state[f'fa_dyn_{i}_feat'] = 'None'
             st.session_state[f'fa_dyn_{i}_range'] = (0,1)
+
         dyn_b = params.get('sideB_dynamic_sliders', [])
         if i < len(dyn_b) and dyn_b[i].get('col'):
             st.session_state[f'fb_dyn_{i}_feat'] = dyn_b[i]['col']
@@ -494,7 +505,31 @@ with st.sidebar:
     target = st.selectbox("Target", options=["win", "complete3rds", "complete1.5rounds"], key='target')
     lambda_penalty = st.number_input("Penalty λ", value=0.1, step=0.05, key='lambda_penalty')
 
-# Shared filters
+    # Metrics in sidebar
+    st.markdown("---")
+    st.subheader("Metrics")
+    params = get_params_from_widgets()
+    # Filter data
+    @st.cache_data
+    def filter_data(params_json, target):
+        params = json.loads(params_json)
+        return apply_spider_filters(params, target)
+    params_json = json.dumps(params, sort_keys=True)
+    df_filtered = filter_data(params_json, target)
+    if df_filtered.empty:
+        st.write("No fights match.")
+    else:
+        adv = compute_advanced_metrics(df_filtered, df_all.copy(), target, params, lambda_penalty)
+        n_fights, n_apps, metric_val, ci_low, ci_high, p_val, flag, z = compute_metrics(df_filtered, target)
+        if target == 'win':
+            st.write(f"Unique Fights: {n_fights}, Appearances (Side A): {n_apps}, Win Rate: {metric_val:.1%}, Z‑score: {z:.2f}")
+        else:
+            metric_name = 'Completion 3 Rounds' if target=='complete3rds' else 'Completion 1.5 Rounds'
+            st.write(f"Unique Fights: {n_fights}, {metric_name}: {metric_val:.1%}, Z‑score: {z:.2f}")
+        if adv:
+            st.write(f"Eff: {adv['efficiency']:.6f} | |z|‑λ·k penalty: {adv['penalty_score']:.2f} (k={adv['k']})")
+
+# Main area: filters
 st.subheader("Shared Filters")
 col1, col2, col3, col4, col5 = st.columns(5)
 wc = col1.multiselect("Weight Class", options=sorted(df_all['WC'].dropna().unique()), key='wc')
@@ -503,7 +538,6 @@ title_fight = col3.selectbox("Title Fight", options=["All","Yes","No"], key='tit
 sched_rounds = col4.multiselect("Scheduled Rounds", options=sorted(df_all['ScheduledRounds'].dropna().unique()), key='sched_rounds')
 new_wc = col5.checkbox("New Weight Class", key='new_wc')
 
-# Side A
 st.subheader("Side A Criteria")
 with st.container():
     col1, col2, col3 = st.columns(3)
@@ -538,7 +572,6 @@ with st.container():
             mx = df_all[feat].max()
             c2.slider(f"Dyn Range {i+1} A", float(mn), float(mx), (float(mn), float(mx)), key=f'fa_dyn_{i}_range')
 
-# Side B
 st.subheader("Side B Criteria")
 with st.container():
     col1, col2, col3 = st.columns(3)
@@ -573,44 +606,29 @@ with st.container():
             mx = df_all[feat].max()
             c2.slider(f"Dyn Range {i+1} B", float(mn), float(mx), (float(mn), float(mx)), key=f'fb_dyn_{i}_range')
 
-# ----------------------------- Results -----------------------------
+# Feature Importance
 st.markdown("---")
-st.subheader("Metrics")
-params = get_params_from_widgets()
-
-@st.cache_data
-def filter_data(params_json, target):
-    params = json.loads(params_json)
-    return apply_spider_filters(params, target)
-
-params_json = json.dumps(params, sort_keys=True)
-df_filtered = filter_data(params_json, target)
-
-if df_filtered.empty:
-    st.write("No fights match.")
-else:
-    adv = compute_advanced_metrics(df_filtered, df_all.copy(), target, params, lambda_penalty)
-    n_fights, n_apps, metric_val, ci_low, ci_high, p_val, flag, z = compute_metrics(df_filtered, target)
-    if target == 'win':
-        st.write(f"Unique Fights: {n_fights}, Appearances (Side A): {n_apps}, Win Rate: {metric_val:.1%}, Z‑score: {z:.2f}")
-    else:
-        metric_name = 'Completion 3 Rounds' if target=='complete3rds' else 'Completion 1.5 Rounds'
-        st.write(f"Unique Fights: {n_fights}, {metric_name}: {metric_val:.1%}, Z‑score: {z:.2f}")
-    if adv:
-        st.write(f"Eff: {adv['efficiency']:.6f} | |z|‑λ·k penalty: {adv['penalty_score']:.2f} (k={adv['k']})")
-    fight_ids = df_filtered.loc[df_filtered['Win?'].isin(['Yes','No']), 'FightID'].unique()
-    comp_df = get_fight_completion_from_fightids(fight_ids)
-    if not comp_df.empty:
-        surv_data = []
-        for th in ['1R','15','2R','3R']:
-            col = f'FightCompleted{th}'
-            rate = comp_df[col].mean()
-            surv_data.append({'Round': th, 'Completion %': f"{rate:.1%}"})
-        st.table(pd.DataFrame(surv_data))
-
-st.subheader("Last X Fights")
-last_x = st.number_input("Show last", min_value=1, value=100, key='last_x')
-if not df_filtered.empty:
-    df_show = df_filtered.drop_duplicates(subset='FightID', keep='first')
-    df_show = df_show.sort_values('FightDate', ascending=False).head(last_x)
-    st.dataframe(df_show[['FightDate','Fighter','Opponent','Win?','Method','WC','Round']])
+st.subheader("Feature Importance")
+if st.button("Compute Feature Importance"):
+    with st.spinner("Training Random Forest..."):
+        df = df_all[df_all['Win?'].isin(['Yes','No'])]
+        target = st.session_state.get('target', 'win')
+        if target == 'win':
+            y = (df['Win?']=='Yes').astype(int)
+        elif target == 'complete3rds':
+            y = df['Completed3Rounds'].fillna(0).astype(int)
+        else:
+            y = df['Survived15'].fillna(0).astype(int)
+        feat_cols = [c for c in FEATURES_WINNER if c in df.columns]
+        if target in ('complete3rds','complete1.5rounds'):
+            feat_cols = [c for c in feat_cols if (c.startswith('Abs') or c.startswith('Mean'))]
+        else:
+            feat_cols = [c for c in feat_cols if not (c.startswith('Abs') or c.startswith('Mean'))]
+        if feat_cols:
+            X = df[feat_cols].fillna(0)
+            rf = RandomForestClassifier(n_estimators=100, max_depth=8, random_state=42, n_jobs=-1)
+            rf.fit(X, y)
+            importances = pd.DataFrame({'Feature': feat_cols, 'Importance': rf.feature_importances_}).sort_values('Importance', ascending=False)
+            st.dataframe(importances.head(200))
+        else:
+            st.write("No numeric features available.")
