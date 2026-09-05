@@ -404,12 +404,17 @@ def apply_params_to_widgets(params):
         st.session_state[f'fb_career{i}'] = params.get(f'sideB_career{i}', [])
 
     for col in SLIDER_COLUMNS:
-        st.session_state[f'fa_{col}_range'] = tuple(params.get(f'sideA_{col}_range', [slider_min_max[col][0], slider_min_max[col][1]]))
-        st.session_state[f'fb_{col}_range'] = tuple(params.get(f'sideB_{col}_range', [slider_min_max[col][0], slider_min_max[col][1]]))
-        st.session_state[f'fa_{col}_min'] = st.session_state[f'fa_{col}_range'][0]
-        st.session_state[f'fa_{col}_max'] = st.session_state[f'fa_{col}_range'][1]
-        st.session_state[f'fb_{col}_min'] = st.session_state[f'fb_{col}_range'][0]
-        st.session_state[f'fb_{col}_max'] = st.session_state[f'fb_{col}_range'][1]
+        fa_range = tuple(params.get(f'sideA_{col}_range', [slider_min_max[col][0], slider_min_max[col][1]]))
+        fb_range = tuple(params.get(f'sideB_{col}_range', [slider_min_max[col][0], slider_min_max[col][1]]))
+        st.session_state[f'fa_{col}_range'] = fa_range
+        st.session_state[f'fb_{col}_range'] = fb_range
+        st.session_state[f'fa_{col}_min'] = fa_range[0]
+        st.session_state[f'fa_{col}_max'] = fa_range[1]
+        st.session_state[f'fb_{col}_min'] = fb_range[0]
+        st.session_state[f'fb_{col}_max'] = fb_range[1]
+        # Also update slider keys to reflect loaded values
+        st.session_state[f'fa_{col}_slider'] = fa_range
+        st.session_state[f'fb_{col}_slider'] = fb_range
 
     for i in range(3):
         dyn_a = params.get('sideA_dynamic_sliders', [])
@@ -528,10 +533,11 @@ with st.container():
             min_key = f'fa_{col}_min'
             max_key = f'fa_{col}_max'
 
-            # Initialise range if missing
+            # Initialise all keys if missing
             if range_key not in st.session_state:
                 st.session_state[range_key] = (mn, mx)
-            # Ensure min/max keys exist (fix KeyError)
+            if slider_key not in st.session_state:
+                st.session_state[slider_key] = st.session_state[range_key]
             if min_key not in st.session_state:
                 st.session_state[min_key] = st.session_state[range_key][0]
             if max_key not in st.session_state:
@@ -543,27 +549,29 @@ with st.container():
                 st.session_state[min_key] = val[0]
                 st.session_state[max_key] = val[1]
 
-            def on_min_change(col=col, min_key=min_key, max_key=max_key, range_key=range_key):
+            def on_min_change(col=col, slider_key=slider_key, min_key=min_key, max_key=max_key, range_key=range_key):
                 new_min = st.session_state[min_key]
                 current_max = st.session_state[max_key]
                 if new_min > current_max:
                     new_min = current_max
                     st.session_state[min_key] = new_min
                 st.session_state[range_key] = (new_min, current_max)
+                st.session_state[slider_key] = (new_min, current_max)
 
-            def on_max_change(col=col, min_key=min_key, max_key=max_key, range_key=range_key):
+            def on_max_change(col=col, slider_key=slider_key, min_key=min_key, max_key=max_key, range_key=range_key):
                 new_max = st.session_state[max_key]
                 current_min = st.session_state[min_key]
                 if new_max < current_min:
                     new_max = current_min
                     st.session_state[max_key] = new_max
                 st.session_state[range_key] = (current_min, new_max)
+                st.session_state[slider_key] = (current_min, new_max)
 
             slider_val = st.slider(
                 f"{label} A",
                 min_value=mn,
                 max_value=mx,
-                value=st.session_state[range_key],
+                value=st.session_state[slider_key],
                 key=slider_key,
                 on_change=on_slider_change
             )
@@ -639,6 +647,8 @@ with st.container():
 
             if range_key not in st.session_state:
                 st.session_state[range_key] = (mn, mx)
+            if slider_key not in st.session_state:
+                st.session_state[slider_key] = st.session_state[range_key]
             if min_key not in st.session_state:
                 st.session_state[min_key] = st.session_state[range_key][0]
             if max_key not in st.session_state:
@@ -650,27 +660,29 @@ with st.container():
                 st.session_state[min_key] = val[0]
                 st.session_state[max_key] = val[1]
 
-            def on_min_change(col=col, min_key=min_key, max_key=max_key, range_key=range_key):
+            def on_min_change(col=col, slider_key=slider_key, min_key=min_key, max_key=max_key, range_key=range_key):
                 new_min = st.session_state[min_key]
                 current_max = st.session_state[max_key]
                 if new_min > current_max:
                     new_min = current_max
                     st.session_state[min_key] = new_min
                 st.session_state[range_key] = (new_min, current_max)
+                st.session_state[slider_key] = (new_min, current_max)
 
-            def on_max_change(col=col, min_key=min_key, max_key=max_key, range_key=range_key):
+            def on_max_change(col=col, slider_key=slider_key, min_key=min_key, max_key=max_key, range_key=range_key):
                 new_max = st.session_state[max_key]
                 current_min = st.session_state[min_key]
                 if new_max < current_min:
                     new_max = current_min
                     st.session_state[max_key] = new_max
                 st.session_state[range_key] = (current_min, new_max)
+                st.session_state[slider_key] = (current_min, new_max)
 
             slider_val = st.slider(
                 f"{label} B",
                 min_value=mn,
                 max_value=mx,
-                value=st.session_state[range_key],
+                value=st.session_state[slider_key],
                 key=slider_key,
                 on_change=on_slider_change
             )
