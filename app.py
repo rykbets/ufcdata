@@ -63,7 +63,7 @@ for col in df_all.columns:
         if orig in df_all.columns:
             ABS_MAPPING[orig] = col
 
-# ----------------------------- Exclusions (pattern-based) -----------------------------
+# ----------------------------- Exclusions -----------------------------
 raw_stats = ['KD','SS','SSA','TS','TSA','TD','TDA','Subs','Reversals',
              'HSL','HSA','BSL','BSA','LSL','LSA','DSL','DSA','CSL','CSA','GSL','GSA','Ctrl']
 exclude_set = set()
@@ -109,16 +109,344 @@ numeric_cols = df_all.select_dtypes(include=[np.number]).columns.tolist()
 FEATURES_WINNER = [c for c in numeric_cols if c not in exclude_set]
 
 # ----------------------------- Helper Functions -----------------------------
-# (Same as before – all filtering/metrics functions)
+def apply_range_filter(df, mask, col, range_vals, target='win'):
+    if col not in df.columns or range_vals is None:
+        return mask
+    if target in ('complete3rds','complete1.5rounds') and col in ABS_MAPPING:
+        col = ABS_MAPPING[col]
+    min_val, max_val = range_vals
+    if min_val is not None:
+        mask &= df[col] >= min_val
+    if max_val is not None:
+        mask &= df[col] <= max_val
+    return mask
+
+def apply_dynamic_filters(df, mask, dynamic_sliders, target='win'):
+    for slider in dynamic_sliders:
+        col = slider.get('col')
+        rng = slider.get('range')
+        if col and rng:
+            mask = apply_range_filter(df, mask, col, rng, target)
+    return mask
+
+def build_side_mask(data, side_params, target='win'):
+    mask = pd.Series(True, index=data.index)
+    if 'FightNumber' in data.columns:
+        mask &= (data['FightNumber'] >= side_params.get('fn_min',1)) & (data['FightNumber'] <= side_params.get('fn_max',1e6))
+    if side_params.get('stance'):
+        mask &= data['Stance'].isin(side_params['stance'])
+    skip_nc = side_params.get('skip_nc', False)
+    prev_cols = ['Prev1_Outcome_raw','Prev2_Outcome_raw','Prev3_Outcome_raw',
+                 'Career1_Outcome_raw','Career2_Outcome_raw','Career3_Outcome_raw']
+    if skip_nc:
+        prev_cols = [c.replace('raw','skipNC') for c in prev_cols]
+    for col, key in zip(prev_cols, ['prev1','prev2','prev3','career1','career2','career3']):
+        selected = side_params.get(key, [])
+        if selected and col in data.columns:
+            cond = pd.Series(False, index=data.index)
+            if "Win (any)" in selected: cond |= data[col].str.startswith('Win', na=False)
+            if "Loss (any)" in selected: cond |= data[col].str.startswith('Loss', na=False)
+            exact = [s for s in selected if s not in ("Win (any)","Loss (any)")]
+            if exact: cond |= data[col].isin(exact)
+            mask &= cond
+    if side_params.get('prev_title','All') != 'All' and 'Prev1_Title' in data.columns:
+        mask &= data['Prev1_Title'].str.strip().str.lower() == side_params['prev_title'].lower()
+    if side_params.get('hometown') and 'HometownFighter' in data.columns:
+        mask &= data['HometownFighter'].isin(side_params['hometown'])
+    if side_params.get('country') and 'Country' in data.columns:
+        mask &= data['Country'].isin(side_params['country'])
+    for col in SLIDER_COLUMNS:
+        key = f'{col}_range'
+        if key in side_params:
+            mask = apply_range_filter(data, mask, col, side_params[key], target)
+    dyn = side_params.get('dynamic_sliders', [])
+    mask = apply_dynamic_filters(data, mask, dyn, target)
+    return mask
+
+def apply_spider_filters(params, target='win'):
+    if not params:
+        return pd.DataFrame()
+    mask_strict = pd.Series(True, index=df_all.index)
+    if params.get('wc'): mask_strict &= df_all['WC'].isin(params['wc'])
+    if params.get('event_country'): mask_strict &= df_all['EventCountry'].isin(params['event_country'])
+    if params.get('sched_rounds'): mask_strict &= df_all['ScheduledRounds'].isin(params['sched_rounds'])
+    if params.get('title_fight','All') != 'All': mask_strict &= df_all['Title'] == params['title_fight']
+    if params.get('new_wc') and 'IsNewWeightClass' in df_all.columns:
+        mask_strict &= df_all['IsNewWeightClass'] == True
+
+    fight_ok = mask_strict.groupby(df_all['FightID']).transform('all')
+    df_strict = df_all[fight_ok].copy()
+
+    def extract_side(prefix):
+        p = {}
+        for k, v in params.items():
+            if k.startswith(prefix):
+                p[k.replace(prefix, '')] = v
+        if 'fn_min' not in p: p['fn_min'] = 1
+        if 'fn_max' not in p: p['fn_max'] = 1e6
+        return p
+
+    fa = extract_side('sideA_')
+    fb = extract_side('sideB_')
+    fa['dynamic_sliders'] = params.get('sideA_dynamic_sliders', [])
+    fb['dynamic_sliders'] = params.get('sideB_dynamic_sliders', [])
+
+    fa_mask = build_side_mask(df_strict, fa, target)
+    fb_mask = build_side_mask(df_strict, fb, target)
+
+    grouped = df_strict.groupby('FightID').groups
+    keep = pd.Series(False, index=df_strict.index)
+    for fid, idx_list in grouped.items():
+        if len(idx_list) != 2: continue
+        i0, i1 = idx_list[0], idx_list[1]
+        if (fa_mask.loc[i0] and fb_mask.loc[i1]) or (fa_mask.loc[i1] and fb_mask.loc[i0]):
+            keep[i0] = True
+            keep[i1] = True
+    side_a = keep & fa_mask
+    return df_strict[side_a].copy()
+
+def compute_metrics(df, target='win'):
+    completed = df[df['Win?'].isin(['Yes','No'])]
+    n_fights = completed['FightID'].nunique()
+    n_appearances = len(completed)
+    if target == 'win':
+        wins = (completed['Win?'] == 'Yes').sum()
+        wr = wins / n_appearances if n_appearances > 0 else 0.0
+        if n_appearances > 0:
+            se = np.sqrt(0.5*0.5/n_appearances)
+            z = (wr - 0.5)/se if se > 0 else 0.0
+            result = binomtest(wins, n_appearances, p=0.5, alternative='two-sided')
+            p_val = result.pvalue
+            ci_low, ci_high = result.proportion_ci(confidence_level=0.95)
+            flag = 'significant' if p_val < 0.05 else 'not significant'
+        else:
+            z = 0.0; p_val = 1.0; ci_low = np.nan; ci_high = np.nan; flag = 'not significant'
+        return n_fights, n_appearances, wr, ci_low, ci_high, p_val, flag, z
+    elif target in ['complete3rds','complete1.5rounds']:
+        fight_ids = completed['FightID'].unique()
+        if len(fight_ids) == 0:
+            return 0, 0, 0.0, np.nan, np.nan, 1.0, 'not significant', 0.0
+        df_fights = df_all[df_all['FightID'].isin(fight_ids) & df_all['Win?'].isin(['Yes','No'])]
+        if target == 'complete3rds':
+            comp = df_fights.groupby('FightID')['Survived3R'].min()
+        else:
+            comp = df_fights.groupby('FightID')['Survived15'].min()
+        n_fights = len(comp)
+        n_completed = comp.sum()
+        rate = n_completed / n_fights if n_fights > 0 else 0.0
+        if n_fights > 0:
+            z = (rate - 0.5) / np.sqrt(0.5*0.5/n_fights)
+            result = binomtest(n_completed, n_fights, p=0.5, alternative='two-sided')
+            p_val = result.pvalue
+            ci_low, ci_high = result.proportion_ci(confidence_level=0.95)
+            flag = 'significant' if p_val < 0.05 else 'not significant'
+        else:
+            z = 0.0; p_val = 1.0; ci_low = np.nan; ci_high = np.nan; flag = 'not significant'
+        return n_fights, n_fights, rate, ci_low, ci_high, p_val, flag, z
+    else:
+        return compute_metrics(df, 'win')
+
+def get_fight_completion_from_fightids(fight_ids):
+    df_f = df_all[df_all['FightID'].isin(fight_ids) & df_all['Win?'].isin(['Yes','No'])].copy()
+    if df_f.empty:
+        return pd.DataFrame(columns=['FightID'] + [f'FightCompleted{th}' for th in ['1R','15','2R','3R']])
+    return df_f.groupby('FightID').agg(
+        FightCompleted1R=('Survived1R','min'),
+        FightCompleted15=('Survived15','min'),
+        FightCompleted2R=('Survived2R','min'),
+        FightCompleted3R=('Survived3R','min'),
+    ).astype(int).reset_index()
+
+def count_active_filters(params):
+    if not params: return 0
+    k = 0
+    for key in ['wc','event_country','title_fight','sched_rounds','new_wc']:
+        if key in params:
+            val = params[key]
+            if isinstance(val, list) and len(val)>0: k += 1
+            elif val not in ('All','',None,False): k += 1
+    for prefix in ['sideA_','sideB_']:
+        for key in ['country','stance','hometown','prev_title']:
+            full = prefix+key
+            if full in params:
+                val = params[full]
+                if isinstance(val, list) and len(val)>0: k += 1
+                elif val not in ('All','',None,False): k += 1
+        for col in SLIDER_COLUMNS:
+            key = f'{prefix}{col}_range'
+            if key in params and params[key] != [slider_min_max[col][0], slider_min_max[col][1]]:
+                k += 1
+        dyn = params.get(f'{prefix}dynamic_sliders', [])
+        for slot in dyn:
+            if slot.get('col') and slot.get('range'):
+                col = slot['col']
+                mn, mx = slider_min_max.get(col, (0,1))
+                if slot['range'] != [mn, mx]:
+                    k += 1
+    return k
+
+def compute_advanced_metrics(df_filtered, df_baseline, target='win', params=None, lambda_penalty=0.1):
+    base = df_baseline[df_baseline['Win?'].isin(['Yes','No'])]
+    filt = df_filtered[df_filtered['Win?'].isin(['Yes','No'])]
+    if base.empty or filt.empty: return None
+    n_base = base['FightID'].nunique()
+    n_filt = filt['FightID'].nunique()
+    if n_filt == 0: return None
+    if target == 'win':
+        p_base = (base['Win?']=='Yes').mean(); p_filt = (filt['Win?']=='Yes').mean()
+        z_base = (p_base-0.5)/np.sqrt(0.5*0.5/n_base) if n_base>0 else 0
+        z_filt = (p_filt-0.5)/np.sqrt(0.5*0.5/n_filt) if n_filt>0 else 0
+    else:
+        col = 'Survived3R' if target=='complete3rds' else 'Survived15'
+        base_fights = base.drop_duplicates('FightID'); filt_fights = filt.drop_duplicates('FightID')
+        base_comp = df_all[df_all['FightID'].isin(base_fights['FightID'])].groupby('FightID')[col].min()
+        filt_comp = df_all[df_all['FightID'].isin(filt_fights['FightID'])].groupby('FightID')[col].min()
+        n_base = len(base_comp); n_filt = len(filt_comp)
+        if n_filt==0: return None
+        p_base = base_comp.mean(); p_filt = filt_comp.mean()
+        z_base = (p_base-0.5)/np.sqrt(0.5*0.5/n_base) if n_base>0 else 0
+        z_filt = (p_filt-0.5)/np.sqrt(0.5*0.5/n_filt) if n_filt>0 else 0
+    if n_base > n_filt:
+        efficiency = (z_filt - z_base) / (n_base - n_filt)
+    else:
+        efficiency = 0.0
+    k = count_active_filters(params)
+    penalty_score = abs(z_filt) - lambda_penalty * k
+    return {'n_base': n_base, 'n_filtered': n_filt, 'z_base': z_base, 'z_filtered': z_filt,
+            'efficiency': efficiency, 'penalty_score': penalty_score, 'k': k}
 
 # ----------------------------- Saved Search Management -----------------------------
-# (Same as before)
+def load_saved_searches():
+    if os.path.exists(SAVED_SEARCHES_FILE):
+        with open(SAVED_SEARCHES_FILE, 'r') as f:
+            raw = json.load(f)
+        normalized = {}
+        for name, entry in raw.items():
+            if isinstance(entry, dict) and 'params' in entry:
+                normalized[name] = entry
+            elif isinstance(entry, dict) and 'spider' in entry:
+                normalized[name] = {'tab': 'spider', 'params': entry['spider']}
+        return normalized
+    return {}
+
+def save_saved_searches(searches):
+    with open(SAVED_SEARCHES_FILE, 'w') as f:
+        json.dump(searches, f)
+
+saved_searches = load_saved_searches()
+if 'saved_searches' not in st.session_state:
+    st.session_state.saved_searches = saved_searches
+
+def get_params_from_widgets():
+    params = {
+        'wc': st.session_state.get('wc', []),
+        'event_country': st.session_state.get('event_country', []),
+        'title_fight': st.session_state.get('title_fight', 'All'),
+        'sched_rounds': st.session_state.get('sched_rounds', []),
+        'new_wc': st.session_state.get('new_wc', False),
+    }
+    # Side A
+    params['sideA_country'] = st.session_state.get('fa_country', [])
+    params['sideA_stance'] = st.session_state.get('fa_stance', [])
+    params['sideA_hometown'] = st.session_state.get('fa_hometown', [])
+    params['sideA_fn_min'] = st.session_state.get('fa_fn_min', 1)
+    params['sideA_fn_max'] = st.session_state.get('fa_fn_max', int(df_all['FightNumber'].max()))
+    params['sideA_prev_title'] = st.session_state.get('fa_prev_title', 'All')
+    for i in range(1,4):
+        params[f'sideA_prev{i}'] = st.session_state.get(f'fa_prev{i}', [])
+        params[f'sideA_career{i}'] = st.session_state.get(f'fa_career{i}', [])
+    # Side B
+    params['sideB_country'] = st.session_state.get('fb_country', [])
+    params['sideB_stance'] = st.session_state.get('fb_stance', [])
+    params['sideB_hometown'] = st.session_state.get('fb_hometown', [])
+    params['sideB_fn_min'] = st.session_state.get('fb_fn_min', 1)
+    params['sideB_fn_max'] = st.session_state.get('fb_fn_max', int(df_all['FightNumber'].max()))
+    params['sideB_prev_title'] = st.session_state.get('fb_prev_title', 'All')
+    for i in range(1,4):
+        params[f'sideB_prev{i}'] = st.session_state.get(f'fb_prev{i}', [])
+        params[f'sideB_career{i}'] = st.session_state.get(f'fb_career{i}', [])
+    # Static sliders: use the _range session state
+    for col in SLIDER_COLUMNS:
+        fa_range = st.session_state.get(f'fa_{col}_range', (slider_min_max[col][0], slider_min_max[col][1]))
+        fb_range = st.session_state.get(f'fb_{col}_range', (slider_min_max[col][0], slider_min_max[col][1]))
+        params[f'sideA_{col}_range'] = list(fa_range)
+        params[f'sideB_{col}_range'] = list(fb_range)
+    # Dynamic sliders
+    dyn_a = []
+    for i in range(3):
+        feat = st.session_state.get(f'fa_dyn_{i}_feat', 'None')
+        rng = st.session_state.get(f'fa_dyn_{i}_range', (0,1))
+        if feat == 'None':
+            dyn_a.append({})
+        else:
+            dyn_a.append({'col': feat, 'range': list(rng)})
+    dyn_b = []
+    for i in range(3):
+        feat = st.session_state.get(f'fb_dyn_{i}_feat', 'None')
+        rng = st.session_state.get(f'fb_dyn_{i}_range', (0,1))
+        if feat == 'None':
+            dyn_b.append({})
+        else:
+            dyn_b.append({'col': feat, 'range': list(rng)})
+    params['sideA_dynamic_sliders'] = dyn_a
+    params['sideB_dynamic_sliders'] = dyn_b
+    return params
+
+def apply_params_to_widgets(params):
+    st.session_state['wc'] = params.get('wc', [])
+    st.session_state['event_country'] = params.get('event_country', [])
+    st.session_state['title_fight'] = params.get('title_fight', 'All')
+    st.session_state['sched_rounds'] = params.get('sched_rounds', [])
+    st.session_state['new_wc'] = params.get('new_wc', False)
+
+    st.session_state['fa_country'] = params.get('sideA_country', [])
+    st.session_state['fa_stance'] = params.get('sideA_stance', [])
+    st.session_state['fa_hometown'] = params.get('sideA_hometown', [])
+    st.session_state['fa_fn_min'] = params.get('sideA_fn_min', 1)
+    st.session_state['fa_fn_max'] = params.get('sideA_fn_max', int(df_all['FightNumber'].max()))
+    st.session_state['fa_prev_title'] = params.get('sideA_prev_title', 'All')
+    for i in range(1,4):
+        st.session_state[f'fa_prev{i}'] = params.get(f'sideA_prev{i}', [])
+        st.session_state[f'fa_career{i}'] = params.get(f'sideA_career{i}', [])
+
+    st.session_state['fb_country'] = params.get('sideB_country', [])
+    st.session_state['fb_stance'] = params.get('sideB_stance', [])
+    st.session_state['fb_hometown'] = params.get('sideB_hometown', [])
+    st.session_state['fb_fn_min'] = params.get('sideB_fn_min', 1)
+    st.session_state['fb_fn_max'] = params.get('sideB_fn_max', int(df_all['FightNumber'].max()))
+    st.session_state['fb_prev_title'] = params.get('sideB_prev_title', 'All')
+    for i in range(1,4):
+        st.session_state[f'fb_prev{i}'] = params.get(f'sideB_prev{i}', [])
+        st.session_state[f'fb_career{i}'] = params.get(f'sideB_career{i}', [])
+
+    for col in SLIDER_COLUMNS:
+        fa_range = params.get(f'sideA_{col}_range', [slider_min_max[col][0], slider_min_max[col][1]])
+        fb_range = params.get(f'sideB_{col}_range', [slider_min_max[col][0], slider_min_max[col][1]])
+        st.session_state[f'fa_{col}_range'] = tuple(fa_range)
+        st.session_state[f'fb_{col}_range'] = tuple(fb_range)
+
+    for i in range(3):
+        dyn_a = params.get('sideA_dynamic_sliders', [])
+        if i < len(dyn_a) and dyn_a[i].get('col'):
+            st.session_state[f'fa_dyn_{i}_feat'] = dyn_a[i]['col']
+            st.session_state[f'fa_dyn_{i}_range'] = tuple(dyn_a[i].get('range', [0,1]))
+        else:
+            st.session_state[f'fa_dyn_{i}_feat'] = 'None'
+            st.session_state[f'fa_dyn_{i}_range'] = (0,1)
+
+        dyn_b = params.get('sideB_dynamic_sliders', [])
+        if i < len(dyn_b) and dyn_b[i].get('col'):
+            st.session_state[f'fb_dyn_{i}_feat'] = dyn_b[i]['col']
+            st.session_state[f'fb_dyn_{i}_range'] = tuple(dyn_b[i].get('range', [0,1]))
+        else:
+            st.session_state[f'fb_dyn_{i}_feat'] = 'None'
+            st.session_state[f'fb_dyn_{i}_range'] = (0,1)
 
 # ----------------------------- Streamlit UI -----------------------------
 st.set_page_config(layout="wide")
 st.title("UFC Spider Filter Dashboard")
 
-# Sidebar with saved searches, target, metrics (same as previous)
+# Sidebar
 with st.sidebar:
     st.header("Saved Searches")
     search_name = st.text_input("Search Name", key="search_name")
@@ -179,7 +507,7 @@ with st.sidebar:
         if adv:
             st.write(f"Eff: {adv['efficiency']:.6f} | |z|‑λ·k penalty: {adv['penalty_score']:.2f} (k={adv['k']})")
 
-# Main area
+# Main area: filters
 st.subheader("Shared Filters")
 col1, col2, col3, col4, col5 = st.columns(5)
 wc = col1.multiselect("Weight Class", options=sorted(df_all['WC'].dropna().unique()), key='wc')
@@ -211,12 +539,10 @@ with st.container():
     st.markdown("**Continuous Filters A**")
     for col, label in zip(SLIDER_COLUMNS, SLIDER_LABELS):
         mn, mx = slider_min_max[col]
-        # Ensure range state exists
         range_key = f'fa_{col}_range'
         if range_key not in st.session_state:
             st.session_state[range_key] = (mn, mx)
 
-        # Manual min/max inputs (these update range_key on change)
         c1, c2 = st.columns(2)
         min_val = c1.number_input(f"{label} A Min", min_value=mn, max_value=mx,
                                   value=st.session_state[range_key][0],
@@ -227,13 +553,11 @@ with st.container():
         if (min_val, max_val) != st.session_state[range_key]:
             st.session_state[range_key] = (min_val, max_val)
 
-        # Slider (uses range_key, and after moving we update range_key)
         slider_val = st.slider(f"{label} A", min_value=mn, max_value=mx,
                                value=st.session_state[range_key],
                                key=f'fa_{col}_slider')
         if slider_val != st.session_state[range_key]:
             st.session_state[range_key] = slider_val
-            # Also update min/max input states to reflect slider move
             st.session_state[f'fa_{col}_min'] = slider_val[0]
             st.session_state[f'fa_{col}_max'] = slider_val[1]
 
@@ -245,7 +569,6 @@ with st.container():
         else:
             mn, mx = df_all[feat].min(), df_all[feat].max()
 
-        # Reset range if feature changed
         if st.session_state.get(f'fa_dyn_{i}_last_feat') != feat:
             st.session_state[f'fa_dyn_{i}_range'] = (mn, mx)
             st.session_state[f'fa_dyn_{i}_last_feat'] = feat
@@ -270,7 +593,7 @@ with st.container():
             st.session_state[f'fa_dyn_{i}_min'] = slider_val[0]
             st.session_state[f'fa_dyn_{i}_max'] = slider_val[1]
 
-# Side B
+# Side B (similar)
 st.subheader("Side B Criteria")
 with st.container():
     cols = st.columns(6)
