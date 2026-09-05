@@ -11,7 +11,7 @@ from scipy.stats import binomtest
 from sklearn.ensemble import RandomForestClassifier
 
 # ----------------------------- Configuration -----------------------------
-PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"  # public Google Drive file ID
+PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"
 SAVED_SEARCHES_FILE = "saved_searches.json"
 
 # ----------------------------- Data Loading -----------------------------
@@ -365,25 +365,15 @@ def get_params_from_widgets():
     for i in range(1,4):
         params[f'sideB_prev{i}'] = st.session_state.get(f'fb_prev{i}', [])
         params[f'sideB_career{i}'] = st.session_state.get(f'fb_career{i}', [])
-    # Static sliders: use session state values stored by slider or number inputs
+    # Static sliders: read from _range session state
     for col in SLIDER_COLUMNS:
-        key = f'fa_{col}_range'
-        if key in st.session_state:
-            params[f'sideA_{col}_range'] = list(st.session_state[key])
-        else:
-            params[f'sideA_{col}_range'] = [slider_min_max[col][0], slider_min_max[col][1]]
-    for col in SLIDER_COLUMNS:
-        key = f'fb_{col}_range'
-        if key in st.session_state:
-            params[f'sideB_{col}_range'] = list(st.session_state[key])
-        else:
-            params[f'sideB_{col}_range'] = [slider_min_max[col][0], slider_min_max[col][1]]
+        params[f'sideA_{col}_range'] = list(st.session_state.get(f'fa_{col}_range', (slider_min_max[col][0], slider_min_max[col][1])))
+        params[f'sideB_{col}_range'] = list(st.session_state.get(f'fb_{col}_range', (slider_min_max[col][0], slider_min_max[col][1])))
     # Dynamic sliders
     dyn_a = []
     for i in range(3):
         feat = st.session_state.get(f'fa_dyn_{i}_feat', 'None')
-        key = f'fa_dyn_{i}_range'
-        rng = st.session_state.get(key, (0,1))
+        rng = st.session_state.get(f'fa_dyn_{i}_range', (0,1))
         if feat == 'None':
             dyn_a.append({})
         else:
@@ -391,8 +381,7 @@ def get_params_from_widgets():
     dyn_b = []
     for i in range(3):
         feat = st.session_state.get(f'fb_dyn_{i}_feat', 'None')
-        key = f'fb_dyn_{i}_range'
-        rng = st.session_state.get(key, (0,1))
+        rng = st.session_state.get(f'fb_dyn_{i}_range', (0,1))
         if feat == 'None':
             dyn_b.append({})
         else:
@@ -453,7 +442,7 @@ def apply_params_to_widgets(params):
 st.set_page_config(layout="wide")
 st.title("UFC Spider Filter Dashboard")
 
-# Sidebar (saved searches, target, metrics)
+# Sidebar
 with st.sidebar:
     st.header("Saved Searches")
     search_name = st.text_input("Search Name", key="search_name")
@@ -514,7 +503,7 @@ with st.sidebar:
         if adv:
             st.write(f"Eff: {adv['efficiency']:.6f} | |z|‑λ·k penalty: {adv['penalty_score']:.2f} (k={adv['k']})")
 
-# Main area
+# Main area: filters
 st.subheader("Shared Filters")
 col1, col2, col3, col4, col5 = st.columns(5)
 wc = col1.multiselect("Weight Class", options=sorted(df_all['WC'].dropna().unique()), key='wc')
@@ -546,62 +535,61 @@ with st.container():
     st.markdown("**Continuous Filters A**")
     for col, label in zip(SLIDER_COLUMNS, SLIDER_LABELS):
         mn, mx = slider_min_max[col]
-        # Initialize session state range if not present
+        # Initialize range if needed
         if f'fa_{col}_range' not in st.session_state:
             st.session_state[f'fa_{col}_range'] = (mn, mx)
-        # Slider
-        slider_val = st.slider(f"{label} A", min_value=mn, max_value=mx,
-                               value=st.session_state[f'fa_{col}_range'],
-                               key=f'fa_{col}_slider')
-        # Update session state when slider moves
-        st.session_state[f'fa_{col}_range'] = slider_val
-        # Min/max inputs for manual entry
-        c1, c2, c3 = st.columns([1, 1, 1])
+        # Number inputs first
+        c1, c2 = st.columns(2)
         min_val = c1.number_input(f"{label} A Min", min_value=mn, max_value=mx,
                                   value=st.session_state[f'fa_{col}_range'][0],
                                   key=f'fa_{col}_min')
         max_val = c2.number_input(f"{label} A Max", min_value=mn, max_value=mx,
                                   value=st.session_state[f'fa_{col}_range'][1],
                                   key=f'fa_{col}_max')
-        # If manual inputs changed, update session state range (and slider will reflect on next rerun)
+        # If number inputs changed, update range
         if min_val != st.session_state[f'fa_{col}_range'][0] or max_val != st.session_state[f'fa_{col}_range'][1]:
             st.session_state[f'fa_{col}_range'] = (min_val, max_val)
-            # Force slider to update: use experimental_rerun? It will happen anyway next rerun.
-            st.session_state[f'fa_{col}_slider'] = (min_val, max_val)
-            # The slider widget already uses session state, so setting session_state directly should update it.
+        # Slider uses current range
+        slider_val = st.slider(f"{label} A", min_value=mn, max_value=mx,
+                               value=st.session_state[f'fa_{col}_range'],
+                               key=f'fa_{col}_slider')
+        # After slider, update range (in case slider was moved)
+        if slider_val != st.session_state[f'fa_{col}_range']:
+            st.session_state[f'fa_{col}_range'] = slider_val
 
     st.markdown("**Dynamic Sliders A**")
     for i in range(3):
         # Feature select
         feat = st.selectbox(f"Dyn Feat {i+1} A", options=["None"]+FEATURES_WINNER, key=f'fa_dyn_{i}_feat')
-        # Determine min/max for selected feature
+        # Determine min/max
         if feat == "None":
             mn, mx = 0, 1
         else:
             mn, mx = df_all[feat].min(), df_all[feat].max()
-        # Initialize range if not present
-        if f'fa_dyn_{i}_range' not in st.session_state or st.session_state.get(f'fa_dyn_{i}_feat') != feat:
+        # Reset range if feature changed
+        if st.session_state.get(f'fa_dyn_{i}_last_feat') != feat:
             st.session_state[f'fa_dyn_{i}_range'] = (mn, mx)
-            st.session_state[f'fa_dyn_{i}_last_feat'] = feat  # track last feature
-        # Slider
-        slider_val = st.slider(f"Dyn Range {i+1} A", min_value=mn, max_value=mx,
-                               value=st.session_state[f'fa_dyn_{i}_range'],
-                               key=f'fa_dyn_{i}_slider')
-        st.session_state[f'fa_dyn_{i}_range'] = slider_val
-        # Min/max inputs
-        c1, c2, c3 = st.columns([1,1,1])
+            st.session_state[f'fa_dyn_{i}_last_feat'] = feat
+        # Ensure range exists
+        if f'fa_dyn_{i}_range' not in st.session_state:
+            st.session_state[f'fa_dyn_{i}_range'] = (mn, mx)
+        # Number inputs first
+        c1, c2 = st.columns(2)
         min_val = c1.number_input(f"Min {i+1} A", min_value=mn, max_value=mx,
                                   value=st.session_state[f'fa_dyn_{i}_range'][0],
                                   key=f'fa_dyn_{i}_min')
         max_val = c2.number_input(f"Max {i+1} A", min_value=mn, max_value=mx,
                                   value=st.session_state[f'fa_dyn_{i}_range'][1],
                                   key=f'fa_dyn_{i}_max')
-        # Manual update
         if min_val != st.session_state[f'fa_dyn_{i}_range'][0] or max_val != st.session_state[f'fa_dyn_{i}_range'][1]:
             st.session_state[f'fa_dyn_{i}_range'] = (min_val, max_val)
-            st.session_state[f'fa_dyn_{i}_slider'] = (min_val, max_val)
+        slider_val = st.slider(f"Dyn Range {i+1} A", min_value=mn, max_value=mx,
+                               value=st.session_state[f'fa_dyn_{i}_range'],
+                               key=f'fa_dyn_{i}_slider')
+        if slider_val != st.session_state[f'fa_dyn_{i}_range']:
+            st.session_state[f'fa_dyn_{i}_range'] = slider_val
 
-# Side B (similar to Side A but with fb_ prefix)
+# Side B (similar)
 st.subheader("Side B Criteria")
 with st.container():
     cols = st.columns(6)
@@ -626,11 +614,7 @@ with st.container():
         mn, mx = slider_min_max[col]
         if f'fb_{col}_range' not in st.session_state:
             st.session_state[f'fb_{col}_range'] = (mn, mx)
-        slider_val = st.slider(f"{label} B", min_value=mn, max_value=mx,
-                               value=st.session_state[f'fb_{col}_range'],
-                               key=f'fb_{col}_slider')
-        st.session_state[f'fb_{col}_range'] = slider_val
-        c1, c2, c3 = st.columns([1,1,1])
+        c1, c2 = st.columns(2)
         min_val = c1.number_input(f"{label} B Min", min_value=mn, max_value=mx,
                                   value=st.session_state[f'fb_{col}_range'][0],
                                   key=f'fb_{col}_min')
@@ -639,7 +623,11 @@ with st.container():
                                   key=f'fb_{col}_max')
         if min_val != st.session_state[f'fb_{col}_range'][0] or max_val != st.session_state[f'fb_{col}_range'][1]:
             st.session_state[f'fb_{col}_range'] = (min_val, max_val)
-            st.session_state[f'fb_{col}_slider'] = (min_val, max_val)
+        slider_val = st.slider(f"{label} B", min_value=mn, max_value=mx,
+                               value=st.session_state[f'fb_{col}_range'],
+                               key=f'fb_{col}_slider')
+        if slider_val != st.session_state[f'fb_{col}_range']:
+            st.session_state[f'fb_{col}_range'] = slider_val
 
     st.markdown("**Dynamic Sliders B**")
     for i in range(3):
@@ -648,14 +636,12 @@ with st.container():
             mn, mx = 0, 1
         else:
             mn, mx = df_all[feat].min(), df_all[feat].max()
-        if f'fb_dyn_{i}_range' not in st.session_state or st.session_state.get(f'fb_dyn_{i}_feat') != feat:
+        if st.session_state.get(f'fb_dyn_{i}_last_feat') != feat:
             st.session_state[f'fb_dyn_{i}_range'] = (mn, mx)
             st.session_state[f'fb_dyn_{i}_last_feat'] = feat
-        slider_val = st.slider(f"Dyn Range {i+1} B", min_value=mn, max_value=mx,
-                               value=st.session_state[f'fb_dyn_{i}_range'],
-                               key=f'fb_dyn_{i}_slider')
-        st.session_state[f'fb_dyn_{i}_range'] = slider_val
-        c1, c2, c3 = st.columns([1,1,1])
+        if f'fb_dyn_{i}_range' not in st.session_state:
+            st.session_state[f'fb_dyn_{i}_range'] = (mn, mx)
+        c1, c2 = st.columns(2)
         min_val = c1.number_input(f"Min {i+1} B", min_value=mn, max_value=mx,
                                   value=st.session_state[f'fb_dyn_{i}_range'][0],
                                   key=f'fb_dyn_{i}_min')
@@ -664,7 +650,11 @@ with st.container():
                                   key=f'fb_dyn_{i}_max')
         if min_val != st.session_state[f'fb_dyn_{i}_range'][0] or max_val != st.session_state[f'fb_dyn_{i}_range'][1]:
             st.session_state[f'fb_dyn_{i}_range'] = (min_val, max_val)
-            st.session_state[f'fb_dyn_{i}_slider'] = (min_val, max_val)
+        slider_val = st.slider(f"Dyn Range {i+1} B", min_value=mn, max_value=mx,
+                               value=st.session_state[f'fb_dyn_{i}_range'],
+                               key=f'fb_dyn_{i}_slider')
+        if slider_val != st.session_state[f'fb_dyn_{i}_range']:
+            st.session_state[f'fb_dyn_{i}_range'] = slider_val
 
 # Last X Fights
 st.markdown("---")
