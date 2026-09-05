@@ -194,9 +194,15 @@ def apply_spider_filters(params, target='win'):
     mask_a = build_side_mask(df_strict, fa, target)
     mask_b = build_side_mask(df_strict, fb, target)
 
-    # Vectorised matching: require exactly one A row and one B row per fight,
-    # and they must be different rows (no row satisfies both A and B).
+    # Vectorised matching: require exactly two rows per fight, one A and one B, distinct rows
     tmp = pd.DataFrame({'FightID': df_strict['FightID'], 'A': mask_a, 'B': mask_b})
+    # Only fights with exactly 2 rows
+    fight_counts = tmp.groupby('FightID').size()
+    valid_ids = fight_counts[fight_counts == 2].index
+    tmp = tmp[tmp['FightID'].isin(valid_ids)]
+    if tmp.empty:
+        return pd.DataFrame()
+
     fight_sum = tmp.groupby('FightID')[['A','B']].sum()
     both = tmp.groupby('FightID').apply(lambda g: (g['A'] & g['B']).any())
     valid_fights = fight_sum[(fight_sum['A'] == 1) & (fight_sum['B'] == 1) & (~both)].index
@@ -532,19 +538,17 @@ with st.container():
                                    key=f'fa_{col}_slider')
             st.session_state[range_key] = slider_val
 
-            # Precise input
+            # Precise input: number inputs with on_change to update range immediately
             with st.expander(f"Set exact range for {label} A", expanded=False):
-                st.caption(f"Current: {st.session_state[range_key][0]:.4f} – {st.session_state[range_key][1]:.4f}")
                 c1, c2 = st.columns(2)
                 min_input = c1.number_input("Min", min_value=mn, max_value=mx,
                                             value=st.session_state[range_key][0],
-                                            key=f'fa_{col}_min_input')
+                                            key=f'fa_{col}_min_input',
+                                            on_change=lambda col=col: st.session_state.update({f'fa_{col}_range': (st.session_state[f'fa_{col}_min_input'], st.session_state[f'fa_{col}_max_input'])}) or st.rerun())
                 max_input = c2.number_input("Max", min_value=mn, max_value=mx,
                                             value=st.session_state[range_key][1],
-                                            key=f'fa_{col}_max_input')
-                if st.button("Apply", key=f'fa_{col}_apply'):
-                    st.session_state[range_key] = (min_input, max_input)
-                    st.rerun()
+                                            key=f'fa_{col}_max_input',
+                                            on_change=lambda col=col: st.session_state.update({f'fa_{col}_range': (st.session_state[f'fa_{col}_min_input'], st.session_state[f'fa_{col}_max_input'])}) or st.rerun())
 
     with st.expander("Dynamic Sliders A", expanded=False):
         for i in range(3):
@@ -598,17 +602,15 @@ with st.container():
             st.session_state[range_key] = slider_val
 
             with st.expander(f"Set exact range for {label} B", expanded=False):
-                st.caption(f"Current: {st.session_state[range_key][0]:.4f} – {st.session_state[range_key][1]:.4f}")
                 c1, c2 = st.columns(2)
                 min_input = c1.number_input("Min", min_value=mn, max_value=mx,
                                             value=st.session_state[range_key][0],
-                                            key=f'fb_{col}_min_input')
+                                            key=f'fb_{col}_min_input',
+                                            on_change=lambda col=col: st.session_state.update({f'fb_{col}_range': (st.session_state[f'fb_{col}_min_input'], st.session_state[f'fb_{col}_max_input'])}) or st.rerun())
                 max_input = c2.number_input("Max", min_value=mn, max_value=mx,
                                             value=st.session_state[range_key][1],
-                                            key=f'fb_{col}_max_input')
-                if st.button("Apply", key=f'fb_{col}_apply'):
-                    st.session_state[range_key] = (min_input, max_input)
-                    st.rerun()
+                                            key=f'fb_{col}_max_input',
+                                            on_change=lambda col=col: st.session_state.update({f'fb_{col}_range': (st.session_state[f'fb_{col}_min_input'], st.session_state[f'fb_{col}_max_input'])}) or st.rerun())
 
     with st.expander("Dynamic Sliders B", expanded=False):
         for i in range(3):
@@ -645,7 +647,6 @@ if st.button("Compute Feature Importance"):
         if df_filtered.empty:
             st.write("No filtered data to train on.")
         else:
-            # For completion targets, we need all rows of filtered fights
             if target in ('complete3rds','complete1.5rounds'):
                 fight_ids = df_filtered['FightID'].unique()
                 train_df = df_all[df_all['FightID'].isin(fight_ids)]
@@ -664,7 +665,6 @@ if st.button("Compute Feature Importance"):
 
                 feat_cols = [c for c in FEATURES_WINNER if c in train_df.columns]
                 if target in ('complete3rds','complete1.5rounds'):
-                    # keep only features that are fight-level (absolute or mean)
                     feat_cols = [c for c in feat_cols if (c.startswith('Abs') or c.startswith('Mean'))]
                 else:
                     feat_cols = [c for c in feat_cols if not (c.startswith('Abs') or c.startswith('Mean'))]
