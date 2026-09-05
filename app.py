@@ -191,19 +191,16 @@ def apply_spider_filters(params, target='win'):
     fa['dynamic_sliders'] = params.get('sideA_dynamic_sliders', [])
     fb['dynamic_sliders'] = params.get('sideB_dynamic_sliders', [])
 
-    fa_mask = build_side_mask(df_strict, fa, target)
-    fb_mask = build_side_mask(df_strict, fb, target)
+    mask_a = build_side_mask(df_strict, fa, target)
+    mask_b = build_side_mask(df_strict, fb, target)
 
-    grouped = df_strict.groupby('FightID').groups
-    keep = pd.Series(False, index=df_strict.index)
-    for fid, idx_list in grouped.items():
-        if len(idx_list) != 2: continue
-        i0, i1 = idx_list[0], idx_list[1]
-        if (fa_mask.loc[i0] and fb_mask.loc[i1]) or (fa_mask.loc[i1] and fb_mask.loc[i0]):
-            keep[i0] = True
-            keep[i1] = True
-    side_a = keep & fa_mask
-    return df_strict[side_a].copy()
+    # Vectorised: find fights with exactly one side A row and one side B row
+    tmp = pd.DataFrame({'FightID': df_strict['FightID'], 'A': mask_a, 'B': mask_b})
+    fight_sum = tmp.groupby('FightID')[['A','B']].sum()
+    valid_fights = fight_sum[(fight_sum['A'] == 1) & (fight_sum['B'] == 1)].index
+    valid_mask = df_strict['FightID'].isin(valid_fights)
+    result = df_strict[valid_mask & mask_a].copy()
+    return result
 
 def compute_metrics(df, target='win'):
     completed = df[df['Win?'].isin(['Yes','No'])]
@@ -245,17 +242,6 @@ def compute_metrics(df, target='win'):
         return n_fights, n_fights, rate, ci_low, ci_high, p_val, flag, z
     else:
         return compute_metrics(df, 'win')
-
-def get_fight_completion_from_fightids(fight_ids):
-    df_f = df_all[df_all['FightID'].isin(fight_ids) & df_all['Win?'].isin(['Yes','No'])].copy()
-    if df_f.empty:
-        return pd.DataFrame(columns=['FightID'] + [f'FightCompleted{th}' for th in ['1R','15','2R','3R']])
-    return df_f.groupby('FightID').agg(
-        FightCompleted1R=('Survived1R','min'),
-        FightCompleted15=('Survived15','min'),
-        FightCompleted2R=('Survived2R','min'),
-        FightCompleted3R=('Survived3R','min'),
-    ).astype(int).reset_index()
 
 def count_active_filters(params):
     if not params: return 0
@@ -365,7 +351,7 @@ def get_params_from_widgets():
     for i in range(1,4):
         params[f'sideB_prev{i}'] = st.session_state.get(f'fb_prev{i}', [])
         params[f'sideB_career{i}'] = st.session_state.get(f'fb_career{i}', [])
-    # Static sliders: read from _range session state
+    # Static sliders
     for col in SLIDER_COLUMNS:
         params[f'sideA_{col}_range'] = list(st.session_state.get(f'fa_{col}_range', (slider_min_max[col][0], slider_min_max[col][1])))
         params[f'sideB_{col}_range'] = list(st.session_state.get(f'fb_{col}_range', (slider_min_max[col][0], slider_min_max[col][1])))
@@ -446,38 +432,37 @@ st.title("UFC Spider Filter Dashboard")
 with st.sidebar:
     st.header("Saved Searches")
     search_name = st.text_input("Search Name", key="search_name")
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     if col1.button("Save"):
         if search_name:
             st.session_state.saved_searches[search_name] = {'tab': 'spider', 'params': get_params_from_widgets()}
             save_saved_searches(st.session_state.saved_searches)
-            st.experimental_rerun()
-    if col2.button("Load"):
-        selected = st.session_state.get('saved_search_select', None)
-        if selected and selected in st.session_state.saved_searches:
-            apply_params_to_widgets(st.session_state.saved_searches[selected]['params'])
-            st.experimental_rerun()
-    if col3.button("Delete"):
+            st.rerun()
+    if col2.button("Delete"):
         selected = st.session_state.get('saved_search_select', None)
         if selected and selected in st.session_state.saved_searches:
             del st.session_state.saved_searches[selected]
             save_saved_searches(st.session_state.saved_searches)
-            st.experimental_rerun()
-    rename_input = st.text_input("Rename to", key="rename_input")
-    if st.button("Rename"):
-        selected = st.session_state.get('saved_search_select', None)
-        new_name = rename_input.strip()
-        if selected and new_name and selected in st.session_state.saved_searches:
-            st.session_state.saved_searches[new_name] = st.session_state.saved_searches.pop(selected)
-            save_saved_searches(st.session_state.saved_searches)
-            st.experimental_rerun()
-    saved_search_select = st.selectbox("Saved Searches", options=sorted(st.session_state.saved_searches.keys()), key='saved_search_select')
+            st.rerun()
+
+    # Instant load on selection change
+    def on_saved_select():
+        selected = st.session_state.saved_search_select
+        if selected in st.session_state.saved_searches:
+            apply_params_to_widgets(st.session_state.saved_searches[selected]['params'])
+
+    saved_search_select = st.selectbox(
+        "Saved Searches",
+        options=sorted(st.session_state.saved_searches.keys()),
+        key='saved_search_select',
+        on_change=on_saved_select
+    )
+
     st.markdown("---")
     st.header("Global Target")
     target = st.selectbox("Target", options=["win", "complete3rds", "complete1.5rounds"], key='target')
     lambda_penalty = st.number_input("Penalty λ", value=0.1, step=0.05, key='lambda_penalty')
 
-    # Metrics in sidebar
     st.markdown("---")
     st.subheader("Metrics")
     params = get_params_from_widgets()
@@ -523,69 +508,62 @@ with st.container():
     fa_fn_max = cols[4].number_input("Max Fight # A", value=int(df_all['FightNumber'].max()), key='fa_fn_max')
     fa_prev_title = cols[5].selectbox("Prev Title A", options=["All","Yes","No"], key='fa_prev_title')
 
-    st.markdown("**Previous Outcomes**")
-    cols = st.columns(6)
-    fa_prev1 = cols[0].multiselect("Prev 1 A", options=sorted(df_all['Prev1_Outcome_raw'].dropna().unique()), key='fa_prev1')
-    fa_prev2 = cols[1].multiselect("Prev 2 A", options=sorted(df_all['Prev2_Outcome_raw'].dropna().unique()), key='fa_prev2')
-    fa_prev3 = cols[2].multiselect("Prev 3 A", options=sorted(df_all['Prev3_Outcome_raw'].dropna().unique()), key='fa_prev3')
-    fa_career1 = cols[3].multiselect("Career F1 A", options=sorted(df_all['Career1_Outcome_raw'].dropna().unique()), key='fa_career1')
-    fa_career2 = cols[4].multiselect("Career F2 A", options=sorted(df_all['Career2_Outcome_raw'].dropna().unique()), key='fa_career2')
-    fa_career3 = cols[5].multiselect("Career F3 A", options=sorted(df_all['Career3_Outcome_raw'].dropna().unique()), key='fa_career3')
+    with st.expander("Previous Outcomes A", expanded=False):
+        cols = st.columns(6)
+        fa_prev1 = cols[0].multiselect("Prev 1 A", options=sorted(df_all['Prev1_Outcome_raw'].dropna().unique()), key='fa_prev1')
+        fa_prev2 = cols[1].multiselect("Prev 2 A", options=sorted(df_all['Prev2_Outcome_raw'].dropna().unique()), key='fa_prev2')
+        fa_prev3 = cols[2].multiselect("Prev 3 A", options=sorted(df_all['Prev3_Outcome_raw'].dropna().unique()), key='fa_prev3')
+        fa_career1 = cols[3].multiselect("Career F1 A", options=sorted(df_all['Career1_Outcome_raw'].dropna().unique()), key='fa_career1')
+        fa_career2 = cols[4].multiselect("Career F2 A", options=sorted(df_all['Career2_Outcome_raw'].dropna().unique()), key='fa_career2')
+        fa_career3 = cols[5].multiselect("Career F3 A", options=sorted(df_all['Career3_Outcome_raw'].dropna().unique()), key='fa_career3')
 
-    st.markdown("**Continuous Filters A**")
-    for col, label in zip(SLIDER_COLUMNS, SLIDER_LABELS):
-        mn, mx = slider_min_max[col]
-        range_key = f'fa_{col}_range'
-        if range_key not in st.session_state:
-            st.session_state[range_key] = (mn, mx)
+    with st.expander("Continuous Filters A", expanded=False):
+        for col, label in zip(SLIDER_COLUMNS, SLIDER_LABELS):
+            mn, mx = slider_min_max[col]
+            range_key = f'fa_{col}_range'
+            if range_key not in st.session_state:
+                st.session_state[range_key] = (mn, mx)
 
-        c1, c2 = st.columns(2)
-        min_val = c1.number_input(f"{label} A Min", min_value=mn, max_value=mx,
-                                  value=st.session_state[range_key][0],
-                                  key=f'fa_{col}_min')
-        max_val = c2.number_input(f"{label} A Max", min_value=mn, max_value=mx,
-                                  value=st.session_state[range_key][1],
-                                  key=f'fa_{col}_max')
-        if (min_val, max_val) != st.session_state[range_key]:
-            st.session_state[range_key] = (min_val, max_val)
-
-        slider_val = st.slider(f"{label} A", min_value=mn, max_value=mx,
-                               value=st.session_state[range_key],
-                               key=f'fa_{col}_slider')
-        if slider_val != st.session_state[range_key]:
+            # Slider for exploration
+            slider_val = st.slider(f"{label} A", min_value=mn, max_value=mx,
+                                   value=st.session_state[range_key],
+                                   key=f'fa_{col}_slider')
             st.session_state[range_key] = slider_val
 
-    st.markdown("**Dynamic Sliders A**")
-    for i in range(3):
-        feat = st.selectbox(f"Dyn Feat {i+1} A", options=["None"]+FEATURES_WINNER, key=f'fa_dyn_{i}_feat')
-        if feat == "None":
-            mn, mx = 0, 1
-        else:
-            mn, mx = df_all[feat].min(), df_all[feat].max()
+            # Precise input expander
+            with st.expander(f"Set exact range for {label} A", expanded=False):
+                c1, c2 = st.columns(2)
+                min_input = c1.number_input("Min", min_value=mn, max_value=mx,
+                                            value=st.session_state[range_key][0],
+                                            key=f'fa_{col}_min_input')
+                max_input = c2.number_input("Max", min_value=mn, max_value=mx,
+                                            value=st.session_state[range_key][1],
+                                            key=f'fa_{col}_max_input')
+                if st.button("Apply", key=f'fa_{col}_apply'):
+                    st.session_state[range_key] = (min_input, max_input)
+                    # Force slider to update by rerun
+                    st.rerun()
 
-        if st.session_state.get(f'fa_dyn_{i}_last_feat') != feat:
-            st.session_state[f'fa_dyn_{i}_range'] = (mn, mx)
-            st.session_state[f'fa_dyn_{i}_last_feat'] = feat
-        if f'fa_dyn_{i}_range' not in st.session_state:
-            st.session_state[f'fa_dyn_{i}_range'] = (mn, mx)
+    with st.expander("Dynamic Sliders A", expanded=False):
+        for i in range(3):
+            feat = st.selectbox(f"Dyn Feat {i+1} A", options=["None"]+FEATURES_WINNER, key=f'fa_dyn_{i}_feat')
+            if feat == "None":
+                mn, mx = 0, 1
+            else:
+                mn, mx = df_all[feat].min(), df_all[feat].max()
 
-        c1, c2 = st.columns(2)
-        min_val = c1.number_input(f"Min {i+1} A", min_value=mn, max_value=mx,
-                                  value=st.session_state[f'fa_dyn_{i}_range'][0],
-                                  key=f'fa_dyn_{i}_min')
-        max_val = c2.number_input(f"Max {i+1} A", min_value=mn, max_value=mx,
-                                  value=st.session_state[f'fa_dyn_{i}_range'][1],
-                                  key=f'fa_dyn_{i}_max')
-        if (min_val, max_val) != st.session_state[f'fa_dyn_{i}_range']:
-            st.session_state[f'fa_dyn_{i}_range'] = (min_val, max_val)
+            if st.session_state.get(f'fa_dyn_{i}_last_feat') != feat:
+                st.session_state[f'fa_dyn_{i}_range'] = (mn, mx)
+                st.session_state[f'fa_dyn_{i}_last_feat'] = feat
+            if f'fa_dyn_{i}_range' not in st.session_state:
+                st.session_state[f'fa_dyn_{i}_range'] = (mn, mx)
 
-        slider_val = st.slider(f"Dyn Range {i+1} A", min_value=mn, max_value=mx,
-                               value=st.session_state[f'fa_dyn_{i}_range'],
-                               key=f'fa_dyn_{i}_slider')
-        if slider_val != st.session_state[f'fa_dyn_{i}_range']:
+            slider_val = st.slider(f"Dyn Range {i+1} A", min_value=mn, max_value=mx,
+                                   value=st.session_state[f'fa_dyn_{i}_range'],
+                                   key=f'fa_dyn_{i}_slider')
             st.session_state[f'fa_dyn_{i}_range'] = slider_val
 
-# Side B (similar)
+# Side B (similar structure)
 st.subheader("Side B Criteria")
 with st.container():
     cols = st.columns(6)
@@ -596,66 +574,56 @@ with st.container():
     fb_fn_max = cols[4].number_input("Max Fight # B", value=int(df_all['FightNumber'].max()), key='fb_fn_max')
     fb_prev_title = cols[5].selectbox("Prev Title B", options=["All","Yes","No"], key='fb_prev_title')
 
-    st.markdown("**Previous Outcomes**")
-    cols = st.columns(6)
-    fb_prev1 = cols[0].multiselect("Prev 1 B", options=sorted(df_all['Prev1_Outcome_raw'].dropna().unique()), key='fb_prev1')
-    fb_prev2 = cols[1].multiselect("Prev 2 B", options=sorted(df_all['Prev2_Outcome_raw'].dropna().unique()), key='fb_prev2')
-    fb_prev3 = cols[2].multiselect("Prev 3 B", options=sorted(df_all['Prev3_Outcome_raw'].dropna().unique()), key='fb_prev3')
-    fb_career1 = cols[3].multiselect("Career F1 B", options=sorted(df_all['Career1_Outcome_raw'].dropna().unique()), key='fb_career1')
-    fb_career2 = cols[4].multiselect("Career F2 B", options=sorted(df_all['Career2_Outcome_raw'].dropna().unique()), key='fb_career2')
-    fb_career3 = cols[5].multiselect("Career F3 B", options=sorted(df_all['Career3_Outcome_raw'].dropna().unique()), key='fb_career3')
+    with st.expander("Previous Outcomes B", expanded=False):
+        cols = st.columns(6)
+        fb_prev1 = cols[0].multiselect("Prev 1 B", options=sorted(df_all['Prev1_Outcome_raw'].dropna().unique()), key='fb_prev1')
+        fb_prev2 = cols[1].multiselect("Prev 2 B", options=sorted(df_all['Prev2_Outcome_raw'].dropna().unique()), key='fb_prev2')
+        fb_prev3 = cols[2].multiselect("Prev 3 B", options=sorted(df_all['Prev3_Outcome_raw'].dropna().unique()), key='fb_prev3')
+        fb_career1 = cols[3].multiselect("Career F1 B", options=sorted(df_all['Career1_Outcome_raw'].dropna().unique()), key='fb_career1')
+        fb_career2 = cols[4].multiselect("Career F2 B", options=sorted(df_all['Career2_Outcome_raw'].dropna().unique()), key='fb_career2')
+        fb_career3 = cols[5].multiselect("Career F3 B", options=sorted(df_all['Career3_Outcome_raw'].dropna().unique()), key='fb_career3')
 
-    st.markdown("**Continuous Filters B**")
-    for col, label in zip(SLIDER_COLUMNS, SLIDER_LABELS):
-        mn, mx = slider_min_max[col]
-        range_key = f'fb_{col}_range'
-        if range_key not in st.session_state:
-            st.session_state[range_key] = (mn, mx)
+    with st.expander("Continuous Filters B", expanded=False):
+        for col, label in zip(SLIDER_COLUMNS, SLIDER_LABELS):
+            mn, mx = slider_min_max[col]
+            range_key = f'fb_{col}_range'
+            if range_key not in st.session_state:
+                st.session_state[range_key] = (mn, mx)
 
-        c1, c2 = st.columns(2)
-        min_val = c1.number_input(f"{label} B Min", min_value=mn, max_value=mx,
-                                  value=st.session_state[range_key][0],
-                                  key=f'fb_{col}_min')
-        max_val = c2.number_input(f"{label} B Max", min_value=mn, max_value=mx,
-                                  value=st.session_state[range_key][1],
-                                  key=f'fb_{col}_max')
-        if (min_val, max_val) != st.session_state[range_key]:
-            st.session_state[range_key] = (min_val, max_val)
-
-        slider_val = st.slider(f"{label} B", min_value=mn, max_value=mx,
-                               value=st.session_state[range_key],
-                               key=f'fb_{col}_slider')
-        if slider_val != st.session_state[range_key]:
+            slider_val = st.slider(f"{label} B", min_value=mn, max_value=mx,
+                                   value=st.session_state[range_key],
+                                   key=f'fb_{col}_slider')
             st.session_state[range_key] = slider_val
 
-    st.markdown("**Dynamic Sliders B**")
-    for i in range(3):
-        feat = st.selectbox(f"Dyn Feat {i+1} B", options=["None"]+FEATURES_WINNER, key=f'fb_dyn_{i}_feat')
-        if feat == "None":
-            mn, mx = 0, 1
-        else:
-            mn, mx = df_all[feat].min(), df_all[feat].max()
+            with st.expander(f"Set exact range for {label} B", expanded=False):
+                c1, c2 = st.columns(2)
+                min_input = c1.number_input("Min", min_value=mn, max_value=mx,
+                                            value=st.session_state[range_key][0],
+                                            key=f'fb_{col}_min_input')
+                max_input = c2.number_input("Max", min_value=mn, max_value=mx,
+                                            value=st.session_state[range_key][1],
+                                            key=f'fb_{col}_max_input')
+                if st.button("Apply", key=f'fb_{col}_apply'):
+                    st.session_state[range_key] = (min_input, max_input)
+                    st.rerun()
 
-        if st.session_state.get(f'fb_dyn_{i}_last_feat') != feat:
-            st.session_state[f'fb_dyn_{i}_range'] = (mn, mx)
-            st.session_state[f'fb_dyn_{i}_last_feat'] = feat
-        if f'fb_dyn_{i}_range' not in st.session_state:
-            st.session_state[f'fb_dyn_{i}_range'] = (mn, mx)
+    with st.expander("Dynamic Sliders B", expanded=False):
+        for i in range(3):
+            feat = st.selectbox(f"Dyn Feat {i+1} B", options=["None"]+FEATURES_WINNER, key=f'fb_dyn_{i}_feat')
+            if feat == "None":
+                mn, mx = 0, 1
+            else:
+                mn, mx = df_all[feat].min(), df_all[feat].max()
 
-        c1, c2 = st.columns(2)
-        min_val = c1.number_input(f"Min {i+1} B", min_value=mn, max_value=mx,
-                                  value=st.session_state[f'fb_dyn_{i}_range'][0],
-                                  key=f'fb_dyn_{i}_min')
-        max_val = c2.number_input(f"Max {i+1} B", min_value=mn, max_value=mx,
-                                  value=st.session_state[f'fb_dyn_{i}_range'][1],
-                                  key=f'fb_dyn_{i}_max')
-        if (min_val, max_val) != st.session_state[f'fb_dyn_{i}_range']:
-            st.session_state[f'fb_dyn_{i}_range'] = (min_val, max_val)
+            if st.session_state.get(f'fb_dyn_{i}_last_feat') != feat:
+                st.session_state[f'fb_dyn_{i}_range'] = (mn, mx)
+                st.session_state[f'fb_dyn_{i}_last_feat'] = feat
+            if f'fb_dyn_{i}_range' not in st.session_state:
+                st.session_state[f'fb_dyn_{i}_range'] = (mn, mx)
 
-        slider_val = st.slider(f"Dyn Range {i+1} B", min_value=mn, max_value=mx,
-                               value=st.session_state[f'fb_dyn_{i}_range'],
-                               key=f'fb_dyn_{i}_slider')
-        if slider_val != st.session_state[f'fb_dyn_{i}_range']:
+            slider_val = st.slider(f"Dyn Range {i+1} B", min_value=mn, max_value=mx,
+                                   value=st.session_state[f'fb_dyn_{i}_range'],
+                                   key=f'fb_dyn_{i}_slider')
             st.session_state[f'fb_dyn_{i}_range'] = slider_val
 
 # Last X Fights
@@ -670,25 +638,39 @@ if not df_filtered.empty:
 # Feature Importance
 st.subheader("Feature Importance")
 if st.button("Compute Feature Importance"):
-    with st.spinner("Training Random Forest..."):
-        df = df_all[df_all['Win?'].isin(['Yes','No'])]
-        target = st.session_state.get('target', 'win')
-        if target == 'win':
-            y = (df['Win?']=='Yes').astype(int)
-        elif target == 'complete3rds':
-            y = df['Completed3Rounds'].fillna(0).astype(int)
+    with st.spinner("Training Random Forest on filtered data..."):
+        if df_filtered.empty:
+            st.write("No filtered data to train on.")
         else:
-            y = df['Survived15'].fillna(0).astype(int)
-        feat_cols = [c for c in FEATURES_WINNER if c in df.columns]
-        if target in ('complete3rds','complete1.5rounds'):
-            feat_cols = [c for c in feat_cols if (c.startswith('Abs') or c.startswith('Mean'))]
-        else:
-            feat_cols = [c for c in feat_cols if not (c.startswith('Abs') or c.startswith('Mean'))]
-        if feat_cols:
-            X = df[feat_cols].fillna(0)
-            rf = RandomForestClassifier(n_estimators=100, max_depth=8, random_state=42, n_jobs=-1)
-            rf.fit(X, y)
-            importances = pd.DataFrame({'Feature': feat_cols, 'Importance': rf.feature_importances_}).sort_values('Importance', ascending=False)
-            st.dataframe(importances.head(200))
-        else:
-            st.write("No numeric features available.")
+            # For completion targets, we need all rows of filtered fights
+            if target in ('complete3rds','complete1.5rounds'):
+                fight_ids = df_filtered['FightID'].unique()
+                train_df = df_all[df_all['FightID'].isin(fight_ids)]
+            else:
+                train_df = df_filtered
+            train_df = train_df[train_df['Win?'].isin(['Yes','No'])]
+            if train_df.empty:
+                st.write("No completed fights in filtered set.")
+            else:
+                if target == 'win':
+                    y = (train_df['Win?']=='Yes').astype(int)
+                elif target == 'complete3rds':
+                    y = train_df.groupby('FightID')['Survived3R'].transform('min')
+                else:
+                    y = train_df.groupby('FightID')['Survived15'].transform('min')
+
+                feat_cols = [c for c in FEATURES_WINNER if c in train_df.columns]
+                if target in ('complete3rds','complete1.5rounds'):
+                    # keep only features that are fight-level (absolute or mean)
+                    feat_cols = [c for c in feat_cols if (c.startswith('Abs') or c.startswith('Mean'))]
+                else:
+                    feat_cols = [c for c in feat_cols if not (c.startswith('Abs') or c.startswith('Mean'))]
+
+                if feat_cols:
+                    X = train_df[feat_cols].fillna(0)
+                    rf = RandomForestClassifier(n_estimators=100, max_depth=8, random_state=42, n_jobs=-1)
+                    rf.fit(X, y)
+                    importances = pd.DataFrame({'Feature': feat_cols, 'Importance': rf.feature_importances_}).sort_values('Importance', ascending=False)
+                    st.dataframe(importances.head(200))
+                else:
+                    st.write("No suitable numeric features available.")
