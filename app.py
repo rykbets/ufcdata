@@ -135,6 +135,7 @@ numeric_cols = [c for c in numeric_cols if 'opp_allowed' not in c]
 FEATURES_WINNER = [c for c in numeric_cols if c not in EXCLUDE_FROM_FEATURES]
 
 # ----------------------------- Helper Functions -----------------------------
+# (All helper functions from previous scripts are included here unchanged)
 def apply_range_filter(df, mask, col, range_vals, target='win'):
     if col not in df.columns or range_vals is None:
         return mask
@@ -542,7 +543,6 @@ new_wc = col5.checkbox("New Weight Class", key='new_wc')
 
 st.subheader("Side A Criteria")
 with st.container():
-    # 6 columns for main Side A filters
     cols = st.columns(6)
     fa_country = cols[0].multiselect("Country A", options=sorted(df_all['Country'].dropna().unique()), key='fa_country')
     fa_stance = cols[1].multiselect("Stance A", options=sorted(df_all['Stance'].dropna().unique()), key='fa_stance')
@@ -567,7 +567,7 @@ with st.container():
 
     st.markdown("**Dynamic Sliders A**")
     for i in range(3):
-        c1, c2 = st.columns([1, 2])  # dropdown 1/3, slider 2/3
+        c1, c2 = st.columns([1, 2])
         feat = c1.selectbox(f"Dyn Feat {i+1} A", options=["None"]+FEATURES_WINNER, key=f'fa_dyn_{i}_feat')
         if feat == "None":
             c2.slider(f"Dyn Range {i+1} A", 0, 1, (0,1), key=f'fa_dyn_{i}_range')
