@@ -63,7 +63,7 @@ for col in df_all.columns:
         if orig in df_all.columns:
             ABS_MAPPING[orig] = col
 
-# ----------------------------- Exclusions -----------------------------
+# ----------------------------- Exclusions (pattern-based, same as Dash) -----------------------------
 raw_stats = ['KD','SS','SSA','TS','TSA','TD','TDA','Subs','Reversals',
              'HSL','HSA','BSL','BSA','LSL','LSA','DSL','DSA','CSL','CSA','GSL','GSA','Ctrl']
 exclude_set = set()
@@ -535,10 +535,10 @@ with st.container():
     st.markdown("**Continuous Filters A**")
     for col, label in zip(SLIDER_COLUMNS, SLIDER_LABELS):
         mn, mx = slider_min_max[col]
-        # Initialize range if needed
+        # Initialize range if missing
         if f'fa_{col}_range' not in st.session_state:
             st.session_state[f'fa_{col}_range'] = (mn, mx)
-        # Number inputs first
+        # Manual inputs first
         c1, c2 = st.columns(2)
         min_val = c1.number_input(f"{label} A Min", min_value=mn, max_value=mx,
                                   value=st.session_state[f'fa_{col}_range'][0],
@@ -546,34 +546,29 @@ with st.container():
         max_val = c2.number_input(f"{label} A Max", min_value=mn, max_value=mx,
                                   value=st.session_state[f'fa_{col}_range'][1],
                                   key=f'fa_{col}_max')
-        # If number inputs changed, update range
-        if min_val != st.session_state[f'fa_{col}_range'][0] or max_val != st.session_state[f'fa_{col}_range'][1]:
+        if (min_val, max_val) != st.session_state[f'fa_{col}_range']:
             st.session_state[f'fa_{col}_range'] = (min_val, max_val)
-        # Slider uses current range
+        # Slider
         slider_val = st.slider(f"{label} A", min_value=mn, max_value=mx,
                                value=st.session_state[f'fa_{col}_range'],
                                key=f'fa_{col}_slider')
-        # After slider, update range (in case slider was moved)
         if slider_val != st.session_state[f'fa_{col}_range']:
             st.session_state[f'fa_{col}_range'] = slider_val
 
     st.markdown("**Dynamic Sliders A**")
     for i in range(3):
-        # Feature select
         feat = st.selectbox(f"Dyn Feat {i+1} A", options=["None"]+FEATURES_WINNER, key=f'fa_dyn_{i}_feat')
-        # Determine min/max
         if feat == "None":
             mn, mx = 0, 1
         else:
             mn, mx = df_all[feat].min(), df_all[feat].max()
-        # Reset range if feature changed
+        # Reset if feature changed
         if st.session_state.get(f'fa_dyn_{i}_last_feat') != feat:
             st.session_state[f'fa_dyn_{i}_range'] = (mn, mx)
             st.session_state[f'fa_dyn_{i}_last_feat'] = feat
-        # Ensure range exists
         if f'fa_dyn_{i}_range' not in st.session_state:
             st.session_state[f'fa_dyn_{i}_range'] = (mn, mx)
-        # Number inputs first
+        # Manual inputs first
         c1, c2 = st.columns(2)
         min_val = c1.number_input(f"Min {i+1} A", min_value=mn, max_value=mx,
                                   value=st.session_state[f'fa_dyn_{i}_range'][0],
@@ -581,8 +576,9 @@ with st.container():
         max_val = c2.number_input(f"Max {i+1} A", min_value=mn, max_value=mx,
                                   value=st.session_state[f'fa_dyn_{i}_range'][1],
                                   key=f'fa_dyn_{i}_max')
-        if min_val != st.session_state[f'fa_dyn_{i}_range'][0] or max_val != st.session_state[f'fa_dyn_{i}_range'][1]:
+        if (min_val, max_val) != st.session_state[f'fa_dyn_{i}_range']:
             st.session_state[f'fa_dyn_{i}_range'] = (min_val, max_val)
+        # Slider
         slider_val = st.slider(f"Dyn Range {i+1} A", min_value=mn, max_value=mx,
                                value=st.session_state[f'fa_dyn_{i}_range'],
                                key=f'fa_dyn_{i}_slider')
@@ -621,7 +617,7 @@ with st.container():
         max_val = c2.number_input(f"{label} B Max", min_value=mn, max_value=mx,
                                   value=st.session_state[f'fb_{col}_range'][1],
                                   key=f'fb_{col}_max')
-        if min_val != st.session_state[f'fb_{col}_range'][0] or max_val != st.session_state[f'fb_{col}_range'][1]:
+        if (min_val, max_val) != st.session_state[f'fb_{col}_range']:
             st.session_state[f'fb_{col}_range'] = (min_val, max_val)
         slider_val = st.slider(f"{label} B", min_value=mn, max_value=mx,
                                value=st.session_state[f'fb_{col}_range'],
@@ -648,7 +644,7 @@ with st.container():
         max_val = c2.number_input(f"Max {i+1} B", min_value=mn, max_value=mx,
                                   value=st.session_state[f'fb_dyn_{i}_range'][1],
                                   key=f'fb_dyn_{i}_max')
-        if min_val != st.session_state[f'fb_dyn_{i}_range'][0] or max_val != st.session_state[f'fb_dyn_{i}_range'][1]:
+        if (min_val, max_val) != st.session_state[f'fb_dyn_{i}_range']:
             st.session_state[f'fb_dyn_{i}_range'] = (min_val, max_val)
         slider_val = st.slider(f"Dyn Range {i+1} B", min_value=mn, max_value=mx,
                                value=st.session_state[f'fb_dyn_{i}_range'],
