@@ -63,11 +63,10 @@ for col in df_all.columns:
         if orig in df_all.columns:
             ABS_MAPPING[orig] = col
 
-# ----------------------------- Pattern-based Exclusions -----------------------------
-raw_stats = ['KD','SS','SSA','TS','TSA','TD','TDA','Subs','Reversals',
-             'HSL','HSA','BSL','BSA','LSL','LSA','DSL','DSA','CSL','CSA','GSL','GSA','Ctrl']
-
-exclude_patterns = [
+# ----------------------------- Exclusions (Pattern-based) -----------------------------
+# Build a set of column names that should NOT be used as features.
+exclude_set = set()
+exclude_set.update([
     'FightID','Fighter','Opponent','FightDate','Win?','Method','Round','WC','Stance','Country',
     'EventCountry','HometownFighter','Opponent_Hometown','ScheduledRounds','Title','Prev1_Title',
     'Prev2_Title','Prev3_Title','Opponent_Prev1_Title','FightNumber','TotalTimeSec',
@@ -75,51 +74,52 @@ exclude_patterns = [
     'KD_per_SS','Sub_per_Ctrl','SubWin_per_Ctrl','Ctrl_per_TD',
     'SS%_TS','DS%_SS','CS%_SS','GS%_SS','HS%_SS','BS%_SS','LS%_SS',
     'Completed3Rounds','FightDurationMinutes',
-]
+])
 
-# Add all raw stats and their derived columns
+# Exclude all raw stats and their derived versions
+raw_stats = ['KD','SS','SSA','TS','TSA','TD','TDA','Subs','Reversals',
+             'HSL','HSA','BSL','BSA','LSL','LSA','DSL','DSA','CSL','CSA','GSL','GSA','Ctrl']
 for stat in raw_stats:
-    exclude_patterns.append(stat)
-    exclude_patterns.append(f'Def_{stat}')
-    exclude_patterns.append(f'ratio_off_{stat}')
-    exclude_patterns.append(f'R1_ratio_off_{stat}')
-    exclude_patterns.append(f'adjperf_ratio_{stat}')
-    exclude_patterns.append(f'R1_adjperf_ratio_{stat}')
-    exclude_patterns.append(f'Def_adjperf_ratio_{stat}')
-    exclude_patterns.append(f'R1_Def_adjperf_ratio_{stat}')
-    exclude_patterns.append(f'log_{stat}')
-    exclude_patterns.append(f'adjperf_log_{stat}')
-    exclude_patterns.append(f'Def_adjperf_log_{stat}')
-    exclude_patterns.append(f'R1_log_{stat}')
-    exclude_patterns.append(f'R1_adjperf_log_{stat}')
-    exclude_patterns.append(f'R1_Def_adjperf_log_{stat}')
+    exclude_set.add(stat)
+    exclude_set.add(f'Def_{stat}')
+    exclude_set.add(f'ratio_off_{stat}')
+    exclude_set.add(f'R1_ratio_off_{stat}')
+    exclude_set.add(f'adjperf_ratio_{stat}')
+    exclude_set.add(f'R1_adjperf_ratio_{stat}')
+    exclude_set.add(f'Def_adjperf_ratio_{stat}')
+    exclude_set.add(f'R1_Def_adjperf_ratio_{stat}')
+    exclude_set.add(f'log_{stat}')
+    exclude_set.add(f'adjperf_log_{stat}')
+    exclude_set.add(f'Def_adjperf_log_{stat}')
+    exclude_set.add(f'R1_log_{stat}')
+    exclude_set.add(f'R1_adjperf_log_{stat}')
+    exclude_set.add(f'R1_Def_adjperf_log_{stat}')
 
-# Add accuracy and method flags
+# Exclude method flags and survival flags
 for method in ['KO','Sub','Dec']:
-    exclude_patterns.append(f'WinBy{method}')
-    exclude_patterns.append(f'LossBy{method}')
-
+    exclude_set.add(f'WinBy{method}')
+    exclude_set.add(f'LossBy{method}')
 for surv in ['Survived1R','Survived15','Survived2R','Survived3R']:
-    exclude_patterns.append(surv)
-    exclude_patterns.append(f'FinishedOpp{surv[-2:]}')  # e.g., FinishedOpp1R
+    exclude_set.add(surv)
+    # FinishedOpp1R, FinishedOpp15, etc.
+    exclude_set.add(f'FinishedOpp{surv[-2:]}')
 
-# Previous fight diffs
+# Exclude previous fight diffs
 for prefix in ['Prev1_','Prev2_','Prev3_']:
-    exclude_patterns.append(prefix+'AgeDiff')
-    exclude_patterns.append(prefix+'ReachDiff')
-    exclude_patterns.append(prefix+'HeightDiff')
-    exclude_patterns.append('Abs_'+prefix+'AgeDiff')
-    exclude_patterns.append('Abs_'+prefix+'ReachDiff')
-    exclude_patterns.append('Abs_'+prefix+'HeightDiff')
+    exclude_set.add(prefix+'AgeDiff')
+    exclude_set.add(prefix+'ReachDiff')
+    exclude_set.add(prefix+'HeightDiff')
+    exclude_set.add('Abs_'+prefix+'AgeDiff')
+    exclude_set.add('Abs_'+prefix+'ReachDiff')
+    exclude_set.add('Abs_'+prefix+'HeightDiff')
 
-# Convert to set for fast lookup
-exclude_set = set(exclude_patterns)
+# Now compute FEATURES_WINNER (all numeric columns not excluded)
+all_numeric_cols = df_all.select_dtypes(include=[np.number]).columns.tolist()
+FEATURES_WINNER = [c for c in all_numeric_cols if c not in exclude_set]
 
-# Define FEATURES_WINNER
-numeric_cols = df_all.select_dtypes(include=[np.number]).columns.tolist()
-numeric_cols = [c for c in numeric_cols if 'raw' not in c and not c.startswith('WC_Debut_Avg_')]
-numeric_cols = [c for c in numeric_cols if 'opp_allowed' not in c]
-FEATURES_WINNER = [c for c in numeric_cols if c not in exclude_set]
+# Debug: if empty, display warning (won't break script)
+if not FEATURES_WINNER:
+    st.warning("No feature columns found after exclusions. Check your data.")
 
 # ----------------------------- Helper Functions -----------------------------
 def apply_range_filter(df, mask, col, range_vals, target='win'):
