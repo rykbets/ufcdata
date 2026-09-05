@@ -432,12 +432,72 @@ def apply_params_to_widgets(params):
             st.session_state[f'fb_dyn_{i}_feat'] = 'None'
             st.session_state[f'fb_dyn_{i}_range'] = (0,1)
 
+# ----------------------------- Reset Filters -----------------------------
+def reset_all_filters():
+    # Shared
+    st.session_state['wc'] = []
+    st.session_state['event_country'] = []
+    st.session_state['title_fight'] = 'All'
+    st.session_state['sched_rounds'] = []
+    st.session_state['new_wc'] = False
+    # Side A categorical
+    st.session_state['fa_country'] = []
+    st.session_state['fa_stance'] = []
+    st.session_state['fa_hometown'] = []
+    st.session_state['fa_fn_min'] = 1
+    st.session_state['fa_fn_max'] = int(df_all['FightNumber'].max())
+    st.session_state['fa_prev_title'] = 'All'
+    for i in range(1,4):
+        st.session_state[f'fa_prev{i}'] = []
+        st.session_state[f'fa_career{i}'] = []
+    # Side B categorical
+    st.session_state['fb_country'] = []
+    st.session_state['fb_stance'] = []
+    st.session_state['fb_hometown'] = []
+    st.session_state['fb_fn_min'] = 1
+    st.session_state['fb_fn_max'] = int(df_all['FightNumber'].max())
+    st.session_state['fb_prev_title'] = 'All'
+    for i in range(1,4):
+        st.session_state[f'fb_prev{i}'] = []
+        st.session_state[f'fb_career{i}'] = []
+    # Static sliders
+    for col in SLIDER_COLUMNS:
+        mn, mx = slider_min_max[col]
+        st.session_state[f'fa_{col}_range'] = (mn, mx)
+        st.session_state[f'fa_{col}_min'] = mn
+        st.session_state[f'fa_{col}_max'] = mx
+        st.session_state[f'fa_{col}_slider'] = (mn, mx)
+        st.session_state[f'fb_{col}_range'] = (mn, mx)
+        st.session_state[f'fb_{col}_min'] = mn
+        st.session_state[f'fb_{col}_max'] = mx
+        st.session_state[f'fb_{col}_slider'] = (mn, mx)
+    # Dynamic sliders
+    for i in range(3):
+        st.session_state[f'fa_dyn_{i}_feat'] = 'None'
+        st.session_state[f'fa_dyn_{i}_range'] = (0,1)
+        st.session_state[f'fa_dyn_{i}_min'] = 0
+        st.session_state[f'fa_dyn_{i}_max'] = 1
+        st.session_state[f'fa_dyn_{i}_slider'] = (0,1)
+        st.session_state[f'fa_dyn_{i}_last_feat'] = 'None'
+        st.session_state[f'fb_dyn_{i}_feat'] = 'None'
+        st.session_state[f'fb_dyn_{i}_range'] = (0,1)
+        st.session_state[f'fb_dyn_{i}_min'] = 0
+        st.session_state[f'fb_dyn_{i}_max'] = 1
+        st.session_state[f'fb_dyn_{i}_slider'] = (0,1)
+        st.session_state[f'fb_dyn_{i}_last_feat'] = 'None'
+
 # ----------------------------- Streamlit UI -----------------------------
 st.set_page_config(layout="wide")
 st.title("UFC Spider Filter Dashboard")
 
-# Sidebar
+# Reset button in sidebar
 with st.sidebar:
+    st.header("Reset")
+    if st.button("Reset Filters"):
+        reset_all_filters()
+        st.rerun()
+
+    st.markdown("---")
     st.header("Saved Searches")
     search_name = st.text_input("Search Name", key="search_name")
     col1, col2 = st.columns(2)
@@ -604,16 +664,84 @@ with st.container():
             else:
                 mn, mx = df_all[feat].min(), df_all[feat].max()
 
-            if st.session_state.get(f'fa_dyn_{i}_last_feat') != feat:
-                st.session_state[f'fa_dyn_{i}_range'] = (mn, mx)
-                st.session_state[f'fa_dyn_{i}_last_feat'] = feat
-            if f'fa_dyn_{i}_range' not in st.session_state:
-                st.session_state[f'fa_dyn_{i}_range'] = (mn, mx)
+            # Initialise dynamic slider keys
+            dyn_range_key = f'fa_dyn_{i}_range'
+            dyn_slider_key = f'fa_dyn_{i}_slider'
+            dyn_min_key = f'fa_dyn_{i}_min'
+            dyn_max_key = f'fa_dyn_{i}_max'
+            if dyn_range_key not in st.session_state:
+                st.session_state[dyn_range_key] = (mn, mx)
+            if dyn_slider_key not in st.session_state:
+                st.session_state[dyn_slider_key] = st.session_state[dyn_range_key]
+            if dyn_min_key not in st.session_state:
+                st.session_state[dyn_min_key] = st.session_state[dyn_range_key][0]
+            if dyn_max_key not in st.session_state:
+                st.session_state[dyn_max_key] = st.session_state[dyn_range_key][1]
 
-            slider_val = st.slider(f"Dyn Range {i+1} A", min_value=mn, max_value=mx,
-                                   value=st.session_state[f'fa_dyn_{i}_range'],
-                                   key=f'fa_dyn_{i}_slider')
-            st.session_state[f'fa_dyn_{i}_range'] = slider_val
+            # If feature changed, reset range to full
+            last_feat_key = f'fa_dyn_{i}_last_feat'
+            if last_feat_key not in st.session_state:
+                st.session_state[last_feat_key] = feat
+            if st.session_state[last_feat_key] != feat:
+                st.session_state[dyn_range_key] = (mn, mx)
+                st.session_state[dyn_slider_key] = (mn, mx)
+                st.session_state[dyn_min_key] = mn
+                st.session_state[dyn_max_key] = mx
+                st.session_state[last_feat_key] = feat
+
+            def on_dyn_slider_change(i=i, dyn_slider_key=dyn_slider_key, dyn_min_key=dyn_min_key, dyn_max_key=dyn_max_key, dyn_range_key=dyn_range_key):
+                val = st.session_state[dyn_slider_key]
+                st.session_state[dyn_range_key] = val
+                st.session_state[dyn_min_key] = val[0]
+                st.session_state[dyn_max_key] = val[1]
+
+            def on_dyn_min_change(i=i, dyn_slider_key=dyn_slider_key, dyn_min_key=dyn_min_key, dyn_max_key=dyn_max_key, dyn_range_key=dyn_range_key):
+                new_min = st.session_state[dyn_min_key]
+                current_max = st.session_state[dyn_max_key]
+                if new_min > current_max:
+                    new_min = current_max
+                    st.session_state[dyn_min_key] = new_min
+                st.session_state[dyn_range_key] = (new_min, current_max)
+                st.session_state[dyn_slider_key] = (new_min, current_max)
+
+            def on_dyn_max_change(i=i, dyn_slider_key=dyn_slider_key, dyn_min_key=dyn_min_key, dyn_max_key=dyn_max_key, dyn_range_key=dyn_range_key):
+                new_max = st.session_state[dyn_max_key]
+                current_min = st.session_state[dyn_min_key]
+                if new_max < current_min:
+                    new_max = current_min
+                    st.session_state[dyn_max_key] = new_max
+                st.session_state[dyn_range_key] = (current_min, new_max)
+                st.session_state[dyn_slider_key] = (current_min, new_max)
+
+            # Layout: slider and manual inputs
+            c_slider, c_min, c_max = st.columns([5, 1, 1])
+            with c_slider:
+                st.slider(
+                    f"Range {i+1} A",
+                    min_value=mn,
+                    max_value=mx,
+                    value=st.session_state[dyn_slider_key],
+                    key=dyn_slider_key,
+                    on_change=on_dyn_slider_change
+                )
+            with c_min:
+                st.number_input(
+                    "Min",
+                    min_value=mn,
+                    max_value=mx,
+                    value=st.session_state[dyn_min_key],
+                    key=dyn_min_key,
+                    on_change=on_dyn_min_change
+                )
+            with c_max:
+                st.number_input(
+                    "Max",
+                    min_value=mn,
+                    max_value=mx,
+                    value=st.session_state[dyn_max_key],
+                    key=dyn_max_key,
+                    on_change=on_dyn_max_change
+                )
 
 # Side B
 st.subheader("Side B Criteria")
@@ -713,16 +841,81 @@ with st.container():
             else:
                 mn, mx = df_all[feat].min(), df_all[feat].max()
 
-            if st.session_state.get(f'fb_dyn_{i}_last_feat') != feat:
-                st.session_state[f'fb_dyn_{i}_range'] = (mn, mx)
-                st.session_state[f'fb_dyn_{i}_last_feat'] = feat
-            if f'fb_dyn_{i}_range' not in st.session_state:
-                st.session_state[f'fb_dyn_{i}_range'] = (mn, mx)
+            dyn_range_key = f'fb_dyn_{i}_range'
+            dyn_slider_key = f'fb_dyn_{i}_slider'
+            dyn_min_key = f'fb_dyn_{i}_min'
+            dyn_max_key = f'fb_dyn_{i}_max'
+            if dyn_range_key not in st.session_state:
+                st.session_state[dyn_range_key] = (mn, mx)
+            if dyn_slider_key not in st.session_state:
+                st.session_state[dyn_slider_key] = st.session_state[dyn_range_key]
+            if dyn_min_key not in st.session_state:
+                st.session_state[dyn_min_key] = st.session_state[dyn_range_key][0]
+            if dyn_max_key not in st.session_state:
+                st.session_state[dyn_max_key] = st.session_state[dyn_range_key][1]
 
-            slider_val = st.slider(f"Dyn Range {i+1} B", min_value=mn, max_value=mx,
-                                   value=st.session_state[f'fb_dyn_{i}_range'],
-                                   key=f'fb_dyn_{i}_slider')
-            st.session_state[f'fb_dyn_{i}_range'] = slider_val
+            last_feat_key = f'fb_dyn_{i}_last_feat'
+            if last_feat_key not in st.session_state:
+                st.session_state[last_feat_key] = feat
+            if st.session_state[last_feat_key] != feat:
+                st.session_state[dyn_range_key] = (mn, mx)
+                st.session_state[dyn_slider_key] = (mn, mx)
+                st.session_state[dyn_min_key] = mn
+                st.session_state[dyn_max_key] = mx
+                st.session_state[last_feat_key] = feat
+
+            def on_dyn_slider_change(i=i, dyn_slider_key=dyn_slider_key, dyn_min_key=dyn_min_key, dyn_max_key=dyn_max_key, dyn_range_key=dyn_range_key):
+                val = st.session_state[dyn_slider_key]
+                st.session_state[dyn_range_key] = val
+                st.session_state[dyn_min_key] = val[0]
+                st.session_state[dyn_max_key] = val[1]
+
+            def on_dyn_min_change(i=i, dyn_slider_key=dyn_slider_key, dyn_min_key=dyn_min_key, dyn_max_key=dyn_max_key, dyn_range_key=dyn_range_key):
+                new_min = st.session_state[dyn_min_key]
+                current_max = st.session_state[dyn_max_key]
+                if new_min > current_max:
+                    new_min = current_max
+                    st.session_state[dyn_min_key] = new_min
+                st.session_state[dyn_range_key] = (new_min, current_max)
+                st.session_state[dyn_slider_key] = (new_min, current_max)
+
+            def on_dyn_max_change(i=i, dyn_slider_key=dyn_slider_key, dyn_min_key=dyn_min_key, dyn_max_key=dyn_max_key, dyn_range_key=dyn_range_key):
+                new_max = st.session_state[dyn_max_key]
+                current_min = st.session_state[dyn_min_key]
+                if new_max < current_min:
+                    new_max = current_min
+                    st.session_state[dyn_max_key] = new_max
+                st.session_state[dyn_range_key] = (current_min, new_max)
+                st.session_state[dyn_slider_key] = (current_min, new_max)
+
+            c_slider, c_min, c_max = st.columns([5, 1, 1])
+            with c_slider:
+                st.slider(
+                    f"Range {i+1} B",
+                    min_value=mn,
+                    max_value=mx,
+                    value=st.session_state[dyn_slider_key],
+                    key=dyn_slider_key,
+                    on_change=on_dyn_slider_change
+                )
+            with c_min:
+                st.number_input(
+                    "Min",
+                    min_value=mn,
+                    max_value=mx,
+                    value=st.session_state[dyn_min_key],
+                    key=dyn_min_key,
+                    on_change=on_dyn_min_change
+                )
+            with c_max:
+                st.number_input(
+                    "Max",
+                    min_value=mn,
+                    max_value=mx,
+                    value=st.session_state[dyn_max_key],
+                    key=dyn_max_key,
+                    on_change=on_dyn_max_change
+                )
 
 # Last X Fights
 st.markdown("---")
