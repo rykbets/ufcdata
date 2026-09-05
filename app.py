@@ -5,28 +5,33 @@ warnings.filterwarnings('ignore')
 
 import numpy as np
 import pandas as pd
+import gdown
+import streamlit as st
 from scipy.stats import binomtest
 from sklearn.ensemble import RandomForestClassifier
-import streamlit as st
 
 # ----------------------------- Configuration -----------------------------
-DATA_FILE = os.environ.get("DATA_FILE", "all_fights_adjperf.parquet")
-SAVED_SEARCHES_FILE = os.path.join(os.path.dirname(__file__), "saved_searches.json")
+PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"  # public Google Drive file ID
+SAVED_SEARCHES_FILE = "saved_searches.json"  # will try to persist locally if possible
 
 # ----------------------------- Data Loading -----------------------------
 @st.cache_data
-def load_data(path):
-    df = pd.read_parquet(path)
+def load_data():
+    # Force fresh download – delete old parquet first
+    if os.path.exists("data.parquet"):
+        os.remove("data.parquet")
+    gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
+    df = pd.read_parquet("data.parquet")
+    required_cols = ['FightID', 'Fighter', 'Opponent', 'FightDate', 'Win?', 'Age', 'Height', 'Reach', 'WC']
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Parquet is missing required columns: {missing}")
     df = df[df['FightDate'] >= '2015-01-01'].copy()
     df['FightDate'] = pd.to_datetime(df['FightDate'])
     df['Win?'] = df['Win?'].replace('', np.nan)
     return df
 
-try:
-    df_all = load_data(DATA_FILE)
-except FileNotFoundError:
-    st.error(f"Data file not found at '{DATA_FILE}'. Please set the DATA_FILE environment variable or place the file in the app directory.")
-    st.stop()
+df_all = load_data()
 
 # ----------------------------- Feature Groups -----------------------------
 SLIDER_FEATURES_SPEC = [
@@ -42,6 +47,7 @@ SLIDER_FEATURES_SPEC = [
     ('DaysSincePrev', 'DaysSincePrev'),
     ('ColleyDecayDiff', 'ColleyDecayDiff')
 ]
+
 SLIDER_COLUMNS = [col for col, _ in SLIDER_FEATURES_SPEC if col in df_all.columns]
 SLIDER_LABELS = [label for col, label in SLIDER_FEATURES_SPEC if col in df_all.columns]
 
@@ -59,7 +65,8 @@ for col in df_all.columns:
         if orig in df_all.columns:
             ABS_MAPPING[orig] = col
 
-# ----------------------------- Exclusions (same as earlier) -----------------------------
+# ----------------------------- Exclusions -----------------------------
+# (Comprehensive exclusion list – same as previous, omitted for brevity in display)
 EXCLUDE_FROM_FEATURES = [
     'FightID','Fighter','Opponent','FightDate','Win?','Method','Round','WC','Stance','Country',
     'EventCountry','HometownFighter','Opponent_Hometown','ScheduledRounds','Title','Prev1_Title',
@@ -340,22 +347,31 @@ def compute_advanced_metrics(df_filtered, df_baseline, target='win', params=None
 # ----------------------------- Saved Search Management -----------------------------
 def load_saved_searches():
     if os.path.exists(SAVED_SEARCHES_FILE):
-        with open(SAVED_SEARCHES_FILE, 'r') as f:
-            raw = json.load(f)
-        normalized = {}
-        for name, entry in raw.items():
-            if isinstance(entry, dict) and 'params' in entry:
-                normalized[name] = entry
-            elif isinstance(entry, dict) and 'spider' in entry:
-                normalized[name] = {'tab': 'spider', 'params': entry['spider']}
-        return normalized
+        try:
+            with open(SAVED_SEARCHES_FILE, 'r') as f:
+                raw = json.load(f)
+            normalized = {}
+            for name, entry in raw.items():
+                if isinstance(entry, dict) and 'params' in entry:
+                    normalized[name] = entry
+                elif isinstance(entry, dict) and 'spider' in entry:
+                    normalized[name] = {'tab': 'spider', 'params': entry['spider']}
+            return normalized
+        except:
+            return {}
     return {}
 
 def save_saved_searches(searches):
-    with open(SAVED_SEARCHES_FILE, 'w') as f:
-        json.dump(searches, f)
+    try:
+        with open(SAVED_SEARCHES_FILE, 'w') as f:
+            json.dump(searches, f)
+    except:
+        # Fallback to session state only
+        st.session_state.saved_searches = searches
 
 saved_searches = load_saved_searches()
+if 'saved_searches' not in st.session_state:
+    st.session_state.saved_searches = saved_searches
 
 def get_params_from_widgets():
     params = {
@@ -464,35 +480,36 @@ def apply_params_to_widgets(params):
 st.set_page_config(layout="wide")
 st.title("UFC Spider Filter Dashboard")
 
+# Sidebar
 with st.sidebar:
     st.header("Saved Searches")
     search_name = st.text_input("Search Name", key="search_name")
     col1, col2, col3 = st.columns(3)
     if col1.button("Save"):
         if search_name:
-            saved_searches[search_name] = {'tab': 'spider', 'params': get_params_from_widgets()}
-            save_saved_searches(saved_searches)
+            st.session_state.saved_searches[search_name] = {'tab': 'spider', 'params': get_params_from_widgets()}
+            save_saved_searches(st.session_state.saved_searches)
             st.experimental_rerun()
     if col2.button("Load"):
         selected = st.session_state.get('saved_search_select', None)
-        if selected and selected in saved_searches:
-            apply_params_to_widgets(saved_searches[selected]['params'])
+        if selected and selected in st.session_state.saved_searches:
+            apply_params_to_widgets(st.session_state.saved_searches[selected]['params'])
             st.experimental_rerun()
     if col3.button("Delete"):
         selected = st.session_state.get('saved_search_select', None)
-        if selected and selected in saved_searches:
-            del saved_searches[selected]
-            save_saved_searches(saved_searches)
+        if selected and selected in st.session_state.saved_searches:
+            del st.session_state.saved_searches[selected]
+            save_saved_searches(st.session_state.saved_searches)
             st.experimental_rerun()
     rename_input = st.text_input("Rename to", key="rename_input")
     if st.button("Rename"):
         selected = st.session_state.get('saved_search_select', None)
         new_name = rename_input.strip()
-        if selected and new_name and selected in saved_searches:
-            saved_searches[new_name] = saved_searches.pop(selected)
-            save_saved_searches(saved_searches)
+        if selected and new_name and selected in st.session_state.saved_searches:
+            st.session_state.saved_searches[new_name] = st.session_state.saved_searches.pop(selected)
+            save_saved_searches(st.session_state.saved_searches)
             st.experimental_rerun()
-    saved_search_select = st.selectbox("Saved Searches", options=sorted(saved_searches.keys()), key='saved_search_select')
+    saved_search_select = st.selectbox("Saved Searches", options=sorted(st.session_state.saved_searches.keys()), key='saved_search_select')
     st.markdown("---")
     st.header("Global Target")
     target = st.selectbox("Target", options=["win", "complete3rds", "complete1.5rounds"], key='target')
