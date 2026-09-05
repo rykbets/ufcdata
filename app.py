@@ -596,11 +596,6 @@ with st.container():
                     on_change=on_max_change
                 )
 
-            # After widgets, sync the range and keys with slider value (if slider changed)
-            st.session_state[range_key] = slider_val
-            st.session_state[min_key] = slider_val[0]
-            st.session_state[max_key] = slider_val[1]
-
     with st.expander("Dynamic Sliders A", expanded=False):
         for i in range(3):
             feat = st.selectbox(f"Dyn Feat {i+1} A", options=["None"]+FEATURES_WINNER, key=f'fa_dyn_{i}_feat')
@@ -709,10 +704,6 @@ with st.container():
                     key=max_key,
                     on_change=on_max_change
                 )
-
-            st.session_state[range_key] = slider_val
-            st.session_state[min_key] = slider_val[0]
-            st.session_state[max_key] = slider_val[1]
 
     with st.expander("Dynamic Sliders B", expanded=False):
         for i in range(3):
