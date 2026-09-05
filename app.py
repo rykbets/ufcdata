@@ -63,79 +63,65 @@ for col in df_all.columns:
         if orig in df_all.columns:
             ABS_MAPPING[orig] = col
 
-# ----------------------------- Exclusions (FULL LIST FROM DASH) -----------------------------
-EXCLUDE_FROM_FEATURES = [
+# ----------------------------- Pattern-based Exclusions -----------------------------
+raw_stats = ['KD','SS','SSA','TS','TSA','TD','TDA','Subs','Reversals',
+             'HSL','HSA','BSL','BSA','LSL','LSA','DSL','DSA','CSL','CSA','GSL','GSA','Ctrl']
+
+exclude_patterns = [
     'FightID','Fighter','Opponent','FightDate','Win?','Method','Round','WC','Stance','Country',
     'EventCountry','HometownFighter','Opponent_Hometown','ScheduledRounds','Title','Prev1_Title',
     'Prev2_Title','Prev3_Title','Opponent_Prev1_Title','FightNumber','TotalTimeSec',
     'FighterOddsNum','OpponentOddsNum','PrevFighterOddsNum',
-    'KD','SS','SSA','TS','TSA','TD','TDA','Subs','Reversals','HSL','HSA','BSL','BSA',
-    'LSL','LSA','DSL','DSA','CSL','CSA','GSL','GSA','Ctrl',
-    'Def_KD','Def_SS','Def_SSA','Def_TS','Def_TSA','Def_TD','Def_TDA','Def_Subs','Def_Reversals',
-    'Def_HSL','Def_HSA','Def_BSL','Def_BSA','Def_LSL','Def_LSA','Def_DSL','Def_DSA',
-    'Def_CSL','Def_CSA','Def_GSL','Def_GSA','Def_Ctrl',
-    'SS_Acc','HS_Acc','BS_Acc','LS_Acc','DS_Acc','CS_Acc','GS_Acc',
-    'WinByKO','LossByKO','WinBySub','LossBySub','WinByDec','LossByDec',
-    'Survived1R','FinishedOpp1R','Survived15','FinishedOpp15',
-    'Survived2R','FinishedOpp2R','Survived3R','FinishedOpp3R',
     'KD_per_SS','Sub_per_Ctrl','SubWin_per_Ctrl','Ctrl_per_TD',
     'SS%_TS','DS%_SS','CS%_SS','GS%_SS','HS%_SS','BS%_SS','LS%_SS',
-    'ratio_off_KD','ratio_off_SS','ratio_off_SSA','ratio_off_TS','ratio_off_TSA',
-    'ratio_off_TD','ratio_off_TDA','ratio_off_Subs','ratio_off_Reversals',
-    'ratio_off_HSL','ratio_off_HSA','ratio_off_BSL','ratio_off_BSA',
-    'ratio_off_LSL','ratio_off_LSA','ratio_off_DSL','ratio_off_DSA',
-    'ratio_off_CSL','ratio_off_CSA','ratio_off_GSL','ratio_off_GSA','ratio_off_Ctrl',
-    'R1_ratio_off_KD','R1_ratio_off_SS','R1_ratio_off_SSA','R1_ratio_off_TS',
-    'R1_ratio_off_TSA','R1_ratio_off_TD','R1_ratio_off_TDA','R1_ratio_off_Subs',
-    'R1_ratio_off_Reversals','R1_ratio_off_HSL','R1_ratio_off_HSA','R1_ratio_off_BSL',
-    'R1_ratio_off_BSA','R1_ratio_off_LSL','R1_ratio_off_LSA','R1_ratio_off_DSL',
-    'R1_ratio_off_DSA','R1_ratio_off_CSL','R1_ratio_off_CSA','R1_ratio_off_GSL',
-    'R1_ratio_off_GSA','R1_ratio_off_Ctrl',
-    'adjperf_ratio_KD','adjperf_ratio_SS','adjperf_ratio_SSA','adjperf_ratio_TS',
-    'adjperf_ratio_TSA','adjperf_ratio_TD','adjperf_ratio_TDA','adjperf_ratio_Subs',
-    'adjperf_ratio_Reversals','adjperf_ratio_HSL','adjperf_ratio_HSA','adjperf_ratio_BSL',
-    'adjperf_ratio_BSA','adjperf_ratio_LSL','adjperf_ratio_LSA','adjperf_ratio_DSL',
-    'adjperf_ratio_DSA','adjperf_ratio_CSL','adjperf_ratio_CSA','adjperf_ratio_GSL',
-    'adjperf_ratio_GSA','adjperf_ratio_Ctrl',
-    'R1_adjperf_ratio_KD','R1_adjperf_ratio_SS','R1_adjperf_ratio_SSA','R1_adjperf_ratio_TS',
-    'R1_adjperf_ratio_TSA','R1_adjperf_ratio_TD','R1_adjperf_ratio_TDA','R1_adjperf_ratio_Subs',
-    'R1_adjperf_ratio_Reversals','R1_adjperf_ratio_HSL','R1_adjperf_ratio_HSA','R1_adjperf_ratio_BSL',
-    'R1_adjperf_ratio_BSA','R1_adjperf_ratio_LSL','R1_adjperf_ratio_LSA','R1_adjperf_ratio_DSL',
-    'R1_adjperf_ratio_DSA','R1_adjperf_ratio_CSL','R1_adjperf_ratio_CSA','R1_adjperf_ratio_GSL',
-    'R1_adjperf_ratio_GSA','R1_adjperf_ratio_Ctrl',
-    'Def_adjperf_ratio_KD','Def_adjperf_ratio_SS','Def_adjperf_ratio_SSA','Def_adjperf_ratio_TS',
-    'Def_adjperf_ratio_TSA','Def_adjperf_ratio_TD','Def_adjperf_ratio_TDA','Def_adjperf_ratio_Subs',
-    'Def_adjperf_ratio_Reversals','Def_adjperf_ratio_HSL','Def_adjperf_ratio_HSA','Def_adjperf_ratio_BSL',
-    'Def_adjperf_ratio_BSA','Def_adjperf_ratio_LSL','Def_adjperf_ratio_LSA','Def_adjperf_ratio_DSL',
-    'Def_adjperf_ratio_DSA','Def_adjperf_ratio_CSL','Def_adjperf_ratio_CSA','Def_adjperf_ratio_GSL',
-    'Def_adjperf_ratio_GSA','Def_adjperf_ratio_Ctrl',
-    'R1_Def_adjperf_ratio_KD','R1_Def_adjperf_ratio_SS','R1_Def_adjperf_ratio_SSA','R1_Def_adjperf_ratio_TS',
-    'R1_Def_adjperf_ratio_TSA','R1_Def_adjperf_ratio_TD','R1_Def_adjperf_ratio_TDA','R1_Def_adjperf_ratio_Subs',
-    'R1_Def_adjperf_ratio_Reversals','R1_Def_adjperf_ratio_HSL','R1_Def_adjperf_ratio_HSA','R1_Def_adjperf_ratio_BSL',
-    'R1_Def_adjperf_ratio_BSA','R1_Def_adjperf_ratio_LSL','R1_Def_adjperf_ratio_LSA','R1_Def_adjperf_ratio_DSL',
-    'R1_Def_adjperf_ratio_DSA','R1_Def_adjperf_ratio_CSL','R1_Def_adjperf_ratio_CSA','R1_Def_adjperf_ratio_GSL',
-    'R1_Def_adjperf_ratio_GSA','R1_Def_adjperf_ratio_Ctrl',
-    'log_KD_per_SS','log_Sub_per_Ctrl','log_SubWin_per_Ctrl','log_Ctrl_per_TD',
-    'adjperf_log_KD_per_SS','adjperf_log_Sub_per_Ctrl','adjperf_log_SubWin_per_Ctrl','adjperf_log_Ctrl_per_TD',
-    'Def_adjperf_log_KD_per_SS','Def_adjperf_log_Sub_per_Ctrl','Def_adjperf_log_SubWin_per_Ctrl','Def_adjperf_log_Ctrl_per_TD',
-    'R1_log_KD_per_SS','R1_log_Sub_per_Ctrl','R1_log_SubWin_per_Ctrl','R1_log_Ctrl_per_TD',
-    'R1_adjperf_log_KD_per_SS','R1_adjperf_log_Sub_per_Ctrl','R1_adjperf_log_SubWin_per_Ctrl','R1_adjperf_log_Ctrl_per_TD',
-    'R1_Def_adjperf_log_KD_per_SS','R1_Def_adjperf_log_Sub_per_Ctrl','R1_Def_adjperf_log_SubWin_per_Ctrl','R1_Def_adjperf_log_Ctrl_per_TD',
-    'Prev1_AgeDiff','Prev2_AgeDiff','Prev3_AgeDiff','Prev1_ReachDiff','Prev2_ReachDiff',
-    'Prev3_ReachDiff','Prev1_HeightDiff','Prev2_HeightDiff','Prev3_HeightDiff',
-    'Abs_Prev1_AgeDiff','Abs_Prev2_AgeDiff','Abs_Prev3_AgeDiff','Abs_Prev1_ReachDiff',
-    'Abs_Prev2_ReachDiff','Abs_Prev3_ReachDiff','Abs_Prev1_HeightDiff',
-    'Abs_Prev2_HeightDiff','Abs_Prev3_HeightDiff'
+    'Completed3Rounds','FightDurationMinutes',
 ]
-EXCLUDE_FROM_FEATURES = list(dict.fromkeys(EXCLUDE_FROM_FEATURES))
 
+# Add all raw stats and their derived columns
+for stat in raw_stats:
+    exclude_patterns.append(stat)
+    exclude_patterns.append(f'Def_{stat}')
+    exclude_patterns.append(f'ratio_off_{stat}')
+    exclude_patterns.append(f'R1_ratio_off_{stat}')
+    exclude_patterns.append(f'adjperf_ratio_{stat}')
+    exclude_patterns.append(f'R1_adjperf_ratio_{stat}')
+    exclude_patterns.append(f'Def_adjperf_ratio_{stat}')
+    exclude_patterns.append(f'R1_Def_adjperf_ratio_{stat}')
+    exclude_patterns.append(f'log_{stat}')
+    exclude_patterns.append(f'adjperf_log_{stat}')
+    exclude_patterns.append(f'Def_adjperf_log_{stat}')
+    exclude_patterns.append(f'R1_log_{stat}')
+    exclude_patterns.append(f'R1_adjperf_log_{stat}')
+    exclude_patterns.append(f'R1_Def_adjperf_log_{stat}')
+
+# Add accuracy and method flags
+for method in ['KO','Sub','Dec']:
+    exclude_patterns.append(f'WinBy{method}')
+    exclude_patterns.append(f'LossBy{method}')
+
+for surv in ['Survived1R','Survived15','Survived2R','Survived3R']:
+    exclude_patterns.append(surv)
+    exclude_patterns.append(f'FinishedOpp{surv[-2:]}')  # e.g., FinishedOpp1R
+
+# Previous fight diffs
+for prefix in ['Prev1_','Prev2_','Prev3_']:
+    exclude_patterns.append(prefix+'AgeDiff')
+    exclude_patterns.append(prefix+'ReachDiff')
+    exclude_patterns.append(prefix+'HeightDiff')
+    exclude_patterns.append('Abs_'+prefix+'AgeDiff')
+    exclude_patterns.append('Abs_'+prefix+'ReachDiff')
+    exclude_patterns.append('Abs_'+prefix+'HeightDiff')
+
+# Convert to set for fast lookup
+exclude_set = set(exclude_patterns)
+
+# Define FEATURES_WINNER
 numeric_cols = df_all.select_dtypes(include=[np.number]).columns.tolist()
 numeric_cols = [c for c in numeric_cols if 'raw' not in c and not c.startswith('WC_Debut_Avg_')]
 numeric_cols = [c for c in numeric_cols if 'opp_allowed' not in c]
-FEATURES_WINNER = [c for c in numeric_cols if c not in EXCLUDE_FROM_FEATURES]
+FEATURES_WINNER = [c for c in numeric_cols if c not in exclude_set]
 
 # ----------------------------- Helper Functions -----------------------------
-# (All helper functions from previous scripts are included here unchanged)
 def apply_range_filter(df, mask, col, range_vals, target='win'):
     if col not in df.columns or range_vals is None:
         return mask
