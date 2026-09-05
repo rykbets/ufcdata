@@ -412,7 +412,6 @@ def apply_params_to_widgets(params):
         st.session_state[f'fa_{col}_max'] = fa_range[1]
         st.session_state[f'fb_{col}_min'] = fb_range[0]
         st.session_state[f'fb_{col}_max'] = fb_range[1]
-        # Also update slider keys to reflect loaded values
         st.session_state[f'fa_{col}_slider'] = fa_range
         st.session_state[f'fb_{col}_slider'] = fb_range
 
@@ -567,21 +566,19 @@ with st.container():
                 st.session_state[range_key] = (current_min, new_max)
                 st.session_state[slider_key] = (current_min, new_max)
 
-            slider_val = st.slider(
-                f"{label} A",
-                min_value=mn,
-                max_value=mx,
-                value=st.session_state[slider_key],
-                key=slider_key,
-                on_change=on_slider_change
-            )
-            st.session_state[range_key] = slider_val
-            st.session_state[min_key] = slider_val[0]
-            st.session_state[max_key] = slider_val[1]
-
-            with st.expander(f"Set exact range for {label} A", expanded=False):
-                c1, c2 = st.columns(2)
-                c1.number_input(
+            # Place slider and manual inputs side by side
+            c_slider, c_min, c_max = st.columns([5, 1, 1])
+            with c_slider:
+                slider_val = st.slider(
+                    f"{label} A",
+                    min_value=mn,
+                    max_value=mx,
+                    value=st.session_state[slider_key],
+                    key=slider_key,
+                    on_change=on_slider_change
+                )
+            with c_min:
+                st.number_input(
                     "Min",
                     min_value=mn,
                     max_value=mx,
@@ -589,7 +586,8 @@ with st.container():
                     key=min_key,
                     on_change=on_min_change
                 )
-                c2.number_input(
+            with c_max:
+                st.number_input(
                     "Max",
                     min_value=mn,
                     max_value=mx,
@@ -597,6 +595,11 @@ with st.container():
                     key=max_key,
                     on_change=on_max_change
                 )
+
+            # After widgets, sync the range and keys with slider value (if slider changed)
+            st.session_state[range_key] = slider_val
+            st.session_state[min_key] = slider_val[0]
+            st.session_state[max_key] = slider_val[1]
 
     with st.expander("Dynamic Sliders A", expanded=False):
         for i in range(3):
@@ -678,21 +681,18 @@ with st.container():
                 st.session_state[range_key] = (current_min, new_max)
                 st.session_state[slider_key] = (current_min, new_max)
 
-            slider_val = st.slider(
-                f"{label} B",
-                min_value=mn,
-                max_value=mx,
-                value=st.session_state[slider_key],
-                key=slider_key,
-                on_change=on_slider_change
-            )
-            st.session_state[range_key] = slider_val
-            st.session_state[min_key] = slider_val[0]
-            st.session_state[max_key] = slider_val[1]
-
-            with st.expander(f"Set exact range for {label} B", expanded=False):
-                c1, c2 = st.columns(2)
-                c1.number_input(
+            c_slider, c_min, c_max = st.columns([5, 1, 1])
+            with c_slider:
+                slider_val = st.slider(
+                    f"{label} B",
+                    min_value=mn,
+                    max_value=mx,
+                    value=st.session_state[slider_key],
+                    key=slider_key,
+                    on_change=on_slider_change
+                )
+            with c_min:
+                st.number_input(
                     "Min",
                     min_value=mn,
                     max_value=mx,
@@ -700,7 +700,8 @@ with st.container():
                     key=min_key,
                     on_change=on_min_change
                 )
-                c2.number_input(
+            with c_max:
+                st.number_input(
                     "Max",
                     min_value=mn,
                     max_value=mx,
@@ -708,6 +709,10 @@ with st.container():
                     key=max_key,
                     on_change=on_max_change
                 )
+
+            st.session_state[range_key] = slider_val
+            st.session_state[min_key] = slider_val[0]
+            st.session_state[max_key] = slider_val[1]
 
     with st.expander("Dynamic Sliders B", expanded=False):
         for i in range(3):
