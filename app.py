@@ -166,6 +166,7 @@ def build_side_mask(data, side_params, target='win'):
 def apply_spider_filters(params, target='win'):
     if not params:
         return pd.DataFrame()
+    # Global filters (apply to whole fight)
     mask_strict = pd.Series(True, index=df_all.index)
     if params.get('wc'): mask_strict &= df_all['WC'].isin(params['wc'])
     if params.get('event_country'): mask_strict &= df_all['EventCountry'].isin(params['event_country'])
@@ -194,21 +195,20 @@ def apply_spider_filters(params, target='win'):
     mask_a = build_side_mask(df_strict, fa, target)
     mask_b = build_side_mask(df_strict, fb, target)
 
-    # Vectorised matching: require exactly two rows per fight, one A and one B, distinct rows
-    tmp = pd.DataFrame({'FightID': df_strict['FightID'], 'A': mask_a, 'B': mask_b})
-    # Only fights with exactly 2 rows
-    fight_counts = tmp.groupby('FightID').size()
-    valid_ids = fight_counts[fight_counts == 2].index
-    tmp = tmp[tmp['FightID'].isin(valid_ids)]
-    if tmp.empty:
-        return pd.DataFrame()
-
-    fight_sum = tmp.groupby('FightID')[['A','B']].sum()
-    both = tmp.groupby('FightID').apply(lambda g: (g['A'] & g['B']).any())
-    valid_fights = fight_sum[(fight_sum['A'] == 1) & (fight_sum['B'] == 1) & (~both)].index
-    valid_mask = df_strict['FightID'].isin(valid_fights)
-    result = df_strict[valid_mask & mask_a].copy()
-    return result
+    # Revert to loop over valid fights (those with exactly 2 rows) to exactly replicate original behavior
+    grouped = df_strict.groupby('FightID').groups
+    keep = pd.Series(False, index=df_strict.index)
+    for fid, idx_list in grouped.items():
+        if len(idx_list) != 2:
+            continue
+        i0, i1 = idx_list[0], idx_list[1]
+        # Check if side A and side B can be assigned to different rows
+        if (mask_a.loc[i0] and mask_b.loc[i1]) or (mask_a.loc[i1] and mask_b.loc[i0]):
+            keep[i0] = True
+            keep[i1] = True
+    # side_a rows are those kept and satisfy side A mask
+    side_a = keep & mask_a
+    return df_strict[side_a].copy()
 
 def compute_metrics(df, target='win'):
     completed = df[df['Win?'].isin(['Yes','No'])]
@@ -538,17 +538,16 @@ with st.container():
                                    key=f'fa_{col}_slider')
             st.session_state[range_key] = slider_val
 
-            # Precise input: number inputs with on_change to update range immediately
+            # Precise input: no keys, value controlled by state, update state after render
             with st.expander(f"Set exact range for {label} A", expanded=False):
                 c1, c2 = st.columns(2)
                 min_input = c1.number_input("Min", min_value=mn, max_value=mx,
-                                            value=st.session_state[range_key][0],
-                                            key=f'fa_{col}_min_input',
-                                            on_change=lambda col=col: st.session_state.update({f'fa_{col}_range': (st.session_state[f'fa_{col}_min_input'], st.session_state[f'fa_{col}_max_input'])}) or st.rerun())
+                                            value=st.session_state[range_key][0])
                 max_input = c2.number_input("Max", min_value=mn, max_value=mx,
-                                            value=st.session_state[range_key][1],
-                                            key=f'fa_{col}_max_input',
-                                            on_change=lambda col=col: st.session_state.update({f'fa_{col}_range': (st.session_state[f'fa_{col}_min_input'], st.session_state[f'fa_{col}_max_input'])}) or st.rerun())
+                                            value=st.session_state[range_key][1])
+                # Update state with number inputs (no callback needed)
+                if (min_input, max_input) != st.session_state[range_key]:
+                    st.session_state[range_key] = (min_input, max_input)
 
     with st.expander("Dynamic Sliders A", expanded=False):
         for i in range(3):
@@ -569,7 +568,7 @@ with st.container():
                                    key=f'fa_dyn_{i}_slider')
             st.session_state[f'fa_dyn_{i}_range'] = slider_val
 
-# Side B (similar structure)
+# Side B (identical structure)
 st.subheader("Side B Criteria")
 with st.container():
     cols = st.columns(6)
@@ -604,13 +603,11 @@ with st.container():
             with st.expander(f"Set exact range for {label} B", expanded=False):
                 c1, c2 = st.columns(2)
                 min_input = c1.number_input("Min", min_value=mn, max_value=mx,
-                                            value=st.session_state[range_key][0],
-                                            key=f'fb_{col}_min_input',
-                                            on_change=lambda col=col: st.session_state.update({f'fb_{col}_range': (st.session_state[f'fb_{col}_min_input'], st.session_state[f'fb_{col}_max_input'])}) or st.rerun())
+                                            value=st.session_state[range_key][0])
                 max_input = c2.number_input("Max", min_value=mn, max_value=mx,
-                                            value=st.session_state[range_key][1],
-                                            key=f'fb_{col}_max_input',
-                                            on_change=lambda col=col: st.session_state.update({f'fb_{col}_range': (st.session_state[f'fb_{col}_min_input'], st.session_state[f'fb_{col}_max_input'])}) or st.rerun())
+                                            value=st.session_state[range_key][1])
+                if (min_input, max_input) != st.session_state[range_key]:
+                    st.session_state[range_key] = (min_input, max_input)
 
     with st.expander("Dynamic Sliders B", expanded=False):
         for i in range(3):
