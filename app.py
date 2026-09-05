@@ -108,6 +108,9 @@ for prefix in ['Prev1_','Prev2_','Prev3_']:
 numeric_cols = df_all.select_dtypes(include=[np.number]).columns.tolist()
 FEATURES_WINNER = [c for c in numeric_cols if c not in exclude_set]
 
+# Base features allowed for win target in feature importance
+ALLOWED_BASE_FEATURES_WIN = {'Age', 'Prev7WinPct', 'CareerWinPct', 'DaysSincePrev', 'Avg3DaysGap'}
+
 # ----------------------------- Helper Functions -----------------------------
 def apply_range_filter(df, mask, col, range_vals, target='win'):
     if col not in df.columns or range_vals is None:
@@ -423,6 +426,11 @@ def apply_params_to_widgets(params):
         else:
             st.session_state[f'fa_dyn_{i}_feat'] = 'None'
             st.session_state[f'fa_dyn_{i}_range'] = (0,1)
+        # set min/max/slider keys as well
+        mn, mx = slider_min_max.get(st.session_state[f'fa_dyn_{i}_feat'], (0,1))
+        st.session_state[f'fa_dyn_{i}_min'] = st.session_state[f'fa_dyn_{i}_range'][0]
+        st.session_state[f'fa_dyn_{i}_max'] = st.session_state[f'fa_dyn_{i}_range'][1]
+        st.session_state[f'fa_dyn_{i}_slider'] = st.session_state[f'fa_dyn_{i}_range']
 
         dyn_b = params.get('sideB_dynamic_sliders', [])
         if i < len(dyn_b) and dyn_b[i].get('col'):
@@ -431,6 +439,9 @@ def apply_params_to_widgets(params):
         else:
             st.session_state[f'fb_dyn_{i}_feat'] = 'None'
             st.session_state[f'fb_dyn_{i}_range'] = (0,1)
+        st.session_state[f'fb_dyn_{i}_min'] = st.session_state[f'fb_dyn_{i}_range'][0]
+        st.session_state[f'fb_dyn_{i}_max'] = st.session_state[f'fb_dyn_{i}_range'][1]
+        st.session_state[f'fb_dyn_{i}_slider'] = st.session_state[f'fb_dyn_{i}_range']
 
 # ----------------------------- Reset Filters -----------------------------
 def reset_all_filters():
@@ -592,7 +603,6 @@ with st.container():
             min_key = f'fa_{col}_min'
             max_key = f'fa_{col}_max'
 
-            # Initialise all keys if missing
             if range_key not in st.session_state:
                 st.session_state[range_key] = (mn, mx)
             if slider_key not in st.session_state:
@@ -626,7 +636,6 @@ with st.container():
                 st.session_state[range_key] = (current_min, new_max)
                 st.session_state[slider_key] = (current_min, new_max)
 
-            # Place slider and manual inputs side by side
             c_slider, c_min, c_max = st.columns([5, 1, 1])
             with c_slider:
                 slider_val = st.slider(
@@ -664,11 +673,11 @@ with st.container():
             else:
                 mn, mx = df_all[feat].min(), df_all[feat].max()
 
-            # Initialise dynamic slider keys
             dyn_range_key = f'fa_dyn_{i}_range'
             dyn_slider_key = f'fa_dyn_{i}_slider'
             dyn_min_key = f'fa_dyn_{i}_min'
             dyn_max_key = f'fa_dyn_{i}_max'
+
             if dyn_range_key not in st.session_state:
                 st.session_state[dyn_range_key] = (mn, mx)
             if dyn_slider_key not in st.session_state:
@@ -678,7 +687,6 @@ with st.container():
             if dyn_max_key not in st.session_state:
                 st.session_state[dyn_max_key] = st.session_state[dyn_range_key][1]
 
-            # If feature changed, reset range to full
             last_feat_key = f'fa_dyn_{i}_last_feat'
             if last_feat_key not in st.session_state:
                 st.session_state[last_feat_key] = feat
@@ -713,7 +721,6 @@ with st.container():
                 st.session_state[dyn_range_key] = (current_min, new_max)
                 st.session_state[dyn_slider_key] = (current_min, new_max)
 
-            # Layout: slider and manual inputs
             c_slider, c_min, c_max = st.columns([5, 1, 1])
             with c_slider:
                 st.slider(
@@ -743,7 +750,7 @@ with st.container():
                     on_change=on_dyn_max_change
                 )
 
-# Side B
+# Side B (similar structure)
 st.subheader("Side B Criteria")
 with st.container():
     cols = st.columns(6)
@@ -845,6 +852,7 @@ with st.container():
             dyn_slider_key = f'fb_dyn_{i}_slider'
             dyn_min_key = f'fb_dyn_{i}_min'
             dyn_max_key = f'fb_dyn_{i}_max'
+
             if dyn_range_key not in st.session_state:
                 st.session_state[dyn_range_key] = (mn, mx)
             if dyn_slider_key not in st.session_state:
@@ -950,10 +958,14 @@ if st.button("Compute Feature Importance"):
                     y = train_df.groupby('FightID')['Survived15'].transform('min')
 
                 feat_cols = [c for c in FEATURES_WINNER if c in train_df.columns]
-                if target in ('complete3rds','complete1.5rounds'):
-                    feat_cols = [c for c in feat_cols if (c.startswith('Abs') or c.startswith('Mean'))]
-                else:
+                if target == 'win':
+                    # Keep only differentials (contain 'diff') and allowed base features
+                    feat_cols = [c for c in feat_cols if ('diff' in c.lower()) or (c in ALLOWED_BASE_FEATURES_WIN)]
+                    # Also exclude Abs/Mean as before (though they may not be in diff list)
                     feat_cols = [c for c in feat_cols if not (c.startswith('Abs') or c.startswith('Mean'))]
+                else:
+                    # For completion targets, keep only absolute/mean features
+                    feat_cols = [c for c in feat_cols if (c.startswith('Abs') or c.startswith('Mean'))]
 
                 if feat_cols:
                     X = train_df[feat_cols].fillna(0)
