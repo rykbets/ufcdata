@@ -365,12 +365,10 @@ def get_params_from_widgets():
     for i in range(1,4):
         params[f'sideB_prev{i}'] = st.session_state.get(f'fb_prev{i}', [])
         params[f'sideB_career{i}'] = st.session_state.get(f'fb_career{i}', [])
-    # Static sliders: use the _range session state
+    # Static sliders: read from _range session state
     for col in SLIDER_COLUMNS:
-        fa_range = st.session_state.get(f'fa_{col}_range', (slider_min_max[col][0], slider_min_max[col][1]))
-        fb_range = st.session_state.get(f'fb_{col}_range', (slider_min_max[col][0], slider_min_max[col][1]))
-        params[f'sideA_{col}_range'] = list(fa_range)
-        params[f'sideB_{col}_range'] = list(fb_range)
+        params[f'sideA_{col}_range'] = list(st.session_state.get(f'fa_{col}_range', (slider_min_max[col][0], slider_min_max[col][1])))
+        params[f'sideB_{col}_range'] = list(st.session_state.get(f'fb_{col}_range', (slider_min_max[col][0], slider_min_max[col][1])))
     # Dynamic sliders
     dyn_a = []
     for i in range(3):
@@ -420,10 +418,8 @@ def apply_params_to_widgets(params):
         st.session_state[f'fb_career{i}'] = params.get(f'sideB_career{i}', [])
 
     for col in SLIDER_COLUMNS:
-        fa_range = params.get(f'sideA_{col}_range', [slider_min_max[col][0], slider_min_max[col][1]])
-        fb_range = params.get(f'sideB_{col}_range', [slider_min_max[col][0], slider_min_max[col][1]])
-        st.session_state[f'fa_{col}_range'] = tuple(fa_range)
-        st.session_state[f'fb_{col}_range'] = tuple(fb_range)
+        st.session_state[f'fa_{col}_range'] = tuple(params.get(f'sideA_{col}_range', [slider_min_max[col][0], slider_min_max[col][1]]))
+        st.session_state[f'fb_{col}_range'] = tuple(params.get(f'sideB_{col}_range', [slider_min_max[col][0], slider_min_max[col][1]]))
 
     for i in range(3):
         dyn_a = params.get('sideA_dynamic_sliders', [])
@@ -558,8 +554,6 @@ with st.container():
                                key=f'fa_{col}_slider')
         if slider_val != st.session_state[range_key]:
             st.session_state[range_key] = slider_val
-            st.session_state[f'fa_{col}_min'] = slider_val[0]
-            st.session_state[f'fa_{col}_max'] = slider_val[1]
 
     st.markdown("**Dynamic Sliders A**")
     for i in range(3):
@@ -590,8 +584,6 @@ with st.container():
                                key=f'fa_dyn_{i}_slider')
         if slider_val != st.session_state[f'fa_dyn_{i}_range']:
             st.session_state[f'fa_dyn_{i}_range'] = slider_val
-            st.session_state[f'fa_dyn_{i}_min'] = slider_val[0]
-            st.session_state[f'fa_dyn_{i}_max'] = slider_val[1]
 
 # Side B (similar)
 st.subheader("Side B Criteria")
@@ -635,8 +627,6 @@ with st.container():
                                key=f'fb_{col}_slider')
         if slider_val != st.session_state[range_key]:
             st.session_state[range_key] = slider_val
-            st.session_state[f'fb_{col}_min'] = slider_val[0]
-            st.session_state[f'fb_{col}_max'] = slider_val[1]
 
     st.markdown("**Dynamic Sliders B**")
     for i in range(3):
@@ -667,8 +657,6 @@ with st.container():
                                key=f'fb_dyn_{i}_slider')
         if slider_val != st.session_state[f'fb_dyn_{i}_range']:
             st.session_state[f'fb_dyn_{i}_range'] = slider_val
-            st.session_state[f'fb_dyn_{i}_min'] = slider_val[0]
-            st.session_state[f'fb_dyn_{i}_max'] = slider_val[1]
 
 # Last X Fights
 st.markdown("---")
