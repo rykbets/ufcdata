@@ -194,10 +194,12 @@ def apply_spider_filters(params, target='win'):
     mask_a = build_side_mask(df_strict, fa, target)
     mask_b = build_side_mask(df_strict, fb, target)
 
-    # Vectorised: find fights with exactly one side A row and one side B row
+    # Vectorised matching: require exactly one A row and one B row per fight,
+    # and they must be different rows (no row satisfies both A and B).
     tmp = pd.DataFrame({'FightID': df_strict['FightID'], 'A': mask_a, 'B': mask_b})
     fight_sum = tmp.groupby('FightID')[['A','B']].sum()
-    valid_fights = fight_sum[(fight_sum['A'] == 1) & (fight_sum['B'] == 1)].index
+    both = tmp.groupby('FightID').apply(lambda g: (g['A'] & g['B']).any())
+    valid_fights = fight_sum[(fight_sum['A'] == 1) & (fight_sum['B'] == 1) & (~both)].index
     valid_mask = df_strict['FightID'].isin(valid_fights)
     result = df_strict[valid_mask & mask_a].copy()
     return result
@@ -530,8 +532,9 @@ with st.container():
                                    key=f'fa_{col}_slider')
             st.session_state[range_key] = slider_val
 
-            # Precise input expander
+            # Precise input
             with st.expander(f"Set exact range for {label} A", expanded=False):
+                st.caption(f"Current: {st.session_state[range_key][0]:.4f} – {st.session_state[range_key][1]:.4f}")
                 c1, c2 = st.columns(2)
                 min_input = c1.number_input("Min", min_value=mn, max_value=mx,
                                             value=st.session_state[range_key][0],
@@ -541,7 +544,6 @@ with st.container():
                                             key=f'fa_{col}_max_input')
                 if st.button("Apply", key=f'fa_{col}_apply'):
                     st.session_state[range_key] = (min_input, max_input)
-                    # Force slider to update by rerun
                     st.rerun()
 
     with st.expander("Dynamic Sliders A", expanded=False):
@@ -596,6 +598,7 @@ with st.container():
             st.session_state[range_key] = slider_val
 
             with st.expander(f"Set exact range for {label} B", expanded=False):
+                st.caption(f"Current: {st.session_state[range_key][0]:.4f} – {st.session_state[range_key][1]:.4f}")
                 c1, c2 = st.columns(2)
                 min_input = c1.number_input("Min", min_value=mn, max_value=mx,
                                             value=st.session_state[range_key][0],
