@@ -63,65 +63,100 @@ for col in df_all.columns:
         if orig in df_all.columns:
             ABS_MAPPING[orig] = col
 
-# ----------------------------- Exclusions (Pattern-based) -----------------------------
-# Build a set of column names that should NOT be used as features.
-exclude_set = set()
-exclude_set.update([
-    'FightID','Fighter','Opponent','FightDate','Win?','Method','Round','WC','Stance','Country',
-    'EventCountry','HometownFighter','Opponent_Hometown','ScheduledRounds','Title','Prev1_Title',
-    'Prev2_Title','Prev3_Title','Opponent_Prev1_Title','FightNumber','TotalTimeSec',
-    'FighterOddsNum','OpponentOddsNum','PrevFighterOddsNum',
-    'KD_per_SS','Sub_per_Ctrl','SubWin_per_Ctrl','Ctrl_per_TD',
-    'SS%_TS','DS%_SS','CS%_SS','GS%_SS','HS%_SS','BS%_SS','LS%_SS',
-    'Completed3Rounds','FightDurationMinutes',
-])
+# ----------------------------- Build Exclusion Set (EXACTLY like Dash) -----------------------------
+def build_exclude_set():
+    # Start with same lists as Dash
+    exclude = []
 
-# Exclude all raw stats and their derived versions
-raw_stats = ['KD','SS','SSA','TS','TSA','TD','TDA','Subs','Reversals',
-             'HSL','HSA','BSL','BSA','LSL','LSA','DSL','DSA','CSL','CSA','GSL','GSA','Ctrl']
-for stat in raw_stats:
-    exclude_set.add(stat)
-    exclude_set.add(f'Def_{stat}')
-    exclude_set.add(f'ratio_off_{stat}')
-    exclude_set.add(f'R1_ratio_off_{stat}')
-    exclude_set.add(f'adjperf_ratio_{stat}')
-    exclude_set.add(f'R1_adjperf_ratio_{stat}')
-    exclude_set.add(f'Def_adjperf_ratio_{stat}')
-    exclude_set.add(f'R1_Def_adjperf_ratio_{stat}')
-    exclude_set.add(f'log_{stat}')
-    exclude_set.add(f'adjperf_log_{stat}')
-    exclude_set.add(f'Def_adjperf_log_{stat}')
-    exclude_set.add(f'R1_log_{stat}')
-    exclude_set.add(f'R1_adjperf_log_{stat}')
-    exclude_set.add(f'R1_Def_adjperf_log_{stat}')
+    # Basic IDs and non-numeric
+    exclude += [
+        'FightID','Fighter','Opponent','FightDate','Win?','Method','Round','WC','Stance','Country',
+        'EventCountry','HometownFighter','Opponent_Hometown','ScheduledRounds','Title','Prev1_Title',
+        'Prev2_Title','Prev3_Title','Opponent_Prev1_Title','FightNumber','TotalTimeSec',
+        'FighterOddsNum','OpponentOddsNum','PrevFighterOddsNum'
+    ]
 
-# Exclude method flags and survival flags
-for method in ['KO','Sub','Dec']:
-    exclude_set.add(f'WinBy{method}')
-    exclude_set.add(f'LossBy{method}')
-for surv in ['Survived1R','Survived15','Survived2R','Survived3R']:
-    exclude_set.add(surv)
-    # FinishedOpp1R, FinishedOpp15, etc.
-    exclude_set.add(f'FinishedOpp{surv[-2:]}')
+    # Raw stats and their Def_ versions
+    raw_stats = ['KD','SS','SSA','TS','TSA','TD','TDA','Subs','Reversals',
+                 'HSL','HSA','BSL','BSA','LSL','LSA','DSL','DSA','CSL','CSA','GSL','GSA','Ctrl']
+    exclude += raw_stats
+    exclude += [f'Def_{s}' for s in raw_stats]
 
-# Exclude previous fight diffs
-for prefix in ['Prev1_','Prev2_','Prev3_']:
-    exclude_set.add(prefix+'AgeDiff')
-    exclude_set.add(prefix+'ReachDiff')
-    exclude_set.add(prefix+'HeightDiff')
-    exclude_set.add('Abs_'+prefix+'AgeDiff')
-    exclude_set.add('Abs_'+prefix+'ReachDiff')
-    exclude_set.add('Abs_'+prefix+'HeightDiff')
+    # Accuracy stats
+    exclude += ['SS_Acc','HS_Acc','BS_Acc','LS_Acc','DS_Acc','CS_Acc','GS_Acc']
 
-# Now compute FEATURES_WINNER (all numeric columns not excluded)
-all_numeric_cols = df_all.select_dtypes(include=[np.number]).columns.tolist()
-FEATURES_WINNER = [c for c in all_numeric_cols if c not in exclude_set]
+    # Method flags
+    exclude += [
+        'WinByKO','LossByKO','WinBySub','LossBySub','WinByDec','LossByDec',
+        'Survived1R','FinishedOpp1R','Survived15','FinishedOpp15',
+        'Survived2R','FinishedOpp2R','Survived3R','FinishedOpp3R'
+    ]
 
-# Debug: if empty, display warning (won't break script)
-if not FEATURES_WINNER:
-    st.warning("No feature columns found after exclusions. Check your data.")
+    # Derived ratio columns
+    exclude += [
+        'KD_per_SS','Sub_per_Ctrl','SubWin_per_Ctrl','Ctrl_per_TD',
+        'SS%_TS','DS%_SS','CS%_SS','GS%_SS','HS%_SS','BS%_SS','LS%_SS'
+    ]
+
+    # Ratio off columns and R1 ratio off columns
+    for s in raw_stats:
+        exclude.append(f'ratio_off_{s}')
+        exclude.append(f'R1_ratio_off_{s}')
+
+    # adjperf ratio columns (offensive and defensive) and R1 versions
+    for s in raw_stats:
+        exclude.append(f'adjperf_ratio_{s}')
+        exclude.append(f'R1_adjperf_ratio_{s}')
+        exclude.append(f'Def_adjperf_ratio_{s}')
+        exclude.append(f'R1_Def_adjperf_ratio_{s}')
+
+    # Log versions of derived ratios
+    for r in ['KD_per_SS','Sub_per_Ctrl','SubWin_per_Ctrl','Ctrl_per_TD']:
+        exclude.append(f'log_{r}')
+        exclude.append(f'adjperf_log_{r}')
+        exclude.append(f'Def_adjperf_log_{r}')
+        exclude.append(f'R1_log_{r}')
+        exclude.append(f'R1_adjperf_log_{r}')
+        exclude.append(f'R1_Def_adjperf_log_{r}')
+
+    # Leak tokens: any column containing these and ending with _diff or _off_diff or _def_diff
+    # We'll add a post-filter step later on numeric_cols
+    leak_tokens = ['ratio_off','adjperf_ratio','R1_ratio_off','R1_adjperf_ratio','log_KD','log_Sub','log_Ctrl']
+    # We'll filter numeric_cols directly for these patterns.
+
+    # Previous fight diffs
+    for prefix in ['Prev1_','Prev2_','Prev3_']:
+        exclude.append(prefix+'AgeDiff')
+        exclude.append(prefix+'ReachDiff')
+        exclude.append(prefix+'HeightDiff')
+        exclude.append('Abs_'+prefix+'AgeDiff')
+        exclude.append('Abs_'+prefix+'ReachDiff')
+        exclude.append('Abs_'+prefix+'HeightDiff')
+
+    # Convert to set
+    exclude_set = set(exclude)
+
+    return exclude_set, leak_tokens
+
+exclude_set, leak_tokens = build_exclude_set()
+
+# Get all numeric columns, then filter
+numeric_cols = df_all.select_dtypes(include=[np.number]).columns.tolist()
+# Filter out columns with 'raw' or starting with 'WC_Debut_Avg_'
+numeric_cols = [c for c in numeric_cols if 'raw' not in c and not c.startswith('WC_Debut_Avg_')]
+# Filter out 'opp_allowed' columns
+numeric_cols = [c for c in numeric_cols if 'opp_allowed' not in c]
+# Filter out columns that are in exclude_set
+numeric_cols = [c for c in numeric_cols if c not in exclude_set]
+# Filter out columns that contain leak tokens and end with _diff/_off_diff/_def_diff
+for col in numeric_cols.copy():
+    if any(tok in col for tok in leak_tokens) and (col.endswith('_diff') or col.endswith('_off_diff') or col.endswith('_def_diff')):
+        numeric_cols.remove(col)
+
+FEATURES_WINNER = numeric_cols
 
 # ----------------------------- Helper Functions -----------------------------
+# (All helper functions from previous script, unchanged)
 def apply_range_filter(df, mask, col, range_vals, target='win'):
     if col not in df.columns or range_vals is None:
         return mask
