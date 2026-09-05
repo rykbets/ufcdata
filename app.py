@@ -8,16 +8,13 @@ import pandas as pd
 import gdown
 import streamlit as st
 from scipy.stats import binomtest
-from sklearn.ensemble import RandomForestClassifier
 
 # ----------------------------- Configuration -----------------------------
 PARQUET_FILE_ID = "1uIpfbGFmDolA8P2vc15VvA1qbNzWetxf"  # public Google Drive file ID
-SAVED_SEARCHES_FILE = "saved_searches.json"  # will try to persist locally if possible
 
 # ----------------------------- Data Loading -----------------------------
 @st.cache_data
 def load_data():
-    # Force fresh download – delete old parquet first
     if os.path.exists("data.parquet"):
         os.remove("data.parquet")
     gdown.download(f"https://drive.google.com/uc?id={PARQUET_FILE_ID}", "data.parquet", quiet=True)
@@ -47,7 +44,6 @@ SLIDER_FEATURES_SPEC = [
     ('DaysSincePrev', 'DaysSincePrev'),
     ('ColleyDecayDiff', 'ColleyDecayDiff')
 ]
-
 SLIDER_COLUMNS = [col for col, _ in SLIDER_FEATURES_SPEC if col in df_all.columns]
 SLIDER_LABELS = [label for col, label in SLIDER_FEATURES_SPEC if col in df_all.columns]
 
@@ -66,7 +62,7 @@ for col in df_all.columns:
             ABS_MAPPING[orig] = col
 
 # ----------------------------- Exclusions -----------------------------
-# (Comprehensive exclusion list – same as previous, omitted for brevity in display)
+# (Full exclusion list as in earlier scripts – unchanged)
 EXCLUDE_FROM_FEATURES = [
     'FightID','Fighter','Opponent','FightDate','Win?','Method','Round','WC','Stance','Country',
     'EventCountry','HometownFighter','Opponent_Hometown','ScheduledRounds','Title','Prev1_Title',
@@ -131,11 +127,6 @@ EXCLUDE_FROM_FEATURES = [
     'Abs_Prev2_HeightDiff','Abs_Prev3_HeightDiff'
 ]
 EXCLUDE_FROM_FEATURES = list(dict.fromkeys(EXCLUDE_FROM_FEATURES))
-
-numeric_cols = df_all.select_dtypes(include=[np.number]).columns.tolist()
-numeric_cols = [c for c in numeric_cols if 'raw' not in c and not c.startswith('WC_Debut_Avg_')]
-numeric_cols = [c for c in numeric_cols if 'opp_allowed' not in c]
-FEATURES_WINNER = [c for c in numeric_cols if c not in EXCLUDE_FROM_FEATURES]
 
 # ----------------------------- Helper Functions -----------------------------
 def apply_range_filter(df, mask, col, range_vals, target='win'):
@@ -346,28 +337,21 @@ def compute_advanced_metrics(df_filtered, df_baseline, target='win', params=None
 
 # ----------------------------- Saved Search Management -----------------------------
 def load_saved_searches():
-    if os.path.exists(SAVED_SEARCHES_FILE):
-        try:
-            with open(SAVED_SEARCHES_FILE, 'r') as f:
-                raw = json.load(f)
-            normalized = {}
-            for name, entry in raw.items():
-                if isinstance(entry, dict) and 'params' in entry:
-                    normalized[name] = entry
-                elif isinstance(entry, dict) and 'spider' in entry:
-                    normalized[name] = {'tab': 'spider', 'params': entry['spider']}
-            return normalized
-        except:
-            return {}
+    if os.path.exists("saved_searches.json"):
+        with open("saved_searches.json", 'r') as f:
+            raw = json.load(f)
+        normalized = {}
+        for name, entry in raw.items():
+            if isinstance(entry, dict) and 'params' in entry:
+                normalized[name] = entry
+            elif isinstance(entry, dict) and 'spider' in entry:
+                normalized[name] = {'tab': 'spider', 'params': entry['spider']}
+        return normalized
     return {}
 
 def save_saved_searches(searches):
-    try:
-        with open(SAVED_SEARCHES_FILE, 'w') as f:
-            json.dump(searches, f)
-    except:
-        # Fallback to session state only
-        st.session_state.saved_searches = searches
+    with open("saved_searches.json", 'w') as f:
+        json.dump(searches, f)
 
 saved_searches = load_saved_searches()
 if 'saved_searches' not in st.session_state:
@@ -476,7 +460,7 @@ def apply_params_to_widgets(params):
             st.session_state[f'fb_dyn_{i}_feat'] = 'None'
             st.session_state[f'fb_dyn_{i}_range'] = (0,1)
 
-# ----------------------------- Streamlit UI -----------------------------
+# ----------------------------- UI -----------------------------
 st.set_page_config(layout="wide")
 st.title("UFC Spider Filter Dashboard")
 
@@ -594,11 +578,20 @@ with st.container():
             mx = df_all[feat].max()
             c2.slider(f"Dyn Range {i+1} B", float(mn), float(mx), (float(mn), float(mx)), key=f'fb_dyn_{i}_range')
 
-# Results
+# ----------------------------- Results -----------------------------
 st.markdown("---")
 st.subheader("Metrics")
 params = get_params_from_widgets()
-df_filtered = apply_spider_filters(params, target)
+
+# Cache the filtering
+@st.cache_data
+def filter_data(params_json, target):
+    params = json.loads(params_json)
+    return apply_spider_filters(params, target)
+
+params_json = json.dumps(params, sort_keys=True)
+df_filtered = filter_data(params_json, target)
+
 if df_filtered.empty:
     st.write("No fights match.")
 else:
@@ -627,23 +620,3 @@ if not df_filtered.empty:
     df_show = df_filtered.drop_duplicates(subset='FightID', keep='first')
     df_show = df_show.sort_values('FightDate', ascending=False).head(last_x)
     st.dataframe(df_show[['FightDate','Fighter','Opponent','Win?','Method','WC','Round']])
-
-st.subheader("Feature Importance")
-df = df_all[df_all['Win?'].isin(['Yes','No'])]
-if target == 'win':
-    y = (df['Win?']=='Yes').astype(int)
-elif target == 'complete3rds':
-    y = df['Completed3Rounds'].fillna(0).astype(int)
-else:
-    y = df['Survived15'].fillna(0).astype(int)
-feat_cols = [c for c in FEATURES_WINNER if c in df.columns]
-if target in ('complete3rds','complete1.5rounds'):
-    feat_cols = [c for c in feat_cols if (c.startswith('Abs') or c.startswith('Mean'))]
-else:
-    feat_cols = [c for c in feat_cols if not (c.startswith('Abs') or c.startswith('Mean'))]
-if feat_cols:
-    X = df[feat_cols].fillna(0)
-    rf = RandomForestClassifier(n_estimators=100, max_depth=8, random_state=42, n_jobs=-1)
-    rf.fit(X, y)
-    importances = pd.DataFrame({'Feature': feat_cols, 'Importance': rf.feature_importances_}).sort_values('Importance', ascending=False)
-    st.dataframe(importances.head(200))
