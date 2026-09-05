@@ -61,8 +61,7 @@ for col in df_all.columns:
         if orig in df_all.columns:
             ABS_MAPPING[orig] = col
 
-# ----------------------------- Exclusions -----------------------------
-# (Full exclusion list as in earlier scripts – unchanged)
+# ----------------------------- Exclusions (FULL) -----------------------------
 EXCLUDE_FROM_FEATURES = [
     'FightID','Fighter','Opponent','FightDate','Win?','Method','Round','WC','Stance','Country',
     'EventCountry','HometownFighter','Opponent_Hometown','ScheduledRounds','Title','Prev1_Title',
@@ -127,6 +126,11 @@ EXCLUDE_FROM_FEATURES = [
     'Abs_Prev2_HeightDiff','Abs_Prev3_HeightDiff'
 ]
 EXCLUDE_FROM_FEATURES = list(dict.fromkeys(EXCLUDE_FROM_FEATURES))
+
+numeric_cols = df_all.select_dtypes(include=[np.number]).columns.tolist()
+numeric_cols = [c for c in numeric_cols if 'raw' not in c and not c.startswith('WC_Debut_Avg_')]
+numeric_cols = [c for c in numeric_cols if 'opp_allowed' not in c]
+FEATURES_WINNER = [c for c in numeric_cols if c not in EXCLUDE_FROM_FEATURES]
 
 # ----------------------------- Helper Functions -----------------------------
 def apply_range_filter(df, mask, col, range_vals, target='win'):
@@ -365,7 +369,6 @@ def get_params_from_widgets():
         'sched_rounds': st.session_state.get('sched_rounds', []),
         'new_wc': st.session_state.get('new_wc', False),
     }
-    # Side A
     params['sideA_country'] = st.session_state.get('fa_country', [])
     params['sideA_stance'] = st.session_state.get('fa_stance', [])
     params['sideA_hometown'] = st.session_state.get('fa_hometown', [])
@@ -375,7 +378,6 @@ def get_params_from_widgets():
     for i in range(1,4):
         params[f'sideA_prev{i}'] = st.session_state.get(f'fa_prev{i}', [])
         params[f'sideA_career{i}'] = st.session_state.get(f'fa_career{i}', [])
-    # Side B
     params['sideB_country'] = st.session_state.get('fb_country', [])
     params['sideB_stance'] = st.session_state.get('fb_stance', [])
     params['sideB_hometown'] = st.session_state.get('fb_hometown', [])
@@ -385,11 +387,9 @@ def get_params_from_widgets():
     for i in range(1,4):
         params[f'sideB_prev{i}'] = st.session_state.get(f'fb_prev{i}', [])
         params[f'sideB_career{i}'] = st.session_state.get(f'fb_career{i}', [])
-    # Static sliders
     for col in SLIDER_COLUMNS:
         params[f'sideA_{col}_range'] = list(st.session_state.get(f'fa_{col}', [slider_min_max[col][0], slider_min_max[col][1]]))
         params[f'sideB_{col}_range'] = list(st.session_state.get(f'fb_{col}', [slider_min_max[col][0], slider_min_max[col][1]]))
-    # Dynamic sliders
     dyn_a = []
     for i in range(3):
         feat = st.session_state.get(f'fa_dyn_{i}_feat', 'None')
@@ -416,7 +416,6 @@ def apply_params_to_widgets(params):
     st.session_state['title_fight'] = params.get('title_fight', 'All')
     st.session_state['sched_rounds'] = params.get('sched_rounds', [])
     st.session_state['new_wc'] = params.get('new_wc', False)
-
     st.session_state['fa_country'] = params.get('sideA_country', [])
     st.session_state['fa_stance'] = params.get('sideA_stance', [])
     st.session_state['fa_hometown'] = params.get('sideA_hometown', [])
@@ -426,7 +425,6 @@ def apply_params_to_widgets(params):
     for i in range(1,4):
         st.session_state[f'fa_prev{i}'] = params.get(f'sideA_prev{i}', [])
         st.session_state[f'fa_career{i}'] = params.get(f'sideA_career{i}', [])
-
     st.session_state['fb_country'] = params.get('sideB_country', [])
     st.session_state['fb_stance'] = params.get('sideB_stance', [])
     st.session_state['fb_hometown'] = params.get('sideB_hometown', [])
@@ -436,13 +434,11 @@ def apply_params_to_widgets(params):
     for i in range(1,4):
         st.session_state[f'fb_prev{i}'] = params.get(f'sideB_prev{i}', [])
         st.session_state[f'fb_career{i}'] = params.get(f'sideB_career{i}', [])
-
     for col in SLIDER_COLUMNS:
         rng_a = params.get(f'sideA_{col}_range', [slider_min_max[col][0], slider_min_max[col][1]])
         rng_b = params.get(f'sideB_{col}_range', [slider_min_max[col][0], slider_min_max[col][1]])
         st.session_state[f'fa_{col}'] = tuple(rng_a)
         st.session_state[f'fb_{col}'] = tuple(rng_b)
-
     for i in range(3):
         dyn_a = params.get('sideA_dynamic_sliders', [])
         if i < len(dyn_a) and dyn_a[i].get('col'):
@@ -451,7 +447,6 @@ def apply_params_to_widgets(params):
         else:
             st.session_state[f'fa_dyn_{i}_feat'] = 'None'
             st.session_state[f'fa_dyn_{i}_range'] = (0,1)
-
         dyn_b = params.get('sideB_dynamic_sliders', [])
         if i < len(dyn_b) and dyn_b[i].get('col'):
             st.session_state[f'fb_dyn_{i}_feat'] = dyn_b[i]['col']
@@ -460,7 +455,7 @@ def apply_params_to_widgets(params):
             st.session_state[f'fb_dyn_{i}_feat'] = 'None'
             st.session_state[f'fb_dyn_{i}_range'] = (0,1)
 
-# ----------------------------- UI -----------------------------
+# ----------------------------- Streamlit UI -----------------------------
 st.set_page_config(layout="wide")
 st.title("UFC Spider Filter Dashboard")
 
@@ -583,7 +578,6 @@ st.markdown("---")
 st.subheader("Metrics")
 params = get_params_from_widgets()
 
-# Cache the filtering
 @st.cache_data
 def filter_data(params_json, target):
     params = json.loads(params_json)
